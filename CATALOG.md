@@ -52,6 +52,7 @@
 
 - [templates/README.md](templates/README.md)：模板总入口。
 - [Agent 根指令接入模板](templates/agent-root-instruction.md)：可复制到不同 Agent 根指令文件中的 AIKB 接入规则。
+- [候选知识模板](templates/inbox-entry.md)：记录尚未完成验证或归类的候选内容。
 - [通用知识模板](templates/knowledge-entry.md)：新增通用知识条目时使用。
 - [决策记录模板](templates/decision-record.md)：记录工程决策时使用。
 - [故障排查模板](templates/troubleshooting.md)：记录故障排查和解决过程时使用。
@@ -60,6 +61,11 @@
 ## 项目知识
 
 - [projects/README.md](projects/README.md)：项目级知识的组织规则与项目索引，目前尚未登记具体项目。
+
+## Agent 行为验收
+
+- [tests/README.md](tests/README.md)：不同 Agent 执行 AIKB 规则的验收入口。
+- [AIKB 接入与写入行为验收清单](tests/agent-behavior-checklist.md)：覆盖初始化、会话复用、增量加载、主动写入、冲突处理和重载行为。
 
 ## 仓库配置
 

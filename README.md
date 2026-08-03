@@ -16,6 +16,7 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 - `workflows/`：开发、调试、评审和发布流程。
 - `templates/`：新增知识、决策、故障排查和项目记忆时使用的模板。
 - `projects/`：项目级知识入口；项目内容应与通用知识分离。
+- `tests/`：验证不同 Agent 是否一致执行 AIKB 规则的人工验收清单。
 
 ## 维护方式
 

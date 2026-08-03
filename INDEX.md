@@ -17,6 +17,7 @@
 - `workflows/README.md`：开发、调试、代码评审和发布流程入口。
 - `templates/README.md`：知识、决策、故障排查、项目记忆和 Agent 接入模板入口。
 - `projects/README.md`：项目级知识入口；只有任务涉及已登记项目时，才继续加载对应项目索引。
+- `tests/README.md`：不同 Agent 执行 AIKB 规则的行为验收入口；仅在验证规则兼容性时读取。
 
 ## 导航原则
 

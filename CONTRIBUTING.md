@@ -64,6 +64,8 @@
 
 `experience/inbox/` 不是永久归档区。候选信息完成验证后应移入正式目录；确认无价值、重复或错误后应移除。
 
+候选内容应使用 `templates/inbox-entry.md`。其 `status` 固定为 `candidate`，并记录捕获日期、来源类型、预期范围和下一步动作；候选内容不要求伪造 `last_verified` 等正式验证信息。
+
 ## 归档位置
 
 - 通用工程原理、语言、框架和工具知识放入 `knowledge/`。
@@ -89,7 +91,7 @@
 
 正式条目顶部使用统一的 YAML Front Matter，至少包含：
 
-- `status`：条目状态，使用 `candidate`、`verified` 或 `deprecated`。
+- `status`：正式有效条目使用 `verified`，已经失效但需要保留历史价值的条目使用 `deprecated`；`candidate` 只用于 `experience/inbox/`。
 - `tags`：用于检索的技术和问题标签。
 - `applicable_versions`：已确认适用的语言、框架、工具或项目版本；与版本无关时明确填写 `not-version-specific`。
 - `last_verified`：最近一次验证日期，格式为 `YYYY-MM-DD`。
