@@ -8,7 +8,8 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 
 - `AI_RULES.md`：所有 Agent 共用的加载与写入规则。
 - `USER_RULES.md`：用户在不同 Agent 和项目之间共用的长期偏好与协作规则。
-- `INDEX.md`：面向 Agent 的知识导航索引。
+- `INDEX.md`：面向 Agent 的轻量分层导航索引。
+- `CATALOG.md`：面向用户的完整内容目录，集中登记所有内容入口。
 - `CONTRIBUTING.md`：知识准入、验证、归档与淘汰标准。
 - `knowledge/`：按工程主题、语言、框架和工具组织的可复用知识。
 - `experience/`：待整理经验、已验证方案、踩坑记录和决策记录。
@@ -20,7 +21,7 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 
 1. 新内容先按照 `CONTRIBUTING.md` 判断是否值得收录，并确认来源、背景、验证结果和适用范围。
 2. 未整理材料先进入 `experience/inbox/`，验证后再归档到合适目录。
-3. 新增、移动或删除知识文件后，同步更新 `INDEX.md`。
+3. 新增、移动、重命名或删除内容后，更新最近一级目录的 `README.md` 和根目录 `CATALOG.md`；只有全局入口发生变化时才更新 `INDEX.md`。
 4. 保持条目简短、可检索、可独立理解；不要保存聊天记录、临时想法或未验证结论。
 5. 项目专属事实放入 `projects/`，通用工程知识放入 `knowledge/` 或 `experience/`。
 
