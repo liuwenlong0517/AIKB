@@ -1,0 +1,19 @@
+# 操作系统与编辑器生成文件
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.iml
+
+# 临时文件与日志
+*.bak
+*.log
+*.tmp
+*~
+
+# 本地环境和敏感配置
+.env
+.env.*
+!.env.example
+
