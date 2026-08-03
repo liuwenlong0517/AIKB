@@ -1,4 +1,4 @@
-# AIKB Agent Root Instruction
+# AIKB Agent 根指令模板
 
 将以下内容复制到具体 Agent 的根指令文件中：
 

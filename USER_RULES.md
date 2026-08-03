@@ -1,4 +1,4 @@
-# Personal AI Usage Rules
+# 个人 AI 使用规则
 
 本文件用于保存用户在不同 AI Agent 之间共用的长期偏好和协作规则。所有接入 AIKB 的 Agent 都应在初始化时读取并在当前会话中持续遵循，从而避免在 Codex、Claude Code 等不同 Agent 中分别维护相同配置。
 

@@ -1,4 +1,4 @@
-# AIKB Agent Rules
+# AIKB Agent 规则
 
 本规则适用于所有接入 AIKB 的 AI Agent，不绑定具体产品、模型或运行环境。具体 Agent 应在其根指令文件中配置 AIKB 的位置，并要求 Agent 按本文件完成接入。
 

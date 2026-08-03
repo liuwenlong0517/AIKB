@@ -1,4 +1,4 @@
-# AIKB Agent Index
+# AIKB Agent 索引
 
 本文件是面向 Agent 的轻量分层导航入口，不登记全部具体条目。Agent 应先遵守 `AI_RULES.md`，再沿当前任务对应的目录索引逐级加载，直到找到最少且直接相关的具体知识文件。
 
