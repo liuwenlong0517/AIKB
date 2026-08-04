@@ -65,7 +65,7 @@
 ## Agent 行为验收
 
 - [tests/README.md](tests/README.md)：不同 Agent 执行 AIKB 规则的验收入口。
-- [AIKB 接入与写入行为验收清单](tests/agent-behavior-checklist.md)：覆盖初始化、会话复用、增量加载、主动写入、冲突处理、分类扩展和重载行为。
+- [AIKB 接入与写入行为验收清单](tests/agent-behavior-checklist.md)：覆盖按需与延迟接入、会话复用、增量加载、主动写入、冲突处理、分类扩展和重载行为。
 
 ## 仓库配置
 

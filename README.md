@@ -28,4 +28,4 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 
 ## 与 AI Agent 配合
 
-外部 Agent 配置可以引用本知识库，但 AIKB 本身不创建或修改任何 Agent 专属配置文件。Agent 首次使用时应依次读取 `AI_RULES.md`、`USER_RULES.md` 和 `INDEX.md`，随后只加载当前任务需要的文件，不应默认扫描整个知识库。
+外部 Agent 配置可以引用本知识库，但 AIKB 本身不创建或修改任何 Agent 专属配置文件。新会话可以只加载 `USER_RULES.md` 以应用个人偏好；只有任务涉及实际软件工程工作、项目知识或用户明确要求时，才读取 `AI_RULES.md` 和 `INDEX.md` 完成 AIKB 接入。普通一次性问答和非编程任务不接入，也不应默认扫描整个知识库。
