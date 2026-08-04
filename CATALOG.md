@@ -36,7 +36,9 @@
 
 - [experience/README.md](experience/README.md)：经验内容总入口。
 - [候选知识](experience/inbox/README.md)：尚未验证或尚未归类的候选内容，暂无具体条目。
-- [解决方案](experience/solutions/README.md)：已经验证的问题解决方案，暂无具体条目。
+- [解决方案](experience/solutions/README.md)：已经验证的问题解决方案。
+  - [统一 VS Code user-data-dir 修复重启后登录会话丢失](experience/solutions/vscode-mixed-user-data-dir-auth-loss.md)：Windows Installer 版混用默认与自定义用户数据目录时，统一启动入口并通过两次冷启动验证登录会话持久化。
+  - [PowerShell profile 中实现 Linux 风格列表并区分预测建议与 Tab 补全](experience/solutions/powershell-profile-psreadline-completion.md)：修复 `ll` 的错误参数用法，并通过 PSReadLine 配置区分行内预测建议与命令补全菜单。
 - [工程陷阱](experience/pitfalls/README.md)：已经验证的陷阱与规避方式，暂无具体条目。
 - [工程决策](experience/decisions/README.md)：保留背景和取舍理由的工程决策，暂无具体条目。
 
@@ -60,7 +62,9 @@
 
 ## 项目知识
 
-- [projects/README.md](projects/README.md)：项目级知识的组织规则与项目索引，目前尚未登记具体项目。
+- [projects/README.md](projects/README.md)：项目级知识的组织规则与项目索引。
+- [ToolBox](projects/toolbox/README.md)：原生 JavaScript 开发者工具箱的项目知识索引。
+  - [项目架构与功能全景](projects/toolbox/project-overview.md)：当前基线的技术形态、扩展机制、20 个工具、外部依赖、运行验证与已知边界。
 
 ## Agent 行为验收
 
