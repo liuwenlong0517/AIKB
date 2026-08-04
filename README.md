@@ -6,6 +6,7 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 
 ## 目录结构
 
+- `ENTRY_RULES.md`：所有 Agent 共用的统一入口，负责加载个人规则并判断是否需要接入 AIKB。
 - `AI_RULES.md`：所有 Agent 共用的加载与写入规则。
 - `USER_RULES.md`：用户在不同 Agent 和项目之间共用的长期偏好与协作规则。
 - `INDEX.md`：面向 Agent 的轻量分层导航索引。
@@ -28,4 +29,4 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 
 ## 与 AI Agent 配合
 
-外部 Agent 配置可以引用本知识库，但 AIKB 本身不创建或修改任何 Agent 专属配置文件。新会话可以只加载 `USER_RULES.md` 以应用个人偏好；只有任务涉及实际软件工程工作、项目知识或用户明确要求时，才读取 `AI_RULES.md` 和 `INDEX.md` 完成 AIKB 接入。普通一次性问答和非编程任务不接入，也不应默认扫描整个知识库。
+外部 Agent 的根配置只需用一句话指向 `ENTRY_RULES.md`，不复制具体接入逻辑；AIKB 本身不创建或修改任何 Agent 专属配置文件。入口规则在新会话中加载 `USER_RULES.md`，并仅在任务涉及实际软件工程工作、项目知识或用户明确要求时读取 `AI_RULES.md` 和 `INDEX.md` 完成接入。普通一次性问答和非编程任务不接入，也不应默认扫描整个知识库。

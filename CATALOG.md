@@ -5,6 +5,7 @@
 ## 基础规则与说明
 
 - [README.md](README.md)：AIKB 的用途、目录结构和维护方式。
+- [ENTRY_RULES.md](ENTRY_RULES.md)：所有 Agent 共用的统一入口，集中维护会话初始化、接入判断和延迟接入规则。
 - [AI_RULES.md](AI_RULES.md)：所有 Agent 共用的接入、加载、重载和主动写入规则。
 - [USER_RULES.md](USER_RULES.md)：用户跨 Agent、跨项目共用的长期偏好与协作规则。
 - [CONTRIBUTING.md](CONTRIBUTING.md)：知识准入、验证、归档、维护与淘汰标准。
@@ -53,7 +54,7 @@
 ## 模板
 
 - [templates/README.md](templates/README.md)：模板总入口。
-- [Agent 根指令接入模板](templates/agent-root-instruction.md)：可复制到不同 Agent 根指令文件中的 AIKB 接入规则。
+- [Agent 根指令接入模板](templates/agent-root-instruction.md)：可复制到不同 Agent 根指令文件中的单句入口指令。
 - [候选知识模板](templates/inbox-entry.md)：记录尚未完成验证或归类的候选内容。
 - [通用知识模板](templates/knowledge-entry.md)：新增通用知识条目时使用。
 - [决策记录模板](templates/decision-record.md)：记录工程决策时使用。
