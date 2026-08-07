@@ -67,6 +67,7 @@
 - [Local Code RAG](projects/local-code-rag/README.md)：本地代码索引与检索基础设施的项目知识索引。
   - [本地生成式模型退出 RAG 主链路](projects/local-code-rag/local-llm-exclusion.md)：GPU 资源优先投入 embedding、索引和检索，生成与推理交给外部 Agent。
   - [异步索引任务队列与重启状态边界](projects/local-code-rag/async-index-task-queue.md)：索引任务的持久化状态、单工作线程约束、MCP 查询方式和自动恢复边界。
+  - [索引一致性恢复、任务可观测性与自动项目注册](projects/local-code-rag/index-integrity-observability-registration.md)：三层索引检查、最小恢复、任务事件指标和只读项目自动登记。
 - [ToolBox](projects/toolbox/README.md)：原生 JavaScript 开发者工具箱的项目知识索引。
   - [项目架构与功能全景](projects/toolbox/project-overview.md)：当前基线的技术形态、扩展机制、20 个工具、外部依赖、运行验证与已知边界。
 
