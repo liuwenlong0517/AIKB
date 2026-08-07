@@ -69,6 +69,7 @@
   - [异步索引任务队列与重启状态边界](projects/local-code-rag/async-index-task-queue.md)：索引任务的持久化状态、单工作线程约束、MCP 查询方式和自动恢复边界。
   - [索引一致性恢复、任务可观测性与自动项目注册](projects/local-code-rag/index-integrity-observability-registration.md)：三层索引检查、最小恢复、任务事件指标和只读项目自动登记。
   - [P1：安全上下文、容器监听与多项目检索基准](projects/local-code-rag/p1-safe-context-watcher-retrieval.md)：安全快照读取、任务进度/取消、按需监听、端口迁移和双项目评测结果。
+  - [本地检索缓存、上下文预算与 MCP 检索契约](projects/local-code-rag/retrieval-cache-context-mcp.md)：本地 SQLite 缓存、索引 revision 失效、预算化上下文组装、来源排名和 MCP 显式参数。
 - [ToolBox](projects/toolbox/README.md)：原生 JavaScript 开发者工具箱的项目知识索引。
   - [项目架构与功能全景](projects/toolbox/project-overview.md)：当前基线的技术形态、扩展机制、20 个工具、外部依赖、运行验证与已知边界。
 
