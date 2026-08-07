@@ -30,11 +30,13 @@ RTX 4080 Super 的 16GB 显存需要优先保障持续索引、embedding 和检�
 
 ## 验证
 
-2026-08-07 检查 `src/local_code_rag/config.py`、全部 `config/*.toml`、HTTP API 与 MCP 实现后确认：14B 相关字段只存在于配置，未被索引、检索或 MCP 调用。移除字段后应运行完整单元测试，并重建 `local-code-rag` 容器确认 `/readyz` 仍为 `ready`。
+2026-08-07 检查 `src/local_code_rag/config.py`、全部 `config/*.toml`、HTTP API 与 MCP 实现后确认：14B 相关字段只存在于配置，未被索引、检索或 MCP 调用。移除字段后运行 37 个单元测试并重建 `local-code-rag` 容器，`/readyz` 保持 `ready`。
+
+同日以 CRM 的 20 条中文业务问题比较 embedding 配置：`qwen3-embedding:4b` + FTS5 的 Top-10 命中为 20/20、MRR 为 0.677、平均首个匹配排名为 2.10，优于 0.6B 的 19/20、0.652 和 2.21。4B 全量首次索引耗时约 1535 秒，慢于 0.6B；运行时约占用 6.2GB GPU 显存，在不加载本地生成式模型的 RTX 4080 Super 16GB 环境中可稳定完成索引。
 
 ## 适用范围
 
-仅适用于 Windows + Docker Desktop 上的 `E:\CodeSpace\local-code-rag`。`qwen3-embedding:0.6b` 仍是本地 RAG 的推荐 embedding 模型；“不使用本地语言大模型”不等于停止使用 embedding 模型。
+仅适用于 Windows + Docker Desktop 上的 `E:\CodeSpace\local-code-rag`。`qwen3-embedding:4b` 是当前默认 embedding 模型，使用独立的 2560 维 Qdrant collection 与 SQLite 状态库；0.6B 与 nomic 索引可保留作回退，但不得混用不同向量维度。"不使用本地语言大模型"不等于停止使用 embedding 模型。
 
 ## 关联信息
 
