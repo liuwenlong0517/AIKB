@@ -4,7 +4,7 @@ tags: [vscode, windows, authentication, safe-storage, dpapi]
 applicable_versions: "VS Code 1.131.0 / Electron 42.7.0 / Windows"
 last_verified: 2026-08-05
 review_when: "VS Code 调整 sharedStorage、safeStorage、Windows 安装器或便携模式实现时"
-supersedes: [experience/inbox/vscode-mixed-user-data-dir-auth-loss.md]
+supersedes: [content/experience/inbox/vscode-mixed-user-data-dir-auth-loss.md]
 ---
 
 # 统一 VS Code user-data-dir 修复重启后登录会话丢失
@@ -56,4 +56,3 @@ GitHub Authentication 日志呈现“本次 `Stored 1 sessions`，下次启动 `
 - VS Code Portable mode：<https://code.visualstudio.com/docs/setup/portable>
 - VS Code Settings Sync：<https://code.visualstudio.com/docs/configure/settings-sync>
 - Electron `safeStorage`：<https://www.electronjs.org/docs/latest/api/safe-storage>
-

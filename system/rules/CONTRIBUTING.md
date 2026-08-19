@@ -26,7 +26,7 @@
 
 ## 正式收录的必要条件
 
-进入 `knowledge/`、`experience/solutions/`、`experience/pitfalls/`、`experience/decisions/`、`workflows/` 或正式项目记忆的信息，必须同时满足：
+进入 `content/knowledge/`、`content/experience/solutions/`、`content/experience/pitfalls/`、`content/experience/decisions/`、`content/workflows/` 或正式项目记忆的信息，必须同时满足：
 
 1. **真实**：来自实际代码、文档、测试、故障处理或明确的个人决策，不是推测或生成式补全。
 2. **可验证**：说明如何确认结论有效，并记录必要的验证结果。
@@ -54,7 +54,7 @@
 
 ## 候选信息与正式知识
 
-尚未满足正式收录条件、但可能具有价值的信息，可以进入 `experience/inbox/`，并明确标记：
+尚未满足正式收录条件、但可能具有价值的信息，可以进入 `content/experience/inbox/`，并明确标记：
 
 - 信息来源
 - 当前假设
@@ -62,19 +62,21 @@
 - 预期适用范围
 - 下一步处理动作
 
-`experience/inbox/` 不是永久归档区。候选信息完成验证后应移入正式目录；确认无价值、重复或错误后应移除。
+`content/experience/inbox/` 不是永久归档区。候选信息完成验证后应移入正式目录；确认无价值、重复或错误后应移除。
 
-候选内容应使用 `templates/inbox-entry.md`。其 `status` 固定为 `candidate`，并记录捕获日期、来源类型、预期范围和下一步动作；候选内容不要求伪造 `last_verified` 等正式验证信息。
+候选内容应使用 `system/templates/inbox-entry.md`。其 `status` 固定为 `candidate`，并记录捕获日期、来源类型、预期范围和下一步动作；候选内容不要求伪造 `last_verified` 等正式验证信息。
 
 ## 归档位置
 
-- 通用工程原理、语言、框架和工具知识放入 `knowledge/`。
-- 已验证的问题解决方案放入 `experience/solutions/`。
-- 容易重复触发的错误、陷阱和规避方式放入 `experience/pitfalls/`。
-- 包含背景、备选方案和取舍理由的决策放入 `experience/decisions/`。
-- 可重复执行的开发、调试、评审和发布过程放入 `workflows/`。
-- 仅对某个项目成立的事实和约定放入 `projects/<project>/`。
-- 暂未验证或无法归类的候选信息放入 `experience/inbox/`。
+- 通用工程原理、语言、框架和工具知识放入 `content/knowledge/`。
+- 已验证的问题解决方案放入 `content/experience/solutions/`。
+- 容易重复触发的错误、陷阱和规避方式放入 `content/experience/pitfalls/`。
+- 包含背景、备选方案和取舍理由的决策放入 `content/experience/decisions/`。
+- 可重复执行的开发、调试、评审和发布过程放入 `content/workflows/`。
+- 仅对某个项目成立的事实和约定放入 `content/projects/<project>/`。
+- 暂未验证或无法归类的候选信息放入 `content/experience/inbox/`。
+
+所有知识内容必须位于 `content/`。`system/` 只允许存放规则、模板和行为验收，除非当前任务明确是在维护 AIKB 体系，否则 Agent 不得修改该目录。根目录不直接新增知识或规则文件。
 
 ## 新分类创建
 
@@ -89,13 +91,13 @@
 
 新分类使用简短、稳定、可扩展的英文小写目录名；多个单词使用短横线连接。分类或主题目录必须包含 `README.md`，写明收录范围、不收录范围和条目索引。具体知识仍须使用独立文件，不得直接堆放在分类说明中。创建后更新上一级目录 `README.md` 和根目录 `CATALOG.md`；只有 `INDEX.md` 当前列出的基础文件或分层入口发生变化时才更新根目录索引。不得为了预测未来需求而创建没有真实条目的空分类。
 
-例如，已经验证的通用数据库知识无法归入现有工程、语言、框架或工具分类时，可以创建 `knowledge/databases/`；特定 PostgreSQL 知识可以进一步进入 `knowledge/databases/postgresql/`。如果内容本质上是一次问题解决方案、陷阱、决策或项目事实，仍应优先放入对应的 `experience/` 或 `projects/` 目录，而不是仅按数据库领域归档。
+例如，已经验证的通用数据库知识无法归入现有工程、语言、框架或工具分类时，可以创建 `content/knowledge/databases/`；特定 PostgreSQL 知识可以进一步进入 `content/knowledge/databases/postgresql/`。如果内容本质上是一次问题解决方案、陷阱、决策或项目事实，仍应优先放入对应的 `content/experience/` 或 `content/projects/` 目录，而不是仅按数据库领域归档。
 
-如果分类名称、边界或迁移范围存在明显争议，则使用 `templates/inbox-entry.md` 暂存候选知识，在“当前假设”和“下一步动作”中记录建议归档位置与待确认问题，并请求用户决定。
+如果分类名称、边界或迁移范围存在明显争议，则使用 `system/templates/inbox-entry.md` 暂存候选知识，在“当前假设”和“下一步动作”中记录建议归档位置与待确认问题，并请求用户决定。
 
 ## 条目结构
 
-新增正式条目应使用 `templates/` 中最接近的模板，并至少包含：
+新增正式条目应使用 `system/templates/` 中最接近的模板，并至少包含：
 
 - `背景`：背景和触发条件。
 - `问题`：要解决的问题或需要保留的判断。
@@ -108,7 +110,7 @@
 
 正式条目顶部使用统一的 YAML Front Matter，至少包含：
 
-- `status`：正式有效条目使用 `verified`，已经失效但需要保留历史价值的条目使用 `deprecated`；`candidate` 只用于 `experience/inbox/`。
+- `status`：正式有效条目使用 `verified`，已经失效但需要保留历史价值的条目使用 `deprecated`；`candidate` 只用于 `content/experience/inbox/`。
 - `tags`：用于检索的技术和问题标签。
 - `applicable_versions`：已确认适用的语言、框架、工具或项目版本；与版本无关时明确填写 `not-version-specific`。
 - `last_verified`：最近一次验证日期，格式为 `YYYY-MM-DD`。
@@ -122,7 +124,7 @@
 AIKB 使用两套职责不同的索引：
 
 - 根目录 `INDEX.md` 面向 Agent，只提供稳定、轻量的分层入口，不登记全部具体知识。
-- 根目录 `CATALOG.md` 面向用户，登记全部内容及其一句话说明，允许随知识库增长而扩展。
+- 根目录 `CATALOG.md` 面向用户，只登记 `content/` 中的全部知识内容及其一句话说明，允许随知识库增长而扩展。
 - 各目录的 `README.md` 是局部索引。分类索引指向主题，主题索引指向具体条目。
 
 新增、移动、重命名或删除具体内容时，必须更新距离该内容最近的目录 `README.md` 和根目录 `CATALOG.md`。新增或删除主题时，还要更新上一级分类 `README.md`；只有 `INDEX.md` 当前列出的基础文件或分层入口发生变化时才更新根目录索引。修改现有内容导致标题、状态、适用范围或索引摘要变化时，应同步更新局部索引和 `CATALOG.md`；仅修改正文细节时无需机械更新索引。
@@ -139,7 +141,7 @@ AIKB 使用两套职责不同的索引：
 - [ ] 内容中没有密钥、隐私数据或不必要的敏感信息。
 - [ ] 已选择正确目录，并按层级更新最近一级 `README.md`、`CATALOG.md`；只有全局入口变化时才更新 `INDEX.md`。
 
-如果无法确认“验证结果”或“适用范围”，该信息只能进入 `experience/inbox/`，不能作为正式知识发布。
+如果无法确认“验证结果”或“适用范围”，该信息只能进入 `content/experience/inbox/`，不能作为正式知识发布。
 
 ## AI Agent 写入规则
 
@@ -148,8 +150,8 @@ AIKB 使用两套职责不同的索引：
 - 不得把模型推断、未经执行的建议或未验证代码包装成既定经验。
 - 写入前优先搜索现有条目；可以更新现有条目时，不创建重复文件。
 - 修改既有结论时保留变更原因、验证依据和适用版本。
-- 无法确认归档位置或证据充分性时，放入 `experience/inbox/` 或请求开发者判断。
+- 无法确认归档位置或证据充分性时，放入 `content/experience/inbox/` 或请求开发者判断。
 
 ## 维护与淘汰
 
-知识不是永久正确的。发现条目过期、范围变化或结论被推翻时，应更新内容并说明验证依据；若旧结论具有决策历史价值，应标记为已废弃并指向替代条目，而不是让新旧结论同时保持有效状态。定期检查 `experience/inbox/`、版本相关知识和重复条目，避免知识库逐渐变成无法信任的信息堆积。
+知识不是永久正确的。发现条目过期、范围变化或结论被推翻时，应更新内容并说明验证依据；若旧结论具有决策历史价值，应标记为已废弃并指向替代条目，而不是让新旧结论同时保持有效状态。定期检查 `content/experience/inbox/`、版本相关知识和重复条目，避免知识库逐渐变成无法信任的信息堆积。

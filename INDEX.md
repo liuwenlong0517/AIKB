@@ -1,25 +1,24 @@
 # AIKB Agent 索引
 
-本文件是面向 Agent 的轻量分层导航入口，不登记全部具体条目。Agent 应先遵守 `AI_RULES.md`，再沿当前任务对应的目录索引逐级加载，直到找到最少且直接相关的具体知识文件。
+本文件是面向 Agent 的轻量分层导航入口，不登记全部具体条目。Agent 应先遵守 `system/rules/AI_RULES.md`，再沿当前任务对应的内容索引逐级加载，直到找到最少且直接相关的具体知识文件。
 
 ## 基础文件
 
 - `ENTRY_RULES.md`：所有 Agent 共用的稳定入口。新会话通过该文件加载个人规则并判断是否需要完整接入 AIKB。
 - `README.md`：面向人类的用途、结构和维护说明。
-- `AI_RULES.md`：Agent 接入后的初始化、知识加载与主动写入规则。由入口规则在任务满足接入条件时加载。
-- `USER_RULES.md`：用户跨 Agent、跨项目共用的长期偏好和协作规则。每个新会话可以单独读取，仅按用户明确要求修改。
-- `CONTRIBUTING.md`：知识准入和质量标准。准备新增、修订、归档或淘汰知识时读取。
+- `system/rules/AI_RULES.md`：Agent 接入后的初始化、知识加载与主动写入规则。由入口规则在任务满足接入条件时加载。
+- `system/rules/USER_RULES.md`：用户跨 Agent、跨项目共用的长期偏好和协作规则。每个新会话可以单独读取，仅按用户明确要求修改。
+- `system/rules/CONTRIBUTING.md`：知识准入和质量标准。准备新增、修订、归档或淘汰知识时读取。
 - `CATALOG.md`：面向用户的完整内容目录。常规任务不默认加载；查找全部内容或维护知识时按需读取。
 
 ## 分层入口
 
-- `knowledge/README.md`：通用工程知识入口，继续导航到工程、语言、框架和工具分类。
-- `experience/README.md`：候选知识、解决方案、陷阱和决策记录入口。
-- `workflows/README.md`：开发、调试、代码评审和发布流程入口。
-- `templates/README.md`：知识、决策、故障排查、项目记忆和 Agent 接入模板入口。
-- `projects/README.md`：项目级知识入口；只有任务涉及已登记项目时，才继续加载对应项目索引。
-- `tests/README.md`：不同 Agent 执行 AIKB 规则的行为验收入口；仅在验证规则兼容性时读取。
+- `content/README.md`：知识内容面的总入口和边界说明。
+- `content/knowledge/README.md`：通用工程知识入口，继续导航到工程、语言、框架和工具分类。
+- `content/experience/README.md`：候选知识、解决方案、陷阱和决策记录入口。
+- `content/workflows/README.md`：开发、调试、代码评审和发布流程入口。
+- `content/projects/README.md`：项目级知识入口；只有任务涉及已登记项目时，才继续加载对应项目索引。
 
 ## 导航原则
 
-具体知识只登记在其所在主题目录的 `README.md` 中，不复制到本文件。Agent 应按照“根索引 → 分类索引 → 主题索引 → 具体条目”的路径增量加载。只有本文件当前列出的基础文件或分层入口发生变化时才更新本文件。
+具体知识只登记在其所在主题目录的 `README.md` 和面向用户的 `CATALOG.md` 中，不复制到本文件。Agent 应按照“根索引 → 内容面入口 → 分类索引 → 主题索引 → 具体条目”的路径增量加载。只有本文件当前列出的基础文件或分层入口发生变化时才更新本文件；规则、模板和测试由 `system/README.md` 导航，不混入知识索引。

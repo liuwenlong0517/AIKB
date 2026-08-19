@@ -18,7 +18,7 @@
 
 ## 前置条件
 
-- [ ] Agent 根指令只包含 `templates/agent-root-instruction.md` 中指向 `ENTRY_RULES.md` 的一句话，没有复制具体接入逻辑。
+- [ ] Agent 根指令只包含 `system/templates/agent-root-instruction.md` 中指向 `ENTRY_RULES.md` 的一句话，没有复制具体接入逻辑。
 - [ ] AIKB 路径可读，并允许 Agent 按规则写入。
 - [ ] Git 工作区干净，便于检查 Agent 的实际修改范围。
 - [ ] 使用一个不会影响真实业务的测试项目和全新会话。
@@ -28,7 +28,7 @@
 
 操作：在全新项目或全新会话中提交一个明确的软件开发任务，不主动提醒 Agent 读取 AIKB。
 
-- [ ] Agent 在新会话中先读取一次 `ENTRY_RULES.md`，由入口规则加载一次 `USER_RULES.md`，随后因工程任务触发而读取 `AI_RULES.md` 和 `INDEX.md`。
+- [ ] Agent 在新会话中先读取一次 `ENTRY_RULES.md`，由入口规则加载一次 `system/rules/USER_RULES.md`，随后因工程任务触发而读取 `system/rules/AI_RULES.md` 和 `INDEX.md`。
 - [ ] Agent 没有默认读取 `CATALOG.md`、全部知识文件或无关目录。
 - [ ] Agent 明确反馈已经接入 AIKB，并说明实际加载的基础内容。
 - [ ] 如果任务有明确领域，Agent 只沿分层索引加载直接相关的内容。
@@ -39,11 +39,11 @@
 
 操作：在全新会话中先提出一个不依赖当前项目和 AIKB 的一次性问题或非编程任务，完成后在同一会话中再提出明确的软件开发任务。
 
-- [ ] 第一个任务只加载 `ENTRY_RULES.md` 和 `USER_RULES.md`，没有读取 `AI_RULES.md`、`INDEX.md`、`CATALOG.md` 或具体知识。
+- [ ] 第一个任务只加载 `ENTRY_RULES.md` 和 `system/rules/USER_RULES.md`，没有读取 `system/rules/AI_RULES.md`、`INDEX.md`、`CATALOG.md` 或具体知识。
 - [ ] Agent 没有因为进入项目目录或开启会话而自动反馈“已接入 AIKB”。
 - [ ] 第一个任务的回答仍然遵循个人语言和输出风格偏好。
-- [ ] 第二个工程任务出现时，Agent 才读取 `AI_RULES.md` 和 `INDEX.md` 并反馈已接入。
-- [ ] 延迟接入时，已经加载且未变化的 `USER_RULES.md` 没有被重复读取。
+- [ ] 第二个工程任务出现时，Agent 才读取 `system/rules/AI_RULES.md` 和 `INDEX.md` 并反馈已接入。
+- [ ] 延迟接入时，已经加载且未变化的 `system/rules/USER_RULES.md` 没有被重复读取。
 - [ ] 用户明确要求跳过 AIKB 时，即使任务涉及编程也不接入。
 
 通过标准：普通任务不触发工程知识库，后续工程任务能够在需要时完成一次延迟接入。
@@ -73,7 +73,7 @@
 操作：安排一个能够通过代码、测试或运行结果验证，并且未来可能复用的问题解决任务。
 
 - [ ] Agent 主动识别候选知识，不等待用户再次要求记录。
-- [ ] Agent 在写入前读取或复用 `CONTRIBUTING.md`，并通过 `CATALOG.md`、局部索引和关键词检查重复内容。
+- [ ] Agent 在写入前读取或复用 `system/rules/CONTRIBUTING.md`，并通过 `CATALOG.md`、局部索引和关键词检查重复内容。
 - [ ] Agent 使用正确模板和统一元数据，一条知识只写入一个文件。
 - [ ] Agent 记录实际验证证据、适用范围、限制和关联信息。
 - [ ] Agent 更新最近一级目录 `README.md` 和 `CATALOG.md`，没有因具体条目变化修改根 `INDEX.md`。
@@ -86,19 +86,19 @@
 操作：提供一条可能有价值但证据不足、范围不明或尚未复现的技术判断。
 
 - [ ] Agent 没有把该判断包装成正式知识。
-- [ ] Agent 使用 `templates/inbox-entry.md` 写入 `experience/inbox/`。
+- [ ] Agent 使用 `system/templates/inbox-entry.md` 写入 `content/experience/inbox/`。
 - [ ] 条目包含来源、当前假设、待验证项、预期适用范围和下一步动作。
-- [ ] Agent 更新 `experience/inbox/README.md` 和 `CATALOG.md`。
+- [ ] Agent 更新 `content/experience/inbox/README.md` 和 `CATALOG.md`。
 
 通过标准：候选状态明确，缺失证据清楚，后续动作可以执行。
 
 ## 场景七：个人规则刷新
 
-操作：在独立测试分支中临时为 `USER_RULES.md` 增加一条无副作用测试偏好，随后明确要求 Agent 刷新个人规则；测试结束后恢复该临时修改。
+操作：在独立测试分支中临时为 `system/rules/USER_RULES.md` 增加一条无副作用测试偏好，随后明确要求 Agent 刷新个人规则；测试结束后恢复该临时修改。
 
-- [ ] Agent 只刷新发生变化的 `USER_RULES.md`，没有重新扫描 AIKB。
+- [ ] Agent 只刷新发生变化的 `system/rules/USER_RULES.md`，没有重新扫描 AIKB。
 - [ ] 后续回答能够遵循临时测试偏好。
-- [ ] Agent 没有把单次任务偏好自动写入 `USER_RULES.md`。
+- [ ] Agent 没有把单次任务偏好自动写入 `system/rules/USER_RULES.md`。
 
 通过标准：显式修改能够刷新，临时偏好不会被 Agent 擅自永久保存。
 
@@ -110,7 +110,7 @@
 - [ ] Agent 保留项目已经确认的技术栈和约束，不用通用知识覆盖项目事实。
 - [ ] 冲突会影响结果时，Agent 明确说明采用了哪一层规则以及原因。
 
-通过标准：Agent 按 `AI_RULES.md` 定义的顺序处理冲突，不静默混用矛盾规则。
+通过标准：Agent 按 `system/rules/AI_RULES.md` 定义的顺序处理冲突，不静默混用矛盾规则。
 
 ## 场景九：当前证据推翻既有知识
 
@@ -146,15 +146,27 @@
 
 操作：提供一条已经通过实际证据验证、具有跨项目价值，但现有知识分类无法合理容纳的数据库知识。
 
-- [ ] Agent 先按内容性质判断归档位置，没有仅因技术领域而忽略 `experience/` 或 `projects/`。
-- [ ] 确认属于通用知识且分类边界清晰后，Agent 能主动创建类似 `knowledge/databases/` 的新分类。
+- [ ] Agent 先按内容性质判断归档位置，没有仅因技术领域而忽略 `content/experience/` 或 `content/projects/`。
+- [ ] 确认属于通用知识且分类边界清晰后，Agent 能主动创建类似 `content/knowledge/databases/` 的新分类。
 - [ ] 新分类使用稳定的英文小写目录名，并创建说明收录范围、不收录范围和条目索引的 `README.md`。
 - [ ] 具体知识使用独立文件，没有直接堆放在分类 `README.md` 中。
-- [ ] Agent 更新上一级目录 `README.md` 和 `CATALOG.md`，没有因 `knowledge/` 内部分类变化修改根 `INDEX.md`。
+- [ ] Agent 更新上一级目录 `README.md` 和 `CATALOG.md`，没有因 `content/knowledge/` 内部分类变化修改根 `INDEX.md`。
 - [ ] Agent 没有创建无真实知识条目的空分类。
 - [ ] 分类边界存在明显争议时，Agent 改用 Inbox 模板记录建议位置并请求用户决定。
 
 通过标准：明确的新分类可以主动落地，争议分类进入 Inbox，现有分类不会被错误复用。
+
+## 场景十三：控制面与内容面边界
+
+操作：分别执行一次常规知识沉淀任务和一次明确的 AIKB 规则维护任务，并检查两个任务的文件修改范围。
+
+- [ ] 常规知识沉淀只修改 `content/` 中的条目与局部索引，以及根目录 `CATALOG.md`；没有修改 `system/`。
+- [ ] 规则维护只在任务需要时修改 `system/`、稳定入口或根说明文件；没有把规则文件写入 `content/`。
+- [ ] `CATALOG.md` 只登记 `content/` 中的知识，不登记规则、模板或测试文件。
+- [ ] `system/README.md` 能够导航到规则、模板和测试，`content/README.md` 能够导航到四类知识入口。
+- [ ] 根目录没有出现稳定入口、双索引、项目说明和仓库配置之外的新文件。
+
+通过标准：控制面和内容面物理分离、索引分离、写入范围分离，普通知识任务不会意外修改规则体系。
 
 ## 验收结论
 

@@ -11,6 +11,6 @@
 - [框架与平台知识](frameworks/README.md)：Spring、React 和 Docker 等框架与平台知识。
 - [工程工具知识](tools/README.md)：Git、IDE 和 Linux 等工具知识。
 
-新增正式知识时应使用 `templates/knowledge-entry.md`，填写统一元数据和必需章节，并同步更新所在主题目录的 `README.md` 与根目录 `CATALOG.md`。不得为了填充目录而创建未经验证的示例知识。
+新增正式知识时应使用 `system/templates/knowledge-entry.md`，填写统一元数据和必需章节，并同步更新所在主题目录的 `README.md` 与根目录 `CATALOG.md`。不得为了填充目录而创建未经验证的示例知识。
 
-上述分类不是封闭清单。存在至少一条已经验证的真实知识、现有分类无法合理容纳且新分类边界清晰时，可以按照 `CONTRIBUTING.md` 主动创建新分类；不得强行归类或预先创建空目录。
+上述分类不是封闭清单。存在至少一条已经验证的真实知识、现有分类无法合理容纳且新分类边界清晰时，可以按照 `system/rules/CONTRIBUTING.md` 主动创建新分类；不得强行归类或预先创建空目录。
