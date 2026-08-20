@@ -3,8 +3,8 @@ id: aikb:projects:toolbox:project-overview
 type: project-memory
 status: verified
 tags: [toolbox, static-web, javascript, developer-tools]
-applicable_versions: "ToolBox commit 0253cc7"
-last_verified: 2026-08-04
+applicable_versions: "ToolBox commit c2775d2"
+last_verified: 2026-08-20
 review_when: "核心框架、工具脚本、构建方式、外部 API 或测试体系发生变化时"
 supersedes: []
 relations: []
@@ -14,7 +14,7 @@ relations: []
 
 ## 背景
 
-ToolBox 是位于 `E:\CodeSpace\codex\ToolBox` 的开发者日常工具集合。当前仓库只有一个初始化提交 `0253cc7`，需要保留一份可复用的项目入口、功能边界与验证基线。同一基线还有一个并行副本 `E:\CodeSpace\claude\ToolBox`（内容与 codex 副本除 `.claude`/`.git` 外完全一致），供 Claude Code 会话使用。
+ToolBox 是位于 `E:\CodeSpace\ToolBox` 的开发者日常工具集合。当前仓库只有一个初始化提交 `c2775d2`，需要保留一份可复用的项目入口、功能边界与验证基线。
 
 ## 问题
 
@@ -43,6 +43,6 @@ ToolBox 是位于 `E:\CodeSpace\codex\ToolBox` 的开发者日常工具集合。
 
 ## 关联信息
 
-- 项目入口：`E:\CodeSpace\codex\ToolBox\index.html`（并行副本：`E:\CodeSpace\claude\ToolBox\index.html`）
-- 核心框架：`E:\CodeSpace\codex\ToolBox\app\core.js`
-- 工具实现：`E:\CodeSpace\codex\ToolBox\app\tools\`
+- 项目入口：`E:\CodeSpace\codexindex.html`
+- 核心框架：`E:\CodeSpace\codex\app\core.js`
+- 工具实现：`E:\CodeSpace\codex\app\tools\`
