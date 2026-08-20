@@ -15,7 +15,82 @@ $claudeConfig = Join-Path $resolvedTestRoot 'claude.json'
 $previousAikbHome = $env:AIKB_HOME
 $previousUserAikbHome = [Environment]::GetEnvironmentVariable('AIKB_HOME', 'User')
 
+function ConvertFrom-McpResponse {
+    param([object[]]$OutputSegments)
+
+    $json = [string]::Concat([string[]]@($OutputSegments)).Trim()
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        throw 'MCP initialize 未返回 JSON'
+    }
+    try {
+        return $json | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "MCP initialize 返回无效 JSON（片段数：$(@($OutputSegments).Count)，字符数：$($json.Length)）：$($_.Exception.Message)"
+    }
+}
+
+function Invoke-McpInitialize {
+    param([object]$Server, [string]$InitializeRequest, [int]$TimeoutMilliseconds = 10000)
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = [string]$Server.command
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
+    $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+    foreach ($argument in @($Server.args)) {
+        [void]$startInfo.ArgumentList.Add([string]$argument)
+    }
+    $environmentProperty = $Server.PSObject.Properties['env']
+    if ($null -ne $environmentProperty) {
+        foreach ($property in $environmentProperty.Value.PSObject.Properties) {
+            $startInfo.Environment[[string]$property.Name] = [string]$property.Value
+        }
+    }
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw 'MCP 进程未能启动'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.StandardInput.WriteLine($InitializeRequest)
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $process.Kill($true)
+            throw "MCP initialize 超时（$TimeoutMilliseconds ms）"
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "MCP 命令退出码为 $($process.ExitCode)：$($stderr.Trim())"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            throw "MCP 命令向 stderr 写入内容：$($stderr.Trim())"
+        }
+        return ConvertFrom-McpResponse -OutputSegments @($stdout)
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 try {
+    $fragmentedResponse = ConvertFrom-McpResponse -OutputSegments @(
+        '{"jsonrpc":"2.0","id":1,"result":{"instructions":"分段',
+        '响应"}}'
+    )
+    if ($fragmentedResponse.result.instructions -ne '分段响应') {
+        throw 'MCP 分段 JSON 响应拼接测试失败'
+    }
+
     $environmentScript = Join-Path $repoRoot 'system\tools\set-aikb-home.ps1'
     & $environmentScript -Path $repoRoot -Target Process -PassThru | Out-Null
     $secondEnvironmentWrite = & $environmentScript -Path $repoRoot -Target Process -PassThru
@@ -57,7 +132,7 @@ try {
     $claudeObject = Get-Content -Raw -LiteralPath $claudeConfig | ConvertFrom-Json
     $server = $claudeObject.mcpServers.aikb
     $initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"adapter-test","version":"1"}}}'
-    $mcpResponse = $initialize | & $server.command @($server.args) | Select-Object -First 1 | ConvertFrom-Json
+    $mcpResponse = Invoke-McpInitialize -Server $server -InitializeRequest $initialize
     if ($mcpResponse.result.serverInfo.name -ne 'aikb') {
         throw '通过 AIKB_HOME 生成的 MCP 命令无法实际启动服务'
     }

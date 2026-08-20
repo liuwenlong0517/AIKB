@@ -25,10 +25,12 @@ Write-Host '[1/6] 设置 AIKB_HOME' -ForegroundColor Cyan
 
 if (-not $SkipTests) {
     Write-Host '[2/6] 运行仓库与适配器测试' -ForegroundColor Cyan
-    & (Join-Path $repoRoot 'system\tests\validate-structure.ps1')
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\tests\validate-structure.ps1')
+    if ($LASTEXITCODE -ne 0) { throw '仓库结构测试失败' }
     & python -m unittest discover -s (Join-Path $repoRoot 'system\tools\aikb-mcp\tests') -v
     if ($LASTEXITCODE -ne 0) { throw 'Python 核心测试失败' }
-    & (Join-Path $repoRoot 'system\tests\validate-adapters.ps1')
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\tests\validate-adapters.ps1')
+    if ($LASTEXITCODE -ne 0) { throw '适配器测试失败' }
 }
 else {
     Write-Host '[2/6] 已按参数跳过自动测试' -ForegroundColor DarkYellow
