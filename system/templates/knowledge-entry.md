@@ -1,10 +1,13 @@
 ---
+id: aikb:knowledge:category:topic
+type: knowledge
 status: verified
 tags: []
 applicable_versions: ""
 last_verified: YYYY-MM-DD
 review_when: ""
 supersedes: []
+relations: []
 ---
 
 # 知识条目标题

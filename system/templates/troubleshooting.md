@@ -1,10 +1,13 @@
 ---
+id: aikb:experience:solutions:troubleshooting-topic
+type: solution
 status: verified
 tags: []
 applicable_versions: ""
 last_verified: YYYY-MM-DD
 review_when: ""
 supersedes: []
+relations: []
 ---
 
 # 故障排查标题

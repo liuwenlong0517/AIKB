@@ -1,10 +1,15 @@
 ---
+id: aikb:projects:local-code-rag:retrieval-cache-context-mcp
+type: project-memory
 status: verified
 tags: [local-code-rag, retrieval-cache, context-budget, mcp, sqlite, fts5, qdrant, windows]
 applicable_versions: local-code-rag 0.3.0 and later
 last_verified: 2026-08-07
 review_when: 修改检索缓存键、索引 revision、上下文组装预算、search_code MCP 参数或 /search 请求契约时
 supersedes: []
+relations:
+  - type: depends_on
+    target: aikb:projects:local-code-rag:p1-safe-context-watcher-retrieval
 ---
 
 # 本地检索缓存、上下文预算与 MCP 检索契约

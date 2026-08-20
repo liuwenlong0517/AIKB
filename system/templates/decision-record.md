@@ -1,10 +1,13 @@
 ---
+id: aikb:experience:decisions:decision-topic
+type: decision
 status: verified
 tags: []
 applicable_versions: ""
 last_verified: YYYY-MM-DD
 review_when: ""
 supersedes: []
+relations: []
 ---
 
 # 决策标题

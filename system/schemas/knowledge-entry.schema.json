@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.aikb/schemas/knowledge-entry.schema.json",
+  "title": "AIKB knowledge entry metadata",
+  "type": "object",
+  "required": ["id", "type", "status", "tags", "relations"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^aikb:[a-z0-9][a-z0-9:-]*$"},
+    "type": {"enum": ["knowledge", "solution", "pitfall", "decision", "workflow", "project-memory", "candidate"]},
+    "status": {"enum": ["verified", "deprecated", "candidate"]},
+    "tags": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "applicable_versions": {"type": ["string", "array"]},
+    "last_verified": {"type": ["string", "null"]},
+    "review_when": {"type": ["string", "array"]},
+    "supersedes": {"type": "array", "items": {"type": "string"}},
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "target"],
+        "properties": {
+          "type": {"enum": ["related_to", "depends_on", "implements", "supersedes", "verified_by", "applies_to", "part_of"]},
+          "target": {"type": "string", "pattern": "^aikb:"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "candidate"}}},
+      "else": {"required": ["applicable_versions", "last_verified", "review_when"]}
+    }
+  ],
+  "additionalProperties": true
+}

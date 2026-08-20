@@ -1,10 +1,15 @@
 ---
+id: aikb:projects:local-code-rag:p1-safe-context-watcher-retrieval
+type: project-memory
 status: verified
 tags: [local-code-rag, mcp, fts5, watcher, retrieval-evaluation, docker, windows]
 applicable_versions: local-code-rag 0.3.0 and later
 last_verified: 2026-08-07
 review_when: 修改安全过滤、FTS5 schema、MCP/API 工具、监听器、宿主机端口或默认检索限额时
 supersedes: []
+relations:
+  - type: related_to
+    target: aikb:projects:local-code-rag:retrieval-cache-context-mcp
 ---
 
 # P1：安全上下文、容器监听与多项目检索基准

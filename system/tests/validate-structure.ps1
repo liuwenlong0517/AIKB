@@ -17,9 +17,10 @@ $requiredRootFiles = @(
     'README.md'
 )
 
-$requiredRootDirectories = @('content', 'system')
-$allowedSystemEntries = @('README.md', 'rules', 'templates', 'tests')
+$requiredRootDirectories = @('content', 'system', 'workspace')
+$allowedSystemEntries = @('README.md', 'adapters', 'rules', 'schemas', 'templates', 'tests', 'tools')
 $allowedContentEntries = @('README.md', 'experience', 'knowledge', 'projects', 'workflows')
+$allowedWorkspaceEntries = @('.gitignore', 'README.md', 'active', 'archive', 'db', 'runtime')
 
 foreach ($name in $requiredRootFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $name) -PathType Leaf)) {
@@ -38,7 +39,7 @@ Get-ChildItem -LiteralPath $repoRoot -File -Force |
     ForEach-Object { Add-ValidationError "根目录存在白名单外文件：$($_.Name)" }
 
 Get-ChildItem -LiteralPath $repoRoot -Directory -Force |
-    Where-Object { $_.Name -notin @('.git', 'content', 'system') } |
+    Where-Object { $_.Name -notin @('.git', 'content', 'system', 'workspace') } |
     ForEach-Object { Add-ValidationError "根目录存在白名单外目录：$($_.Name)" }
 
 Get-ChildItem -LiteralPath (Join-Path $repoRoot 'system') -Force |
@@ -48,6 +49,10 @@ Get-ChildItem -LiteralPath (Join-Path $repoRoot 'system') -Force |
 Get-ChildItem -LiteralPath (Join-Path $repoRoot 'content') -Force |
     Where-Object { $_.Name -notin $allowedContentEntries } |
     ForEach-Object { Add-ValidationError "content/ 存在未定义入口：$($_.Name)" }
+
+Get-ChildItem -LiteralPath (Join-Path $repoRoot 'workspace') -Force |
+    Where-Object { $_.Name -notin $allowedWorkspaceEntries } |
+    ForEach-Object { Add-ValidationError "workspace/ 存在未定义入口：$($_.Name)" }
 
 $markdownFiles = Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Filter '*.md' |
     Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
@@ -85,6 +90,10 @@ if ($catalogText -match '\[[^\]]+\]\(system/') {
     Add-ValidationError 'CATALOG.md 不应登记 system/ 下的规则、模板或测试文件'
 }
 
+if ($catalogText -match '\[[^\]]+\]\(workspace/') {
+    Add-ValidationError 'CATALOG.md 不应登记 workspace/ 下的工作状态或派生数据库'
+}
+
 $entryText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md')
 foreach ($requiredPath in @(
     'E:\CodeSpace\AIKB\system\rules\AI_RULES.md',
@@ -92,6 +101,18 @@ foreach ($requiredPath in @(
 )) {
     if (-not $entryText.Contains($requiredPath)) {
         Add-ValidationError "ENTRY_RULES.md 未引用当前规则路径：$requiredPath"
+    }
+}
+
+$ruleBudgets = @{
+    'ENTRY_RULES.md' = 1600
+    'INDEX.md' = 1600
+    'system/rules/AI_RULES.md' = 3500
+}
+foreach ($relativePath in $ruleBudgets.Keys) {
+    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
+    if ($text.Length -gt $ruleBudgets[$relativePath]) {
+        Add-ValidationError "核心规则超过字符预算：$relativePath = $($text.Length) > $($ruleBudgets[$relativePath])"
     }
 }
 
@@ -103,6 +124,53 @@ if (-not $instructionMatch.Success -or $instructionMatch.Groups[1].Value -ne $ex
     Add-ValidationError 'Agent 根指令模板必须严格保持为指向 ENTRY_RULES.md 的一句话'
 }
 
+$python = Get-Command python -ErrorAction SilentlyContinue
+if (-not $python) {
+    Add-ValidationError '未找到 Python，无法验证知识元数据和适配器实现'
+}
+else {
+    $toolRoot = Join-Path $repoRoot 'system\tools\aikb-mcp'
+    Push-Location -LiteralPath $toolRoot
+    try {
+        $previousUtf8 = $env:PYTHONUTF8
+        $env:PYTHONUTF8 = '1'
+        $metadataOutput = & $python.Source -m aikb validate 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Add-ValidationError "知识元数据验证失败：$($metadataOutput -join ' ')"
+        }
+    }
+    finally {
+        $env:PYTHONUTF8 = $previousUtf8
+        Pop-Location
+    }
+}
+
+$adapterIds = @{}
+Get-ChildItem -LiteralPath (Join-Path $repoRoot 'system\adapters') -Directory | ForEach-Object {
+    $manifestPath = Join-Path $_.FullName 'adapter.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        if ($_.Name -ne 'shared') { Add-ValidationError "适配器目录缺少 adapter.json：$($_.Name)" }
+        return
+    }
+    try {
+        $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+        if (-not $manifest.id -or $adapterIds.ContainsKey([string]$manifest.id)) {
+            Add-ValidationError "适配器 ID 缺失或重复：$($_.Name)"
+        }
+        else {
+            $adapterIds[[string]$manifest.id] = $true
+        }
+        foreach ($scriptName in @($manifest.install.script, $manifest.install.uninstallScript, $manifest.install.doctorScript)) {
+            if (-not (Test-Path -LiteralPath (Join-Path $_.FullName $scriptName) -PathType Leaf)) {
+                Add-ValidationError "适配器入口缺失：$($_.Name)/$scriptName"
+            }
+        }
+    }
+    catch {
+        Add-ValidationError "适配器清单无效：$manifestPath -> $($_.Exception.Message)"
+    }
+}
+
 if ($errors.Count -gt 0) {
     foreach ($validationError in $errors) {
         Write-Host "[失败] $validationError" -ForegroundColor Red
@@ -110,4 +178,4 @@ if ($errors.Count -gt 0) {
     exit 1
 }
 
-Write-Host "结构校验通过：$($markdownFiles.Count) 个 Markdown 文件，$($contentFiles.Count) 个知识内容文件。" -ForegroundColor Green
+Write-Host "结构校验通过：$($markdownFiles.Count) 个 Markdown 文件，$($contentFiles.Count) 个知识内容文件，$($adapterIds.Count) 个 Agent 适配器。" -ForegroundColor Green

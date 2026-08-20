@@ -9,10 +9,11 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 - `ENTRY_RULES.md`：所有 Agent 共用且路径长期稳定的统一入口。
 - `INDEX.md`：面向 Agent 的轻量知识导航，只提供稳定的分层入口。
 - `CATALOG.md`：面向用户的完整知识目录，只登记 `content/` 中的内容。
-- `system/`：AIKB 的控制面，集中存放规则、模板和行为验收。
+- `system/`：AIKB 的控制面，集中存放规则、Schema、MCP、Agent 适配器、模板和验收。
 - `content/`：AIKB 的内容面，集中存放通用知识、工程经验、工作流和项目知识。
+- `workspace/`：AIKB 的本机运行面，保存不进 Git 的任务检查点与可重建 SQLite 索引。
 
-`system/` 与 `content/` 必须保持边界：前者定义 AIKB 如何工作，后者记录 AIKB 知道什么。正常知识沉淀不得写入 `system/`；维护规则体系时也不得把规则文件登记为知识条目。
+三个平面必须保持边界：`system/` 定义 AIKB 如何工作，`content/` 记录 AIKB 知道什么，`workspace/` 记录当前机器尚未完成的工作状态。正常知识沉淀不得写入 `system/` 或 `workspace/`；工作检查点也不能自动提升为正式知识。
 
 ## 维护方式
 
@@ -21,8 +22,8 @@ AIKB（AI Knowledge Base）是一个独立于具体 AI Agent 和具体项目的�
 3. 新增、移动、重命名或删除内容后，更新最近一级目录的 `README.md` 和根目录 `CATALOG.md`；只有全局入口发生变化时才更新 `INDEX.md`。
 4. 保持条目简短、可检索、可独立理解；不要保存聊天记录、临时想法或未验证结论。
 5. 项目专属事实放入 `content/projects/`，通用工程知识放入 `content/knowledge/` 或 `content/experience/`。
-6. 根目录只保留稳定入口、双索引、项目说明和 Git 配置文件，不直接新增规则或知识文件。
+6. 根目录只保留稳定入口、双索引、项目说明、Git 配置和运行面入口，不直接新增规则或知识文件。
 
 ## 与 AI Agent 配合
 
-外部 Agent 的根配置只需用一句话指向 `ENTRY_RULES.md`，不复制具体接入逻辑；AIKB 本身不创建或修改任何 Agent 专属配置文件。入口规则在新会话中加载 `system/rules/USER_RULES.md`，并仅在任务涉及实际软件工程工作、项目知识或用户明确要求时读取 `system/rules/AI_RULES.md` 和 `INDEX.md` 完成接入。普通一次性问答和非编程任务不接入，也不应默认扫描整个知识库。
+外部 Agent 的根配置只需用一句话指向 `ENTRY_RULES.md`，不复制具体接入逻辑。入口规则仅在工程任务需要时完成接入；未知知识位置通过轻量 MCP 发现，MCP 不可用时仍按 `INDEX.md` 分层读取。`system/adapters/` 提供 Codex、Claude Code 的显式、幂等用户级安装器；安装器未被执行时不会修改任何 Agent 配置。未来 Agent 通过新增自描述适配器目录接入，不修改知识内容和核心协议。

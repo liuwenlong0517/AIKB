@@ -119,6 +119,14 @@
 
 正式知识遵循“一条知识一个文件”。语言、框架、工具或工程主题使用目录组织，主题目录中的 `README.md` 只负责说明范围和导航，不集中堆放具体知识。文件名使用简短、可检索的英文小写短横线形式，例如 `virtual-thread-pinning.md`；正文说明使用中文，代码、命令、文件路径、API 和专有名词按实际需要保留英文。
 
+所有正式条目元数据必须符合 `system/schemas/knowledge-entry.schema.json`，并额外包含：
+
+- `id`：以 `aikb:` 开头的全库唯一稳定标识。文件移动、重命名和分类调整时保持不变。
+- `type`：使用 `knowledge`、`solution`、`pitfall`、`decision`、`workflow`、`project-memory` 或 `candidate`。
+- `relations`：可为空；非空时使用 `related_to`、`depends_on`、`implements`、`supersedes`、`verified_by`、`applies_to`、`part_of`，目标必须是稳定知识 ID。
+
+新增或修改正式条目时必须检查 ID 唯一性和关系目标。现有路径形式的 `supersedes` 作为兼容字段保留；新关系优先写入 `relations`。
+
 ## 索引维护
 
 AIKB 使用两套职责不同的索引：

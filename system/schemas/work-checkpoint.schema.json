@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.aikb/schemas/work-checkpoint.schema.json",
+  "title": "AIKB work checkpoint metadata",
+  "type": "object",
+  "required": ["work_id", "project_id", "status", "agent", "session_id", "role", "updated_at", "checkpoint_id", "project_path"],
+  "properties": {
+    "work_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "project_id": {"type": "string"},
+    "status": {"enum": ["planned", "active", "blocked", "completed", "abandoned", "superseded"]},
+    "agent": {"type": "string", "description": "开放的 Agent 标识，不使用封闭枚举"},
+    "session_id": {"type": "string"},
+    "role": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "checkpoint_id": {"type": "string"},
+    "project_path": {"type": "string"},
+    "workspace_dirty": {"type": "boolean"}
+  },
+  "additionalProperties": true
+}

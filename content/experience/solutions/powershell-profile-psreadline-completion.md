@@ -1,10 +1,13 @@
 ---
+id: aikb:experience:solutions:powershell-profile-psreadline-completion
+type: solution
 status: verified
 tags: [powershell, psreadline, shell, terminal, completion]
 applicable_versions: "PowerShell 7.6.4 / PSReadLine 2.4.5 / Windows"
 last_verified: 2026-08-05
 review_when: "升级 PowerShell 7 或 PSReadLine，或调整 PowerShell profile 中的补全与预测配置时"
 supersedes: []
+relations: []
 ---
 
 # PowerShell profile 中实现 Linux 风格列表并区分预测建议与 Tab 补全

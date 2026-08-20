@@ -168,6 +168,61 @@
 
 通过标准：控制面和内容面物理分离、索引分离、写入范围分离，普通知识任务不会意外修改规则体系。
 
+## 场景十四：MCP 发现与准确读取分流
+
+操作：先提出一个不知道知识位置的工程问题，再提供一个准确知识 ID 继续追问。
+
+- [ ] 第一次使用 `search_knowledge` 且默认返回少量片段，没有读取完整目录或整篇文档。
+- [ ] 第二次直接使用 `read_knowledge`，没有重复搜索。
+- [ ] Agent 把 MCP 结果当作候选定位，并保留 Markdown hash、验证日期和适用范围。
+- [ ] 同一 `id + content_hash` 在会话中没有被机械重复读取。
+
+通过标准：发现式检索与准确读取职责分开，默认上下文有界。
+
+## 场景十五：MCP 不可用时降级
+
+操作：禁用 AIKB MCP 后重复一个已有知识的查询。
+
+- [ ] Agent 按 `INDEX.md → 局部 README → 具体文件` 查找。
+- [ ] Agent 没有因为 MCP 不可用就读取 `CATALOG.md` 或扫描全库。
+- [ ] 找到的结论与当前 Markdown 一致，并说明采用了文件降级路径。
+
+通过标准：SQLite/MCP 不是单点依赖，纯 Markdown 路径仍可用。
+
+## 场景十六：跨 Agent 工作状态继承
+
+操作：Codex 为未完成任务写入检查点，随后由 Claude Code 在同一项目中执行互补检查。
+
+- [ ] 两个 Agent 使用同一个 `work_id`，分别记录自己的 `agent`、`session_id` 和 `role`。
+- [ ] Claude Code 只加载紧凑恢复胶囊，并在继续前复核 Git 分支、revision 和工作区。
+- [ ] 工作状态没有进入 `content/`、`CATALOG.md` 或 Git。
+- [ ] 检查点没有聊天全文、隐藏推理、密钥、原始日志或完整 diff。
+
+通过标准：Agent 来源可区分，任务真相不分裂。
+
+## 场景十七：Hooks 低成本保护
+
+操作：为一个活动任务写检查点，随后修改 Git 工作区并触发 Stop；再模拟 session resume/compact。
+
+- [ ] Git 状态未变化时 Stop hook 不追加模型上下文或检查点。
+- [ ] 状态变化且检查点陈旧时 Stop hook 最多阻止一次，并要求写紧凑检查点。
+- [ ] `stop_hook_active` 为真时不会形成循环。
+- [ ] SessionStart 只有唯一活动任务时才注入不超过预算的恢复胶囊；多个候选时不自动注入。
+- [ ] SessionEnd 只做轻量收尾，不解析 transcript 或调用模型总结。
+
+通过标准：自动保护只在必要时增加 Token，不依赖不稳定的聊天记录格式。
+
+## 场景十八：新 Agent 适配器扩展
+
+操作：在隔离测试目录增加一个包含 `adapter.json` 的虚构 Agent 适配器。
+
+- [ ] `discover-adapters.ps1` 自动发现新目录。
+- [ ] 核心 Python、知识 Schema、工作状态 Schema 和已有适配器无需修改。
+- [ ] 不支持 hooks 的适配器可以声明能力降级，不影响 MCP 或 Markdown 降级路径。
+- [ ] `agent` 字段接受新标识，不依赖 `codex|claude-code` 封闭枚举。
+
+通过标准：新增 Agent 只增加适配器实现和对应测试/文档，不修改现有知识内容。
+
 ## 验收结论
 
 - 通过场景：

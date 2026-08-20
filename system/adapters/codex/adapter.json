@@ -1,0 +1,17 @@
+{
+  "id": "codex",
+  "displayName": "OpenAI Codex",
+  "platforms": ["windows"],
+  "capabilities": {
+    "mcpStdio": true,
+    "sessionStart": true,
+    "preCompact": true,
+    "stop": true,
+    "sessionEnd": true
+  },
+  "install": {
+    "script": "install.ps1",
+    "uninstallScript": "uninstall.ps1",
+    "doctorScript": "doctor.ps1"
+  }
+}

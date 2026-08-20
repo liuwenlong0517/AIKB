@@ -1,10 +1,15 @@
 ---
+id: aikb:projects:local-code-rag:index-integrity-observability-registration
+type: project-memory
 status: verified
 tags: [local-code-rag, qdrant, fts5, sqlite, recovery, observability, docker, registry]
 applicable_versions: local-code-rag 0.3.0 and later
 last_verified: 2026-08-07
 review_when: 修改 Qdrant collection 结构、manifest/FTS5 schema、索引事务顺序、任务队列或项目挂载方式时
 supersedes: []
+relations:
+  - type: related_to
+    target: aikb:projects:local-code-rag:p1-safe-context-watcher-retrieval
 ---
 
 # 索引一致性恢复、任务可观测性与自动项目注册

@@ -2,6 +2,8 @@
 
 本目录提供 AIKB 接入和内容写入模板。新增内容时选择最接近的模板，不加载无关模板。
 
+正式知识模板遵循 `system/schemas/knowledge-entry.schema.json`，必须为条目分配长期稳定的 `id`、受控 `type` 和显式 `relations`。文件移动时不得修改稳定 ID。
+
 ## 模板索引
 
 - [Agent 根指令接入模板](agent-root-instruction.md)：复制到具体 Agent 根指令文件中的单句入口指令。

@@ -1,10 +1,13 @@
 ---
+id: aikb:projects:toolbox:project-overview
+type: project-memory
 status: verified
 tags: [toolbox, static-web, javascript, developer-tools]
 applicable_versions: "ToolBox commit 0253cc7"
 last_verified: 2026-08-04
 review_when: "核心框架、工具脚本、构建方式、外部 API 或测试体系发生变化时"
 supersedes: []
+relations: []
 ---
 
 # ToolBox 项目架构与功能全景

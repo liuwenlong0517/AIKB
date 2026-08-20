@@ -1,10 +1,13 @@
 ---
+id: aikb:projects:project-id:topic
+type: project-memory
 status: verified
 tags: []
 applicable_versions: ""
 last_verified: YYYY-MM-DD
 review_when: ""
 supersedes: []
+relations: []
 ---
 
 # 项目记忆标题

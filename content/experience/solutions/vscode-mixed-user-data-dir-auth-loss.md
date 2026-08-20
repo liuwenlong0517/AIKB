@@ -1,10 +1,13 @@
 ---
+id: aikb:experience:solutions:vscode-mixed-user-data-dir-auth-loss
+type: solution
 status: verified
 tags: [vscode, windows, authentication, safe-storage, dpapi]
 applicable_versions: "VS Code 1.131.0 / Electron 42.7.0 / Windows"
 last_verified: 2026-08-05
 review_when: "VS Code 调整 sharedStorage、safeStorage、Windows 安装器或便携模式实现时"
 supersedes: [content/experience/inbox/vscode-mixed-user-data-dir-auth-loss.md]
+relations: []
 ---
 
 # 统一 VS Code user-data-dir 修复重启后登录会话丢失

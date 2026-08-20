@@ -1,10 +1,15 @@
 ---
+id: aikb:projects:local-code-rag:local-llm-exclusion
+type: project-memory
 status: verified
 tags: [local-code-rag, rag, ollama, embedding, gpu, architecture-decision]
 applicable_versions: local-code-rag 0.3.0 and later
 last_verified: 2026-08-07
 review_when: 引入新的本地模型、修改 RAG 服务职责，或需要重新评估 GPU 资源分配时
 supersedes: []
+relations:
+  - type: related_to
+    target: aikb:projects:local-code-rag:p1-safe-context-watcher-retrieval
 ---
 
 # 本地生成式模型退出 RAG 主链路

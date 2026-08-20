@@ -1,10 +1,15 @@
 ---
+id: aikb:projects:local-code-rag:async-index-task-queue
+type: project-memory
 status: verified
 tags: [local-code-rag, indexing, async-task, sqlite, mcp, docker]
 applicable_versions: local-code-rag 0.3.0 and later
 last_verified: 2026-08-07
 review_when: 修改索引并发模型、SQLite 状态库位置、HTTP/MCP 索引接口或引入外部任务队列时
 supersedes: []
+relations:
+  - type: related_to
+    target: aikb:projects:local-code-rag:index-integrity-observability-registration
 ---
 
 # 异步索引任务队列与重启状态边界

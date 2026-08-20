@@ -1,10 +1,13 @@
 ---
+id: aikb:experience:inbox:candidate-topic
+type: candidate
 status: candidate
 tags: []
 captured_at: YYYY-MM-DD
 source_type: ""
 expected_scope: ""
 next_action_due: ""
+relations: []
 ---
 
 # 候选知识标题

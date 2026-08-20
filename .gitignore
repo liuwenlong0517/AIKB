@@ -17,3 +17,13 @@ Desktop.ini
 .env.*
 !.env.example
 
+# AIKB 本机运行面
+workspace/active/
+workspace/archive/
+workspace/db/
+workspace/runtime/
+
+# Python 本地运行环境与缓存
+.venv/
+__pycache__/
+*.py[cod]
