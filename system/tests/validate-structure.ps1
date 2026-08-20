@@ -95,12 +95,19 @@ if ($catalogText -match '\[[^\]]+\]\(workspace/') {
 }
 
 $entryText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md')
-foreach ($requiredPath in @(
-    'E:\CodeSpace\AIKB\system\rules\AI_RULES.md',
-    'E:\CodeSpace\AIKB\system\rules\USER_RULES.md'
-)) {
-    if (-not $entryText.Contains($requiredPath)) {
-        Add-ValidationError "ENTRY_RULES.md 未引用当前规则路径：$requiredPath"
+foreach ($requiredText in @('AIKB_HOME', 'system/rules/AI_RULES.md', 'system/rules/USER_RULES.md')) {
+    if (-not $entryText.Contains($requiredText)) {
+        Add-ValidationError "ENTRY_RULES.md 未引用环境变量或当前规则路径：$requiredText"
+    }
+}
+if ($entryText -match '[A-Za-z]:\\') {
+    Add-ValidationError 'ENTRY_RULES.md 不得包含机器绝对路径'
+}
+
+foreach ($relativePath in @('ENTRY_RULES.md', 'INDEX.md', 'system/rules/AI_RULES.md')) {
+    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
+    if (-not $text.Contains('根目录 `README.md`') -or -not $text.Contains('不属于')) {
+        Add-ValidationError "$relativePath 必须明确根 README 不属于 Agent 默认接入或检索上下文"
     }
 }
 
@@ -119,7 +126,7 @@ foreach ($relativePath in $ruleBudgets.Keys) {
 $templatePath = Join-Path $repoRoot 'system\templates\agent-root-instruction.md'
 $templateText = Get-Content -Raw -LiteralPath $templatePath
 $instructionMatch = [regex]::Match($templateText, '(?ms)^```md\r?\n(.+?)\r?\n```')
-$expectedInstruction = '每个新会话开始时，请读取并持续遵循 `E:\CodeSpace\AIKB\ENTRY_RULES.md`。'
+$expectedInstruction = '每个新会话开始时，请从 Windows 用户环境变量 `AIKB_HOME` 获取 AIKB 根目录，并读取和持续遵循其中的 `ENTRY_RULES.md`。'
 if (-not $instructionMatch.Success -or $instructionMatch.Groups[1].Value -ne $expectedInstruction) {
     Add-ValidationError 'Agent 根指令模板必须严格保持为指向 ENTRY_RULES.md 的一句话'
 }

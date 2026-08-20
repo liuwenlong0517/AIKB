@@ -6,7 +6,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
+$repoRoot = if ($env:AIKB_HOME) { (Resolve-Path -LiteralPath $env:AIKB_HOME).Path } else { $null }
+if (-not $repoRoot -or -not (Test-Path -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md') -PathType Leaf)) {
+    # Hook 必须 fail-open；环境变量缺失或失效时交给普通 Agent 会话继续。
+    exit 0
+}
 $toolRoot = Join-Path $repoRoot 'system\tools\aikb-mcp'
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
@@ -14,7 +18,6 @@ if (-not $python) {
 }
 
 $payload = [Console]::In.ReadToEnd()
-$env:AIKB_HOME = $repoRoot
 Push-Location -LiteralPath $toolRoot
 try {
     $result = $payload | & $python.Source -m aikb hook --agent $Agent --event $Event

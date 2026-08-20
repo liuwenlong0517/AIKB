@@ -10,8 +10,23 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $results = [System.Collections.Generic.List[object]]::new()
 
+$userAikbHome = [Environment]::GetEnvironmentVariable('AIKB_HOME', 'User')
+$processAikbHome = $env:AIKB_HOME
+$userHomeValid = $false
+if ($userAikbHome -and (Test-Path -LiteralPath $userAikbHome -PathType Container)) {
+    $userHomeValid = (Resolve-Path -LiteralPath $userAikbHome).Path.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase)
+}
+$processHomeValid = $false
+if ($processAikbHome -and (Test-Path -LiteralPath $processAikbHome -PathType Container)) {
+    $processHomeValid = (Resolve-Path -LiteralPath $processAikbHome).Path.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase)
+}
+$results.Add([pscustomobject]@{ Check = 'AIKB_HOME:User'; Passed = $userHomeValid; Detail = $(if ($userAikbHome) { $userAikbHome } else { '未设置' }) })
+$results.Add([pscustomobject]@{ Check = 'AIKB_HOME:Process'; Passed = $processHomeValid; Detail = $(if ($processAikbHome) { $processAikbHome } else { '未继承，请重启终端或 Agent' }) })
+
 $python = Get-Command python -ErrorAction SilentlyContinue
 $results.Add([pscustomobject]@{ Check = 'Python'; Passed = $null -ne $python; Detail = $(if ($python) { $python.Source } else { '未找到 Python' }) })
+$pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+$results.Add([pscustomobject]@{ Check = 'PowerShell 7'; Passed = $null -ne $pwsh; Detail = $(if ($pwsh) { $pwsh.Source } else { '未找到 pwsh' }) })
 
 foreach ($adapter in & (Join-Path $PSScriptRoot 'discover-adapters.ps1')) {
     $results.Add([pscustomobject]@{ Check = "Adapter:$($adapter.Id)"; Passed = $true; Detail = $adapter.Path })

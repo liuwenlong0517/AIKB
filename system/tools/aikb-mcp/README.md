@@ -9,6 +9,8 @@
 
 Markdown 是事实源，`workspace/db/*.db` 均可删除重建。服务不会连接外部 RAG、向量数据库或网络服务，也不提供正式知识写入工具。
 
+服务优先从环境变量 `AIKB_HOME` 定位仓库。首次使用或移动仓库后，从仓库根目录运行 `system/tools/set-aikb-home.ps1` 写入 Windows 用户环境变量，并重启 Agent。仓库内手工调用启动器时可以从脚本位置回退定位，但 Agent 的 MCP 和 hooks 依赖有效的用户级 `AIKB_HOME`。
+
 在本目录执行：
 
 ```powershell

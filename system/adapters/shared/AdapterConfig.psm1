@@ -104,7 +104,7 @@ function Add-AikbHookHandler {
 }
 
 function Update-HooksJson {
-    param([string]$Path, [string]$Agent, [string]$HookScript)
+    param([string]$Path, [string]$Agent)
     $config = Read-JsonObject -Path $Path
     $hooksProperty = $config.PSObject.Properties['hooks']
     if ($null -eq $hooksProperty) {
@@ -114,12 +114,12 @@ function Update-HooksJson {
     else {
         $hooks = $hooksProperty.Value
     }
-    $escapedHook = $HookScript.Replace('\', '/').Replace('"', '\"')
-    $base = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$escapedHook`" -Agent $Agent -Event"
-    Add-AikbHookHandler -Hooks $hooks -Event 'SessionStart' -Matcher 'startup|resume|compact' -Command "$base session-start" -Timeout 10
-    Add-AikbHookHandler -Hooks $hooks -Event 'PreCompact' -Matcher 'manual|auto' -Command "$base pre-compact" -Timeout 10
-    Add-AikbHookHandler -Hooks $hooks -Event 'Stop' -Command "$base stop" -Timeout 10
-    Add-AikbHookHandler -Hooks $hooks -Event 'SessionEnd' -Command "$base session-end" -Timeout 3
+    $hookCommand = "& (Join-Path `$env:AIKB_HOME 'system/adapters/shared/aikb-hook.ps1') -Agent $Agent -Event"
+    $base = "pwsh -NoProfile -ExecutionPolicy Bypass -Command `"$hookCommand"
+    Add-AikbHookHandler -Hooks $hooks -Event 'SessionStart' -Matcher 'startup|resume|compact' -Command "$base session-start`"" -Timeout 10
+    Add-AikbHookHandler -Hooks $hooks -Event 'PreCompact' -Matcher 'manual|auto' -Command "$base pre-compact`"" -Timeout 10
+    Add-AikbHookHandler -Hooks $hooks -Event 'Stop' -Command "$base stop`"" -Timeout 10
+    Add-AikbHookHandler -Hooks $hooks -Event 'SessionEnd' -Command "$base session-end`"" -Timeout 3
     Write-JsonAtomic -Path $Path -Value $config
 }
 
@@ -136,19 +136,21 @@ function Remove-HooksJson {
 }
 
 function Update-CodexMcp {
-    param([string]$Path, [string]$Launcher)
+    param([string]$Path)
     $existing = if (Test-Path -LiteralPath $Path) { Get-Content -Raw -LiteralPath $Path } else { '' }
     if ($existing -match '(?m)^\s*\[mcp_servers\.aikb\]\s*$' -and $existing -notmatch [regex]::Escape($script:CodexMarkerStart)) {
         throw "Codex 已存在非 AIKB 安装器管理的 mcp_servers.aikb：$Path"
     }
     $pattern = '(?ms)^' + [regex]::Escape($script:CodexMarkerStart) + '.*?^' + [regex]::Escape($script:CodexMarkerEnd) + '\r?\n?'
     $clean = [regex]::Replace($existing, $pattern, '').TrimEnd()
-    $launcherPath = $Launcher.Replace('\', '/').Replace("'", "''")
+    $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve"
+    $tomlCommand = $launcherCommand.Replace('\', '\\').Replace('"', '\"')
     $block = @"
 $script:CodexMarkerStart
 [mcp_servers.aikb]
-command = "powershell.exe"
-args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$launcherPath", "serve"]
+command = "pwsh"
+args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$tomlCommand"]
+env_vars = ["AIKB_HOME"]
 startup_timeout_sec = 10
 tool_timeout_sec = 60
 enabled = true
@@ -168,7 +170,7 @@ function Remove-CodexMcp {
 }
 
 function Update-ClaudeMcp {
-    param([string]$Path, [string]$Launcher, [string]$RepoRoot)
+    param([string]$Path)
     $config = Read-JsonObject -Path $Path
     $serversProperty = $config.PSObject.Properties['mcpServers']
     if ($null -eq $serversProperty) {
@@ -186,11 +188,12 @@ function Update-ClaudeMcp {
             throw "Claude Code 已存在非 AIKB 安装器管理的 mcpServers.aikb：$Path"
         }
     }
+    $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve"
     $server = [pscustomobject]@{
         type = 'stdio'
-        command = 'powershell.exe'
-        args = [object[]]@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Launcher, 'serve')
-        env = [pscustomobject]@{ AIKB_HOME = $RepoRoot; AIKB_MANAGED = '1' }
+        command = 'pwsh'
+        args = [object[]]@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $launcherCommand)
+        env = [pscustomobject]@{ AIKB_MANAGED = '1' }
     }
     Add-ObjectProperty -Object $servers -Name 'aikb' -Value $server
     Write-JsonAtomic -Path $Path -Value $config
@@ -222,15 +225,22 @@ function Install-AikbAdapter {
         [string]$ClaudeHome,
         [string]$ClaudeUserConfig
     )
-    $launcher = Join-Path $RepoRoot 'system\tools\aikb-mcp\scripts\aikb.ps1'
-    $hook = Join-Path $RepoRoot 'system\adapters\shared\aikb-hook.ps1'
+    $configuredRoot = $env:AIKB_HOME
+    if (-not $configuredRoot) {
+        throw '未设置 AIKB_HOME。请先运行 system/tools/set-aikb-home.ps1，再安装 Agent 适配器。'
+    }
+    $resolvedConfiguredRoot = (Resolve-Path -LiteralPath $configuredRoot).Path
+    $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+    if (-not $resolvedConfiguredRoot.Equals($resolvedRepoRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "AIKB_HOME 指向 $resolvedConfiguredRoot，但当前安装仓库是 $resolvedRepoRoot。请先重新运行 set-aikb-home.ps1。"
+    }
     if ($Agent -eq 'codex') {
-        Update-CodexMcp -Path (Join-Path $CodexHome 'config.toml') -Launcher $launcher
-        Update-HooksJson -Path (Join-Path $CodexHome 'hooks.json') -Agent 'codex' -HookScript $hook
+        Update-CodexMcp -Path (Join-Path $CodexHome 'config.toml')
+        Update-HooksJson -Path (Join-Path $CodexHome 'hooks.json') -Agent 'codex'
     }
     else {
-        Update-ClaudeMcp -Path $ClaudeUserConfig -Launcher $launcher -RepoRoot $RepoRoot
-        Update-HooksJson -Path (Join-Path $ClaudeHome 'settings.json') -Agent 'claude-code' -HookScript $hook
+        Update-ClaudeMcp -Path $ClaudeUserConfig
+        Update-HooksJson -Path (Join-Path $ClaudeHome 'settings.json') -Agent 'claude-code'
     }
 }
 
