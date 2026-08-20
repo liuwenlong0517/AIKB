@@ -12,6 +12,7 @@
 - [schemas/adapter.schema.json](schemas/adapter.schema.json)：可插拔 Agent 适配器清单契约。
 - [tools/aikb-mcp/README.md](tools/aikb-mcp/README.md)：SQLite FTS、MCP 和工作状态服务。
 - [tools/set-aikb-home.ps1](tools/set-aikb-home.ps1)：将当前仓库路径幂等登记到 Windows 用户环境变量 `AIKB_HOME`。
+- [tools/setup-aikb.ps1](tools/setup-aikb.ps1)：一键编排环境设置、测试、根指令、适配器、索引和诊断；各独立脚本仍保留。
 - [adapters/README.md](adapters/README.md)：Codex、Claude Code 及未来 Agent 的 Windows 适配入口。
 - [templates/README.md](templates/README.md)：Agent 根指令及知识写入模板入口。
 - [tests/README.md](tests/README.md)：不同 Agent 执行 AIKB 规则的行为验收入口。

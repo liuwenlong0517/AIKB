@@ -173,6 +173,7 @@ system/adapters/<new-agent>/
 #### 公共脚本
 
 - `install-all.ps1`：安装全部或指定适配器。
+- `install-root-instructions.ps1`：从统一模板向 Codex/Claude Code 用户级根指令文件写入受管区块，保留原内容并创建一次备份。
 - `uninstall-all.ps1`：只移除 AIKB 管理的配置。
 - `doctor.ps1`：检查 Python、适配器清单以及目标配置中是否存在 AIKB MCP 和 hooks。
 - `shared/AdapterConfig.psm1`：实现 JSON/TOML 配置合并、一次性备份、原子写入、冲突检测和精确卸载。
@@ -232,6 +233,8 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 ### 5.4 `system/tools/`：本机初始化与运行工具
 
 `set-aikb-home.ps1` 是项目位置初始化脚本。默认从脚本位置向上定位仓库，验证关键入口后使用 .NET 环境变量 API 写入当前用户的 `AIKB_HOME`；重复运行结果一致。它还支持 `-Path` 显式指定目录和 `-Target Process` 测试模式。正常安装必须使用默认的 `User` 目标，`Process` 目标只服务于自动测试和临时诊断。
+
+`setup-aikb.ps1` 是首次使用的一键编排器。它不复制环境设置、根指令、适配器、索引或诊断逻辑，而是按顺序调用对应的独立脚本；因此每个步骤仍可单独运行、排障和重复执行。
 
 `aikb-mcp/` 是轻量 MCP 与索引核心。
 
@@ -302,6 +305,7 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 - `validate-structure.ps1`：检查根目录白名单、三平面边界、Markdown 本地链接、知识元数据、稳定 ID、关系目标、适配器清单和规则文件预算。
 - `validate-adapters.ps1`：在临时用户目录中安装两次并卸载，验证幂等性、配置合法性、无关配置保留和精确清理，不触碰真实用户配置。
+- `validate-setup.ps1`：在临时用户目录中运行完整一键编排，再重复运行轻量编排，验证根指令迁移、原内容保留、备份、诊断和整体幂等性。
 - `agent-behavior-checklist.md`：供 Codex、Claude Code 或未来 Agent 执行的人工行为验收场景。
 - `system/tools/aikb-mcp/tests/test_core.py`：验证 Front Matter、数据库损坏重建、中文检索、关系读取、MCP 协议、工作状态、脱敏、归档和上下文预算。
 
@@ -335,7 +339,47 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 以下步骤都在 Windows PowerShell 7 中执行。先选择最终存放位置，再通过初始化脚本把位置登记为用户环境变量；后续说明不依赖固定盘符。
 
-### 第 1 步：准备环境
+### 8.1 一键配置
+
+仓库已经放到最终位置后，在仓库根目录执行：
+
+```powershell
+& .\system\tools\setup-aikb.ps1
+```
+
+默认一键流程依次执行：
+
+1. 检查 Git、PowerShell 7 和 Python；
+2. 调用 `set-aikb-home.ps1` 写入用户级 `AIKB_HOME`；
+3. 调用结构测试、Python 核心测试和适配器测试；
+4. 调用 `install-root-instructions.ps1` 配置 Codex/Claude Code 根指令；
+5. 调用 `install-all.ps1` 安装 MCP 和 hooks；
+6. 调用 MCP 启动器验证知识元数据并重建本机索引；
+7. 调用 `doctor.ps1` 做最终诊断。
+
+一键脚本会修改当前用户环境变量和所选 Agent 的用户配置，但不会覆盖已有根指令或其他 MCP/hooks 配置。已有文件首次修改前会创建 `.aikb-backup`；重复执行保持幂等。完成后需要重启 Agent。
+
+只配置一个 Agent：
+
+```powershell
+& .\system\tools\setup-aikb.ps1 -Agents codex
+& .\system\tools\setup-aikb.ps1 -Agents claude-code
+```
+
+排障时可以跳过耗时或已经确认的阶段：
+
+```powershell
+& .\system\tools\setup-aikb.ps1 -SkipTests
+& .\system\tools\setup-aikb.ps1 -SkipIndex
+```
+
+`-EnvironmentTarget Process` 只用于自动测试和临时诊断，不是正式安装方式。一键流程任一步失败都会停止并保留明确错误；修复后可以重新执行，也可以转到下面的独立步骤排查。
+
+### 8.2 分步配置
+
+以下九步说明完整保留，适合首次理解项目、逐项验证和故障定位。一键脚本调用的就是这些独立入口。
+
+#### 第 1 步：准备环境
 
 需要：
 
@@ -355,7 +399,7 @@ python --version
 
 当前 Python 核心只依赖标准库，不需要执行 `pip install`。
 
-### 第 2 步：克隆到稳定位置
+#### 第 2 步：克隆到稳定位置
 
 推荐保持入口路径稳定：
 
@@ -366,7 +410,7 @@ Set-Location <你选择的稳定目录>\AIKB
 
 目录可以位于任意本机磁盘，但应在运行下一步之前安顿好位置。`workspace/` 不跨机器同步，因此换电脑时只需要重新克隆知识库并重新初始化环境变量。
 
-### 第 3 步：登记 `AIKB_HOME`
+#### 第 3 步：登记 `AIKB_HOME`
 
 在仓库根目录执行：
 
@@ -396,7 +440,7 @@ Set-Location <你选择的稳定目录>\AIKB
 
 使用上述 `&` 方式时，当前 PowerShell 会立即获得 `$env:AIKB_HOME`，可以继续执行安装。其他已经打开的终端和 Agent 不会自动刷新父进程环境；完成设置后请重新启动它们。如果改用 `pwsh -File` 启动脚本，也需要新开终端后再运行安装器。
 
-### 第 4 步：先验证仓库
+#### 第 4 步：先验证仓库
 
 ```powershell
 pwsh -NoProfile -File system/tests/validate-structure.ps1
@@ -406,9 +450,15 @@ pwsh -NoProfile -File system/tests/validate-adapters.ps1
 
 `validate-adapters.ps1` 使用临时配置目录，不会安装到真实 Codex 或 Claude Code 用户配置。
 
-### 第 5 步：配置 Agent 的稳定根指令
+#### 第 5 步：配置 Agent 的稳定根指令
 
-将 `system/templates/agent-root-instruction.md` 中的单句入口复制到需要使用 AIKB 的 Agent 用户级指令文件：
+可以运行独立安装脚本，把 `system/templates/agent-root-instruction.md` 中的单句入口写入需要使用 AIKB 的 Agent 用户级指令文件：
+
+```powershell
+pwsh -NoProfile -File system/adapters/install-root-instructions.ps1
+```
+
+只配置一个 Agent 时使用 `-Agents codex` 或 `-Agents claude-code`。脚本写入带标记的 AIKB 受管区块，保留文件中的其他内容并在首次修改前创建 `.aikb-backup`。也可以按下面的位置手工复制模板内容：
 
 - Codex：`~/.codex/AGENTS.md`；
 - Claude Code：`~/.claude/CLAUDE.md`。
@@ -421,9 +471,9 @@ pwsh -NoProfile -File system/tests/validate-adapters.ps1
 
 该步骤只负责让 Agent 知道稳定入口，不注册 MCP 或 hooks。Codex 的 AGENTS.md 发现机制可参考 [OpenAI Codex 官方文档](https://developers.openai.com/codex/guides/agents-md)；Claude Code 的用户级记忆文件可参考 [Claude Code 官方文档](https://code.claude.com/docs/en/memory)。
 
-如果目标文件已有其他用户指令，只追加这一句，不要覆盖原内容。
+手工配置时，如果目标文件已有其他用户指令，只追加这一句，不要覆盖原内容。
 
-### 第 6 步：安装 MCP 和 hooks
+#### 第 6 步：安装 MCP 和 hooks
 
 安装 Codex 与 Claude Code：
 
@@ -442,7 +492,7 @@ pwsh -NoProfile -File system/adapters/install-all.ps1 -Agents claude-code
 
 Codex 和 Claude Code 的配置机制可分别参考 [Codex 配置](https://developers.openai.com/codex/config-reference)、[Codex MCP](https://developers.openai.com/codex/mcp)、[Claude Code hooks](https://code.claude.com/docs/en/hooks)和 [Claude Code MCP](https://code.claude.com/docs/en/mcp)。
 
-### 第 7 步：运行诊断
+#### 第 7 步：运行诊断
 
 ```powershell
 pwsh -NoProfile -File system/adapters/doctor.ps1
@@ -463,7 +513,7 @@ pwsh -NoProfile -File system/adapters/doctor.ps1
 pwsh -NoProfile -File system/adapters/doctor.ps1 -Agents codex
 ```
 
-### 第 8 步：验证元数据并建立初始索引
+#### 第 8 步：验证元数据并建立初始索引
 
 ```powershell
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 validate
@@ -473,7 +523,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 search "检索缓�
 
 `validate` 报告不合法元数据；`rebuild` 重建知识和工作状态数据库；`search` 用于确认中文检索可用。正常运行时服务会按内容指纹自动检查索引，不要求每次手工重建。
 
-### 第 9 步：重启 Agent 并做首次行为验证
+#### 第 9 步：重启 Agent 并做首次行为验证
 
 完全退出并重新启动 Codex/Claude Code，然后开启新 Session，检查：
 
@@ -579,7 +629,7 @@ pwsh -NoProfile -File system/adapters/uninstall-all.ps1 -Agents codex
 pwsh -NoProfile -File system/adapters/uninstall-all.ps1 -Agents claude-code
 ```
 
-卸载器只清理 AIKB 管理的 MCP 区块和 hook handler，不删除 `.aikb-backup`、根指令、知识内容或 `workspace/` 工作状态。如果不再希望 Agent 读取 AIKB，还需要手工删除 `AGENTS.md`/`CLAUDE.md` 中指向 `ENTRY_RULES.md` 的那一句。
+卸载器只清理 AIKB 管理的 MCP 区块和 hook handler，不删除 `.aikb-backup`、根指令、知识内容或 `workspace/` 工作状态。如果不再希望 Agent 读取 AIKB，还需要手工删除 `AGENTS.md`/`CLAUDE.md` 中由 `AIKB managed root instruction` 标记包围的受管区块；早期手工配置则删除指向 `ENTRY_RULES.md` 的那一句。
 
 ## 11. 常见问题与排障
 

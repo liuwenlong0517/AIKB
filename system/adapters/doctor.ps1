@@ -3,7 +3,9 @@ param(
     [string[]]$Agents = @('codex', 'claude-code'),
     [string]$CodexHome = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }),
     [string]$ClaudeHome = $(Join-Path $HOME '.claude'),
-    [string]$ClaudeUserConfig = $(Join-Path $HOME '.claude.json')
+    [string]$ClaudeUserConfig = $(Join-Path $HOME '.claude.json'),
+    [ValidateSet('User', 'Process')]
+    [string]$EnvironmentTarget = 'User'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,7 +22,9 @@ $processHomeValid = $false
 if ($processAikbHome -and (Test-Path -LiteralPath $processAikbHome -PathType Container)) {
     $processHomeValid = (Resolve-Path -LiteralPath $processAikbHome).Path.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase)
 }
-$results.Add([pscustomobject]@{ Check = 'AIKB_HOME:User'; Passed = $userHomeValid; Detail = $(if ($userAikbHome) { $userAikbHome } else { '未设置' }) })
+if ($EnvironmentTarget -eq 'User') {
+    $results.Add([pscustomobject]@{ Check = 'AIKB_HOME:User'; Passed = $userHomeValid; Detail = $(if ($userAikbHome) { $userAikbHome } else { '未设置' }) })
+}
 $results.Add([pscustomobject]@{ Check = 'AIKB_HOME:Process'; Passed = $processHomeValid; Detail = $(if ($processAikbHome) { $processAikbHome } else { '未继承，请重启终端或 Agent' }) })
 
 $python = Get-Command python -ErrorAction SilentlyContinue
@@ -34,10 +38,12 @@ foreach ($adapter in & (Join-Path $PSScriptRoot 'discover-adapters.ps1')) {
 
 $checks = @()
 if ($Agents -contains 'codex') {
+    $checks += @{ Name = 'Codex Root'; Path = Join-Path $CodexHome 'AGENTS.md'; Pattern = 'AIKB_HOME.*ENTRY_RULES\.md' }
     $checks += @{ Name = 'Codex MCP'; Path = Join-Path $CodexHome 'config.toml'; Pattern = '\[mcp_servers\.aikb\]' }
     $checks += @{ Name = 'Codex Hooks'; Path = Join-Path $CodexHome 'hooks.json'; Pattern = 'aikb-hook\.ps1' }
 }
 if ($Agents -contains 'claude-code') {
+    $checks += @{ Name = 'Claude Root'; Path = Join-Path $ClaudeHome 'CLAUDE.md'; Pattern = 'AIKB_HOME.*ENTRY_RULES\.md' }
     $checks += @{ Name = 'Claude MCP'; Path = $ClaudeUserConfig; Pattern = '"aikb"' }
     $checks += @{ Name = 'Claude Hooks'; Path = Join-Path $ClaudeHome 'settings.json'; Pattern = 'aikb-hook\.ps1' }
 }

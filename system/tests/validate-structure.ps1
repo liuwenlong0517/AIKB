@@ -131,6 +131,27 @@ if (-not $instructionMatch.Success -or $instructionMatch.Groups[1].Value -ne $ex
     Add-ValidationError 'Agent 根指令模板必须严格保持为指向 ENTRY_RULES.md 的一句话'
 }
 
+$setupPath = Join-Path $repoRoot 'system\tools\setup-aikb.ps1'
+if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
+    Add-ValidationError '缺少首次使用一键编排脚本 system/tools/setup-aikb.ps1'
+}
+else {
+    $setupText = Get-Content -Raw -LiteralPath $setupPath
+    foreach ($requiredScript in @(
+        'set-aikb-home.ps1',
+        'validate-structure.ps1',
+        'validate-adapters.ps1',
+        'install-root-instructions.ps1',
+        'install-all.ps1',
+        'aikb.ps1',
+        'doctor.ps1'
+    )) {
+        if (-not $setupText.Contains($requiredScript)) {
+            Add-ValidationError "一键配置未编排独立脚本：$requiredScript"
+        }
+    }
+}
+
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
     Add-ValidationError '未找到 Python，无法验证知识元数据和适配器实现'
