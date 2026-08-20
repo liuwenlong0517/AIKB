@@ -136,10 +136,21 @@ try {
     if ($mcpResponse.result.serverInfo.name -ne 'aikb') {
         throw '通过 AIKB_HOME 生成的 MCP 命令无法实际启动服务'
     }
-    $hookInvoke = "& (Join-Path `$env:AIKB_HOME 'system/adapters/shared/aikb-hook.ps1') -Agent codex -Event session-start"
-    $hookResponse = '{}' | & pwsh -NoProfile -ExecutionPolicy Bypass -Command $hookInvoke | ConvertFrom-Json
+    $claudeSettings = Get-Content -Raw -LiteralPath (Join-Path $claudeHome 'settings.json') | ConvertFrom-Json
+    $claudeSessionHook = @($claudeSettings.hooks.SessionStart)[-1].hooks[0]
+    if ($claudeSessionHook.shell -ne 'powershell') {
+        throw 'Claude Code hook 未显式使用 PowerShell shell'
+    }
+    $claudeSessionGroup = @($claudeSettings.hooks.SessionStart)[-1]
+    if ($claudeSessionGroup.matcher -notmatch '(^|\|)clear(\||$)') {
+        throw 'Claude Code SessionStart hook 未覆盖 clear 生命周期'
+    }
+    if ($claudeSessionHook.command -match '^pwsh\s' -or $claudeSessionHook.command -notmatch '\$env:AIKB_HOME') {
+        throw 'Claude Code hook 未使用原生 PowerShell 环境变量命令'
+    }
+    $hookResponse = '{}' | & pwsh -NoProfile -ExecutionPolicy Bypass -Command $claudeSessionHook.command | ConvertFrom-Json
     if ($null -eq $hookResponse) {
-        throw '通过 AIKB_HOME 生成的 hook 命令无法实际启动'
+        throw 'Claude Code 生成的 PowerShell hook 无法实际启动'
     }
 
     $before = (Get-FileHash -LiteralPath (Join-Path $codexHome 'hooks.json')).Hash
@@ -158,6 +169,15 @@ try {
 finally {
     $env:AIKB_HOME = $previousAikbHome
     if ((Test-Path -LiteralPath $resolvedTestRoot) -and $resolvedTestRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
-        Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+                Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                if ($attempt -eq 5) { throw }
+                Start-Sleep -Milliseconds 200
+            }
+        }
     }
 }

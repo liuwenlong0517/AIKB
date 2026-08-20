@@ -85,9 +85,19 @@ function Remove-AikbHookHandlers {
 }
 
 function Add-AikbHookHandler {
-    param([object]$Hooks, [string]$Event, [string]$Command, [string]$Matcher = '', [int]$Timeout = 10)
+    param(
+        [object]$Hooks,
+        [string]$Event,
+        [string]$Command,
+        [string]$Matcher = '',
+        [int]$Timeout = 10,
+        [string]$Shell = ''
+    )
     Remove-AikbHookHandlers -Hooks $Hooks -Event $Event
     $handler = [pscustomobject]@{ type = 'command'; command = $Command; timeout = $Timeout }
+    if ($Shell) {
+        Add-ObjectProperty -Object $handler -Name 'shell' -Value $Shell
+    }
     $group = if ($Matcher) {
         [pscustomobject]@{ matcher = $Matcher; hooks = [object[]]@($handler) }
     }
@@ -115,11 +125,19 @@ function Update-HooksJson {
         $hooks = $hooksProperty.Value
     }
     $hookCommand = "& (Join-Path `$env:AIKB_HOME 'system/adapters/shared/aikb-hook.ps1') -Agent $Agent -Event"
-    $base = "pwsh -NoProfile -ExecutionPolicy Bypass -Command `"$hookCommand"
-    Add-AikbHookHandler -Hooks $hooks -Event 'SessionStart' -Matcher 'startup|resume|compact' -Command "$base session-start`"" -Timeout 10
-    Add-AikbHookHandler -Hooks $hooks -Event 'PreCompact' -Matcher 'manual|auto' -Command "$base pre-compact`"" -Timeout 10
-    Add-AikbHookHandler -Hooks $hooks -Event 'Stop' -Command "$base stop`"" -Timeout 10
-    Add-AikbHookHandler -Hooks $hooks -Event 'SessionEnd' -Command "$base session-end`"" -Timeout 3
+    if ($Agent -eq 'claude-code') {
+        Add-AikbHookHandler -Hooks $hooks -Event 'SessionStart' -Matcher 'startup|resume|clear|compact' -Command "$hookCommand session-start" -Timeout 10 -Shell 'powershell'
+        Add-AikbHookHandler -Hooks $hooks -Event 'PreCompact' -Matcher 'manual|auto' -Command "$hookCommand pre-compact" -Timeout 10 -Shell 'powershell'
+        Add-AikbHookHandler -Hooks $hooks -Event 'Stop' -Command "$hookCommand stop" -Timeout 10 -Shell 'powershell'
+        Add-AikbHookHandler -Hooks $hooks -Event 'SessionEnd' -Command "$hookCommand session-end" -Timeout 3 -Shell 'powershell'
+    }
+    else {
+        $base = "pwsh -NoProfile -ExecutionPolicy Bypass -Command `"$hookCommand"
+        Add-AikbHookHandler -Hooks $hooks -Event 'SessionStart' -Matcher 'startup|resume|compact' -Command "$base session-start`"" -Timeout 10
+        Add-AikbHookHandler -Hooks $hooks -Event 'PreCompact' -Matcher 'manual|auto' -Command "$base pre-compact`"" -Timeout 10
+        Add-AikbHookHandler -Hooks $hooks -Event 'Stop' -Command "$base stop`"" -Timeout 10
+        Add-AikbHookHandler -Hooks $hooks -Event 'SessionEnd' -Command "$base session-end`"" -Timeout 3
+    }
     Write-JsonAtomic -Path $Path -Value $config
 }
 
