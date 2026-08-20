@@ -95,26 +95,82 @@ if ($catalogText -match '\[[^\]]+\]\(workspace/') {
 }
 
 $entryText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md')
-foreach ($requiredText in @('AIKB_HOME', 'system/rules/AI_RULES.md', 'system/rules/USER_RULES.md')) {
+foreach ($requiredText in @(
+    'AIKB_HOME',
+    'system/rules/AI_RULES.md',
+    'system/rules/USER_RULES.md',
+    '用户明确要求跳过时不接入',
+    '根目录 `README.md` 是人类维护手册',
+    '不属于 Agent 默认上下文'
+)) {
     if (-not $entryText.Contains($requiredText)) {
-        Add-ValidationError "ENTRY_RULES.md 未引用环境变量或当前规则路径：$requiredText"
+        Add-ValidationError "ENTRY_RULES.md 缺少入口职责：$requiredText"
     }
 }
-if ($entryText -match '[A-Za-z]:\\') {
-    Add-ValidationError 'ENTRY_RULES.md 不得包含机器绝对路径'
+
+$roleRequirements = @{
+    'system/rules/USER_RULES.md' = @('当前任务的明确要求', '只有用户明确要求时才能修改', 'Java', '使用中文')
+    'system/rules/AI_RULES.md' = @(
+        'ENTRY_RULES.md', 'INDEX.md', 'read_knowledge', 'search_knowledge', 'content_hash',
+        'workspace/', 'work_id', 'system/rules/CONTRIBUTING.md', 'CATALOG.md', 'Markdown 是知识事实源',
+        '首次接入不默认读取 `INDEX.md`', 'MCP 不可用', '用户要求跳过 AIKB',
+        '不在每次任务后自动写库', '必须先确认'
+    )
+    'INDEX.md' = @(
+        'MCP 不可用时', '根目录 `README.md` 是人类维护手册', 'content/knowledge/README.md',
+        'content/experience/README.md', 'content/workflows/README.md', 'content/projects/README.md',
+        'system/rules/CONTRIBUTING.md', 'CATALOG.md'
+    )
+    'system/rules/CONTRIBUTING.md' = @(
+        'content/experience/inbox/', 'system/templates/', 'system/schemas/knowledge-entry.schema.json',
+        'CATALOG.md', 'INDEX.md', '`id`', '`relations`', 'system/tests/validate-structure.ps1',
+        '无需逐次确认', '请求用户决定', '不发布未通过校验的正式知识'
+    )
 }
 
-foreach ($relativePath in @('ENTRY_RULES.md', 'INDEX.md', 'system/rules/AI_RULES.md')) {
+foreach ($relativePath in $roleRequirements.Keys) {
     $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
-    if (-not $text.Contains('根目录 `README.md`') -or -not $text.Contains('不属于')) {
-        Add-ValidationError "$relativePath 必须明确根 README 不属于 Agent 默认接入或检索上下文"
+    foreach ($requiredText in $roleRequirements[$relativePath]) {
+        if (-not $text.Contains($requiredText)) {
+            Add-ValidationError "$relativePath 缺少职责闭环：$requiredText"
+        }
+    }
+}
+
+$forbiddenByRole = @{
+    'ENTRY_RULES.md' = @('search_knowledge', 'read_knowledge', 'work_id', 'CATALOG.md')
+    'system/rules/USER_RULES.md' = @('search_knowledge', 'read_knowledge', 'work_id')
+    'INDEX.md' = @('work_id', 'session_id', 'relation_limit')
+}
+foreach ($relativePath in $forbiddenByRole.Keys) {
+    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
+    foreach ($forbiddenText in $forbiddenByRole[$relativePath]) {
+        if ($text.Contains($forbiddenText)) {
+            Add-ValidationError "$relativePath 混入其他层职责：$forbiddenText"
+        }
+    }
+}
+
+$portableRuleFiles = @(
+    'ENTRY_RULES.md',
+    'INDEX.md',
+    'system/rules/USER_RULES.md',
+    'system/rules/AI_RULES.md',
+    'system/rules/CONTRIBUTING.md'
+)
+foreach ($relativePath in $portableRuleFiles) {
+    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
+    if ($text -match '[A-Za-z]:\\') {
+        Add-ValidationError "$relativePath 不得包含机器绝对路径"
     }
 }
 
 $ruleBudgets = @{
-    'ENTRY_RULES.md' = 1600
-    'INDEX.md' = 1600
-    'system/rules/AI_RULES.md' = 3500
+    'ENTRY_RULES.md' = 800
+    'INDEX.md' = 800
+    'system/rules/USER_RULES.md' = 600
+    'system/rules/AI_RULES.md' = 2100
+    'system/rules/CONTRIBUTING.md' = 3200
 }
 foreach ($relativePath in $ruleBudgets.Keys) {
     $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)

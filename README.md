@@ -55,8 +55,9 @@ Agent 根指令
   -> ENTRY_RULES.md
       -> USER_RULES.md（每个新会话最小加载）
       -> AI_RULES.md（仅任务需要接入 AIKB 时）
-          -> INDEX.md（轻量拓扑）
-              -> MCP 搜索或最少的 content 局部 README/具体知识
+          -> MCP 搜索或准确读取
+          -> INDEX.md（仅 MCP 失败时的文件降级拓扑）
+              -> 最少的 content 局部 README/具体知识
 ```
 
 只有用户明确要求、安装排障或维护 AIKB 自身时，Agent 才按需读取本 README。`CATALOG.md` 同样不在常规初始化中加载，只用于人类浏览、全库治理或正式写入前查重。
@@ -78,7 +79,7 @@ Agent 根指令
 
 ```text
 Codex / Claude Code
-  ├─ 根指令 -> ENTRY_RULES.md -> AI_RULES.md
+  ├─ 根指令 -> ENTRY_RULES.md -> AI_RULES.md（INDEX.md 仅按需降级）
   ├─ MCP stdio -> system/tools/aikb-mcp/
   │                 ├─ content/*.md -> SQLite FTS/元数据/关系索引
   │                 └─ workspace/*.md -> SQLite 工作状态索引
@@ -95,7 +96,6 @@ Codex / Claude Code
 - 每个新会话加载个人规则；
 - 判断当前任务是否需要接入 AIKB；
 - 在需要时延迟加载 `AI_RULES.md`；
-- 规定 MCP、索引降级和工作状态的总体入口；
 - 避免在同一会话中重复加载规则。
 
 该文件必须保持紧凑，不承载完整架构说明。
@@ -130,7 +130,7 @@ Codex / Claude Code
 - 首次接入和最小上下文策略；
 - 已知 ID、未知位置、MCP 失败等情况下的检索路由；
 - Working State 的创建、恢复、检查点和关闭边界；
-- 正式知识的发现、验证、查重和写入流程；
+- 候选知识识别和进入贡献流程的触发边界；
 - 重载条件、目录职责和安全边界。
 
 #### `CONTRIBUTING.md`

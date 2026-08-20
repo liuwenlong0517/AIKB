@@ -1,26 +1,19 @@
 # AIKB Agent 索引
 
-本文件是面向 Agent 的轻量拓扑和最终降级入口，不登记全部具体条目。需要发现未知位置的知识时优先使用 AIKB MCP；已知准确文件或稳定 ID 时直接读取；MCP 不可用时再沿本文件逐级加载最少内容。
+本文件是 MCP 不可用时的轻量降级拓扑，不登记具体知识。已知准确文件或稳定 ID 时直接读取；未知位置按下列入口逐级加载最少内容。根目录 `README.md` 是人类维护手册，不属于 Agent 默认接入、检索或恢复上下文。
 
-## 基础文件
+## 内容入口
 
-- `ENTRY_RULES.md`：所有 Agent 共用的稳定入口。新会话通过该文件加载个人规则并判断是否需要完整接入 AIKB。
-- 根目录 `README.md`：面向人类维护者的完整手册，不属于 Agent 的默认接入、知识检索或会话恢复路径；仅在用户明确要求或维护 AIKB 控制面、安装流程、文档时按需读取。
-- `system/rules/AI_RULES.md`：Agent 接入后的初始化、知识加载与主动写入规则。由入口规则在任务满足接入条件时加载。
-- `system/rules/USER_RULES.md`：用户跨 Agent、跨项目共用的长期偏好和协作规则。每个新会话可以单独读取，仅按用户明确要求修改。
-- `system/rules/CONTRIBUTING.md`：知识准入和质量标准。准备新增、修订、归档或淘汰知识时读取。
-- `CATALOG.md`：面向用户的完整内容目录。常规任务不默认加载；查找全部内容或维护知识时按需读取。
-- `system/README.md`：Schema、MCP、Agent 适配器、模板和测试的控制面导航。
-- `workspace/README.md`：本机工作状态和可重建索引的运行面边界说明；普通知识检索不读取工作状态。
+- `content/knowledge/README.md`：通用工程、语言、框架和工具知识。
+- `content/experience/README.md`：候选知识、解决方案、陷阱和决策。
+- `content/workflows/README.md`：开发、调试、评审和发布流程。
+- `content/projects/README.md`：项目级知识；仅在任务涉及已登记项目时继续加载。
 
-## 分层入口
+## 按需文件
 
-- `content/README.md`：知识内容面的总入口和边界说明。
-- `content/knowledge/README.md`：通用工程知识入口，继续导航到工程、语言、框架和工具分类。
-- `content/experience/README.md`：候选知识、解决方案、陷阱和决策记录入口。
-- `content/workflows/README.md`：开发、调试、代码评审和发布流程入口。
-- `content/projects/README.md`：项目级知识入口；只有任务涉及已登记项目时，才继续加载对应项目索引。
+- `system/rules/CONTRIBUTING.md`：正式新增、修订、归档或淘汰知识时读取。
+- `CATALOG.md`：全量内容目录，仅用于全库治理和正式写入前查重。
+- `system/README.md`：维护 Schema、MCP、适配器、模板或测试时读取。
+- `workspace/README.md`：维护本机工作状态与派生索引时读取。
 
-## 导航原则
-
-具体知识只登记在主题 README 和 `CATALOG.md` 中，不复制到本文件。检索优先级为“已加载内容 → 准确文件/稳定 ID → MCP 搜索 → 本文件与局部 README → CATALOG 全量治理”。这里的“局部 README”仅指承担知识导航职责的 `content/**/README.md`，不包含根目录人类手册。只有本文件列出的基础文件或分层入口变化时才更新本文件；控制面和运行面不混入知识目录。
+具体知识只登记在主题 README 和 `CATALOG.md`；本文件只在上述稳定入口变化时更新。

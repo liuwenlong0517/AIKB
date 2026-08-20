@@ -32,7 +32,13 @@ def entry(entry_id: str, title: str, body: str, relations: list[dict[str, str]] 
         "supersedes": [],
         "relations": relations or [],
     }
-    return render_frontmatter(metadata) + f"\n\n# {title}\n\n## 背景\n\n{body}\n\n## 验证\n\n测试通过。\n"
+    return (
+        render_frontmatter(metadata)
+        + f"\n\n# {title}\n\n## 背景\n\n{body}"
+        + "\n\n## 解决方案\n\n### 第一部分\n\n父级内容一。"
+        + "\n\n### 第二部分\n\n父级内容二。"
+        + "\n\n## 验证\n\n测试通过。\n"
+    )
 
 
 class RepoFixture:
@@ -108,6 +114,22 @@ class KnowledgeTests(unittest.TestCase):
         read = service.read("aikb:knowledge:engineering:cache", section="验证", max_chars=500)
         self.assertIn("测试通过", read["content"])
         self.assertEqual(read["relations"][0]["target"], "aikb:knowledge:engineering:index")
+
+    def test_read_parent_section_includes_descendants(self) -> None:
+        service = KnowledgeService(self.fixture.settings)
+        parent = service.read("aikb:knowledge:engineering:cache", section="解决方案", max_chars=1000)
+        self.assertIn("### 第一部分", parent["content"])
+        self.assertIn("父级内容一", parent["content"])
+        self.assertIn("### 第二部分", parent["content"])
+        self.assertIn("父级内容二", parent["content"])
+        self.assertNotIn("测试通过", parent["content"])
+
+        child = service.read("aikb:knowledge:engineering:cache", section="第一部分", max_chars=1000)
+        self.assertIn("父级内容一", child["content"])
+        self.assertNotIn("父级内容二", child["content"])
+
+        with self.assertRaises(KeyError):
+            service.read("aikb:knowledge:engineering:cache", section="不存在的章节")
 
     def test_corrupt_database_is_rebuilt(self) -> None:
         rebuild_knowledge_index(self.fixture.settings)
@@ -216,6 +238,26 @@ class MCPTests(unittest.TestCase):
         self.assertFalse(called["result"]["isError"])
         payload = json.loads(called["result"]["content"][0]["text"])
         self.assertGreater(payload["count"], 0)
+
+        parent = self.server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "read_knowledge",
+                    "arguments": {
+                        "id_or_path": "aikb:knowledge:engineering:cache",
+                        "section": "解决方案",
+                        "max_chars": 1000,
+                    },
+                },
+            }
+        )
+        self.assertFalse(parent["result"]["isError"])
+        parent_payload = json.loads(parent["result"]["content"][0]["text"])
+        self.assertIn("### 第一部分", parent_payload["content"])
+        self.assertIn("### 第二部分", parent_payload["content"])
 
     def test_client_visible_budget(self) -> None:
         self.assertLessEqual(len(SERVER_INSTRUCTIONS), 512)

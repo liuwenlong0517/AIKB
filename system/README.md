@@ -4,7 +4,7 @@
 
 ## 目录索引
 
-- [rules/AI_RULES.md](rules/AI_RULES.md)：Agent 接入后的初始化、加载、重载和主动写入规则。
+- [rules/AI_RULES.md](rules/AI_RULES.md)：Agent 接入后的检索、工作状态、重载和知识贡献触发规则。
 - [rules/USER_RULES.md](rules/USER_RULES.md)：用户跨 Agent、跨项目共用的个人偏好与协作规则。
 - [rules/CONTRIBUTING.md](rules/CONTRIBUTING.md)：知识准入、验证、归档、维护和淘汰标准。
 - [schemas/knowledge-entry.schema.json](schemas/knowledge-entry.schema.json)：正式知识元数据契约。

@@ -8,7 +8,10 @@ from typing import Any
 
 from .config import Settings
 from .frontmatter import parse_markdown
-from .indexer import ensure_knowledge_index, split_sections
+from .indexer import ensure_knowledge_index
+
+
+_MARKDOWN_HEADING = re.compile(r"^(#{2,6})\s+(.+?)\s*$")
 
 
 def _clip(text: str, limit: int) -> tuple[str, bool]:
@@ -16,6 +19,33 @@ def _clip(text: str, limit: int) -> tuple[str, bool]:
     if len(normalized) <= limit:
         return normalized, False
     return normalized[: max(0, limit - 1)].rstrip() + "…", True
+
+
+def _select_section(body: str, section: str) -> str:
+    lines = body.splitlines()
+    headings: list[tuple[int, int, str]] = []
+    for line_number, line in enumerate(lines):
+        match = _MARKDOWN_HEADING.match(line)
+        if match:
+            headings.append((line_number, len(match.group(1)), match.group(2).strip()))
+
+    selected_ranges: list[tuple[int, int]] = []
+    query = section.casefold()
+    for position, (start, level, title) in enumerate(headings):
+        if query not in title.casefold():
+            continue
+        end = len(lines)
+        for next_start, next_level, _ in headings[position + 1 :]:
+            if next_level <= level:
+                end = next_start
+                break
+        if selected_ranges and start < selected_ranges[-1][1]:
+            continue
+        selected_ranges.append((start, end))
+
+    if not selected_ranges:
+        raise KeyError(f"未找到章节：{section}")
+    return "\n\n".join("\n".join(lines[start:end]).strip() for start, end in selected_ranges)
 
 
 def _tags(connection: sqlite3.Connection, document_id: str) -> list[str]:
@@ -184,14 +214,7 @@ class KnowledgeService:
             if document is None:
                 raise RuntimeError(f"知识文件缺少 Front Matter：{row['path']}")
             if section:
-                matches = [
-                    (heading, content)
-                    for heading, content, _ in split_sections(document.body, document.title)
-                    if section.lower() in heading.lower()
-                ]
-                if not matches:
-                    raise KeyError(f"未找到章节：{section}")
-                selected = "\n\n".join(f"## {heading}\n\n{content}" for heading, content in matches)
+                selected = _select_section(document.body, section)
             else:
                 selected = document.body
             content, truncated = _clip(selected, max_chars)
