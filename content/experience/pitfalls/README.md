@@ -4,4 +4,4 @@
 
 ## 条目索引
 
-暂无工程陷阱。
+- [Windows Agent Hook 必须分别固定 Shell 解释器与 UTF-8 进程边界](windows-agent-hook-shell-encoding-boundaries.md)：区分 PowerShell 命令被 Git Bash 误解析与 Python/PowerShell 标准流编码冲突，并给出真实 handler 的诊断、修复和回归方式。

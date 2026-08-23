@@ -17,6 +17,15 @@ if (-not $python) {
     exit 0
 }
 
+# Hook JSON is an explicit UTF-8 protocol. Keep it independent from the Windows
+# active code page and from the parent Agent's PowerShell defaults.
+$utf8NoBom = [Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+
 $payload = [Console]::In.ReadToEnd()
 Push-Location -LiteralPath $toolRoot
 try {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -195,6 +197,48 @@ class WorkStateTests(unittest.TestCase):
         context = output["hookSpecificOutput"]["additionalContext"]
         self.assertIn("恢复测试", context)
         self.assertLessEqual(len(context), 1800)
+
+    def test_hook_cli_forces_utf8_with_legacy_environment(self) -> None:
+        project = self.fixture.root / "中文项目"
+        project.mkdir()
+        self.store.checkpoint(
+            {"project_path": str(project), "goal": "编码边界验证", "agent": "future-agent", "session_id": "utf8"}
+        )
+        environment = os.environ.copy()
+        environment["PYTHONUTF8"] = "0"
+        environment["PYTHONIOENCODING"] = "cp936"
+        payload = json.dumps({"cwd": str(project), "prompt": "中文输入"}, ensure_ascii=False).encode("utf-8")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-X",
+                "utf8=0",
+                "-m",
+                "aikb",
+                "--repo-root",
+                str(self.fixture.root),
+                "--workspace-root",
+                str(self.fixture.root / "workspace"),
+                "hook",
+                "--agent",
+                "future-agent",
+                "--event",
+                "session-start",
+            ],
+            cwd=TOOL_ROOT,
+            env=environment,
+            input=payload,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", errors="replace"))
+        raw_output = completed.stdout.decode("utf-8")
+        output = json.loads(raw_output)
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("AIKB 发现一个本机活动任务", context)
+        self.assertIn("编码边界验证", context)
+        self.assertNotIn("\ufffd", raw_output)
 
     def test_checkpoint_size_and_close_id_are_bounded(self) -> None:
         with self.assertRaises(ValueError):

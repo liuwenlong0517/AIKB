@@ -30,6 +30,21 @@ function ConvertFrom-McpResponse {
     }
 }
 
+function ConvertFrom-HookResponse {
+    param([object[]]$OutputSegments, [string]$Agent)
+
+    $json = [string]::Concat([string[]]@($OutputSegments)).Trim()
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        throw "$Agent hook 未返回 JSON"
+    }
+    try {
+        return $json | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "$Agent hook 返回无效 JSON（字符数：$($json.Length)）：$($_.Exception.Message)"
+    }
+}
+
 function Invoke-McpInitialize {
     param([object]$Server, [string]$InitializeRequest, [int]$TimeoutMilliseconds = 10000)
 
@@ -151,6 +166,61 @@ try {
     $hookResponse = '{}' | & pwsh -NoProfile -ExecutionPolicy Bypass -Command $claudeSessionHook.command | ConvertFrom-Json
     if ($null -eq $hookResponse) {
         throw 'Claude Code 生成的 PowerShell hook 无法实际启动'
+    }
+
+    $codexSettings = Get-Content -Raw -LiteralPath (Join-Path $codexHome 'hooks.json') | ConvertFrom-Json
+    $codexSessionHook = @($codexSettings.hooks.SessionStart)[-1].hooks[0]
+    $encodingRepo = Join-Path $resolvedTestRoot '中文AIKB'
+    $encodingProject = Join-Path $encodingRepo '中文项目'
+    $encodingToolRoot = Join-Path $encodingRepo 'system\tools\aikb-mcp'
+    $previousEncodingAikbHome = $env:AIKB_HOME
+    $previousPythonUtf8 = $env:PYTHONUTF8
+    $previousPythonIoEncoding = $env:PYTHONIOENCODING
+    try {
+        New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'content') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'system\tools') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'system\adapters\shared') -Force | Out-Null
+        New-Item -ItemType Directory -Path $encodingProject -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md') -Destination (Join-Path $encodingRepo 'ENTRY_RULES.md')
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'system\tools\aikb-mcp') -Destination (Join-Path $encodingRepo 'system\tools') -Recurse
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Destination (Join-Path $encodingRepo 'system\adapters\shared\aikb-hook.ps1')
+
+        $env:AIKB_HOME = $encodingRepo
+        Push-Location -LiteralPath $encodingToolRoot
+        try {
+            $checkpointCode = "import sys; from aikb.config import Settings; from aikb.workstate import WorkStateStore; WorkStateStore(Settings.load()).checkpoint({'project_path': sys.argv[1], 'goal': sys.argv[2], 'agent': 'adapter-test', 'session_id': 'utf8'})"
+            & python -c $checkpointCode $encodingProject '编码边界验证'
+            if ($LASTEXITCODE -ne 0) { throw '无法建立 UTF-8 hook 测试状态' }
+        }
+        finally {
+            Pop-Location
+        }
+
+        # Deliberately emulate the conflicting Windows defaults that originally
+        # turned Python GBK output into Unicode replacement characters.
+        $env:PYTHONUTF8 = '0'
+        $env:PYTHONIOENCODING = 'cp936'
+        $unicodePayload = @{ cwd = $encodingProject; prompt = '中文输入' } | ConvertTo-Json -Compress
+        foreach ($case in @(
+            @{ Agent = 'Codex'; Shell = 'pwsh'; Command = $codexSessionHook.command },
+            @{ Agent = 'Claude Code'; Shell = 'powershell.exe'; Command = $claudeSessionHook.command }
+        )) {
+            $outputSegments = $unicodePayload | & $case.Shell -NoProfile -ExecutionPolicy Bypass -Command $case.Command
+            if ($LASTEXITCODE -ne 0) { throw "$($case.Agent) UTF-8 hook 执行失败" }
+            $response = ConvertFrom-HookResponse -OutputSegments @($outputSegments) -Agent $case.Agent
+            $context = [string]$response.hookSpecificOutput.additionalContext
+            if ($context -notmatch 'AIKB 发现一个本机活动任务' -or $context -notmatch '编码边界验证') {
+                throw "$($case.Agent) hook 中文反馈未完整往返"
+            }
+            if ($context.Contains([char]0xFFFD)) {
+                throw "$($case.Agent) hook 中文反馈包含 Unicode 替换字符"
+            }
+        }
+    }
+    finally {
+        $env:AIKB_HOME = $previousEncodingAikbHome
+        $env:PYTHONUTF8 = $previousPythonUtf8
+        $env:PYTHONIOENCODING = $previousPythonIoEncoding
     }
 
     $before = (Get-FileHash -LiteralPath (Join-Path $codexHome 'hooks.json')).Hash

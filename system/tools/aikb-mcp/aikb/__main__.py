@@ -13,6 +13,15 @@ from .server import run_server
 from .workstate import WorkStateStore
 
 
+def _configure_stdio_utf8() -> None:
+    """Keep the CLI JSON protocol independent from the Windows active code page."""
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", newline="\n", write_through=True)
+
+
 def _json(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
@@ -42,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio_utf8()
     args = build_parser().parse_args(argv)
     settings = Settings.load(args.repo_root, args.workspace_root)
     command = args.command or "serve"

@@ -35,7 +35,8 @@
 - [解决方案](content/experience/solutions/README.md)：已经验证的问题解决方案。
   - [统一 VS Code user-data-dir 修复重启后登录会话丢失](content/experience/solutions/vscode-mixed-user-data-dir-auth-loss.md)：Windows Installer 版混用默认与自定义用户数据目录时，统一启动入口并通过两次冷启动验证登录会话持久化。
   - [PowerShell profile 中实现 Linux 风格列表并区分预测建议与 Tab 补全](content/experience/solutions/powershell-profile-psreadline-completion.md)：修复 `ll` 的错误参数用法，并通过 PSReadLine 配置区分行内预测建议与命令补全菜单。
-- [工程陷阱](content/experience/pitfalls/README.md)：已经验证的陷阱与规避方式，暂无具体条目。
+- [工程陷阱](content/experience/pitfalls/README.md)：已经验证的陷阱与规避方式。
+  - [Windows Agent Hook 必须分别固定 Shell 解释器与 UTF-8 进程边界](content/experience/pitfalls/windows-agent-hook-shell-encoding-boundaries.md)：区分 PowerShell 命令被 Git Bash 误解析与 Python/PowerShell 标准流编码冲突，并给出真实 handler 的诊断、修复和回归方式。
 - [工程决策](content/experience/decisions/README.md)：保留背景和取舍理由的工程决策，暂无具体条目。
 
 ## 工作流

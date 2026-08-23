@@ -24,6 +24,6 @@ pwsh -NoProfile -File system/adapters/doctor.ps1
 
 初始化脚本把仓库根目录写入 Windows 用户环境变量 `AIKB_HOME`；安装器生成的 MCP 与 hook 命令只在运行时读取该变量，不保存仓库绝对路径。安装器把集成注册到当前用户配置，因此换机器需要重新运行；仓库在本机移动后只需重新设置变量、重启 Agent 并运行诊断。配置模板和实现随 Git 同步，`workspace/` 工作状态不迁移。安装前会为已有配置创建一次 `.aikb-backup`，重复安装保持幂等；若已经存在非安装器管理的同名 `aikb` MCP，安装会停止而不是覆盖。
 
-Claude Code 在 Windows 上可能默认用 Git Bash 解释 command hook，因此其 AIKB handlers 显式设置 `shell: powershell`，让 `$env:AIKB_HOME` 只由 PowerShell 展开；Codex 继续使用自身支持的完整 `pwsh` 命令格式。新增或修改 hooks 时必须通过 `validate-adapters.ps1` 执行生成后的 handler，而不是只测试手工构造的等价命令。
+Claude Code 在 Windows 上可能默认用 Git Bash 解释 command hook，因此其 AIKB handlers 显式设置 `shell: powershell`，让 `$env:AIKB_HOME` 只由 PowerShell 展开；Codex 继续使用自身支持的完整 `pwsh` 命令格式。共享包装器和 Python CLI 将 hook 的 stdin/stdout 固定为 UTF-8，不依赖 Windows 活动代码页或用户级 Python 编码配置。新增或修改 hooks 时必须通过 `validate-adapters.ps1` 执行生成后的 handler，并以中文路径和中文反馈验证真实往返，而不是只测试手工构造的等价命令。
 
 新增 Agent 时只新增一个自描述目录。Agent 不支持 hooks 时仍可通过 MCP 使用知识与工作状态；不支持 MCP 时继续通过 `INDEX.md` 和局部 README 降级。
