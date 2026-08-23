@@ -109,7 +109,11 @@ foreach ($requiredText in @(
 }
 
 $roleRequirements = @{
-    'system/rules/USER_RULES.md' = @('当前任务的明确要求', '只有用户明确要求时才能修改', 'Java', '使用中文')
+    'system/rules/USER_RULES.md' = @(
+        '当前任务的明确要求', '只有用户明确要求时才能修改', 'Java', '使用中文',
+        '用户指令或前提可能有误', '未知或无法确认', '删除任何文件或目录前',
+        'Agent 专属资料', '`AGENTS.md`'
+    )
     'system/rules/AI_RULES.md' = @(
         'ENTRY_RULES.md', 'INDEX.md', 'read_knowledge', 'search_knowledge', 'content_hash',
         'workspace/', 'work_id', 'system/rules/CONTRIBUTING.md', 'CATALOG.md', 'Markdown 是知识事实源',

@@ -16,7 +16,8 @@
   - [代码评审](content/knowledge/engineering/review-guide/README.md)：代码评审知识主题索引，暂无具体条目。
 - [content/knowledge/languages/README.md](content/knowledge/languages/README.md)：编程语言知识分类索引。
   - [Java](content/knowledge/languages/java/README.md)：Java 知识主题索引，暂无具体条目。
-  - [Python](content/knowledge/languages/python/README.md)：Python 知识主题索引，暂无具体条目。
+  - [Python](content/knowledge/languages/python/README.md)：Python 知识主题索引。
+    - [以项目为边界管理 Python 运行时、虚拟环境与依赖](content/knowledge/languages/python/python-runtime-project-environments.md)：解释器、项目虚拟环境与依赖的边界，以及 uv、PyCharm、VS Code 和版本升级迁移的工作模型。
   - [TypeScript](content/knowledge/languages/typescript/README.md)：TypeScript 知识主题索引，暂无具体条目。
 - [content/knowledge/frameworks/README.md](content/knowledge/frameworks/README.md)：框架与平台知识分类索引。
   - [Docker](content/knowledge/frameworks/docker/README.md)：Docker 知识主题索引，暂无具体条目。
