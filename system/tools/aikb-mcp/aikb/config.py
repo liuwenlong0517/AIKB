@@ -1,3 +1,5 @@
+"""解析 AIKB 双仓路径，并集中保存本机运行目录配置。"""
+
 from __future__ import annotations
 
 import json
@@ -12,7 +14,7 @@ KNOWLEDGE_CONTRACT_VERSION = 1
 
 
 def discover_repo_root() -> Path:
-    """解析并校验 AIKB 控制仓根目录。"""
+    """解析并校验 AIKB 控制仓根目录；无效路径时抛出 ``RuntimeError``。"""
     configured = os.environ.get("AIKB_HOME")
     if configured:
         root = Path(configured).expanduser().resolve()
@@ -29,7 +31,7 @@ def discover_knowledge_root(
     *,
     use_environment: bool = True,
 ) -> Path:
-    """解析知识仓根目录，并验证其类型和兼容契约。"""
+    """解析知识仓根目录并验证类型与契约；返回物理路径，失败抛出 ``RuntimeError``。"""
     environment_path = Path(os.environ[KNOWLEDGE_HOME_ENV]).expanduser() if use_environment and os.environ.get(KNOWLEDGE_HOME_ENV) else None
     raw = configured or environment_path
     root = (raw or repo_root / "content").resolve()
@@ -56,6 +58,8 @@ def discover_knowledge_root(
 
 @dataclass(frozen=True)
 class Settings:
+    """保存控制仓、独立知识仓和本机 Working State 的派生路径。"""
+
     repo_root: Path
     knowledge_root: Path
     content_root: Path
@@ -70,7 +74,7 @@ class Settings:
         workspace_root: Path | None = None,
         knowledge_root: Path | None = None,
     ) -> "Settings":
-        """加载控制仓、知识仓和本机运行面的独立路径设置。"""
+        """加载独立路径设置并检查 workspace/ 与知识仓的安全边界。"""
         root_from_environment = repo_root is None
         root = (repo_root or discover_repo_root()).resolve()
         knowledge = discover_knowledge_root(root, knowledge_root, use_environment=root_from_environment)
@@ -96,6 +100,7 @@ class Settings:
         )
 
     def ensure_runtime_dirs(self) -> None:
+        """创建索引、活动任务和归档所需目录；目录已存在时保持幂等。"""
         for path in (
             self.workspace_root / "active",
             self.workspace_root / "archive",

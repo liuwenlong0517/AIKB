@@ -1,3 +1,5 @@
+# 在系统临时目录中验证一键配置编排、原有指令保留、幂等性和环境恢复。
+# 测试只使用 Process 级环境变量，不应改变真实用户配置。
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
@@ -18,6 +20,7 @@ $previousProcessKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
 $previousUserKnowledgeHome = [Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User')
 
 try {
+    # 用旧版本绝对路径指令模拟升级场景，验证安装器会清理并备份旧内容。
     New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
     New-Item -ItemType Directory -Path $claudeHome -Force | Out-Null
     $legacyInstruction = '每个新会话开始时，请读取并持续遵循 `E:\Legacy\AIKB\ENTRY_RULES.md`。'
@@ -34,6 +37,7 @@ try {
     }
     & (Join-Path $repoRoot 'system\tools\setup-aikb.ps1') @setupArguments | Out-Null
 
+    # 首次运行应生成全部受管文件，并且配置中不能硬编码当前仓库绝对路径。
     $managedFiles = @(
         (Join-Path $codexHome 'AGENTS.md'),
         (Join-Path $codexHome 'config.toml'),
@@ -67,6 +71,7 @@ try {
     }
 
     $setupArguments.SkipTests = $true
+    # 第二次运行必须保持文件哈希不变，证明安装链路是幂等的。
     & (Join-Path $repoRoot 'system\tools\setup-aikb.ps1') @setupArguments | Out-Null
     foreach ($path in $managedFiles) {
         if ((Get-FileHash -LiteralPath $path).Hash -ne $firstHashes[$path]) {

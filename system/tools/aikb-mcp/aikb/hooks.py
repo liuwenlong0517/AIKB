@@ -1,3 +1,5 @@
+"""把 Codex/Claude Code 生命周期事件转换为本机状态提示。"""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +10,7 @@ from .workstate import WorkStateStore
 
 
 def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
+    """处理一个 hook 事件；仅在存在唯一活动任务时返回恢复或阻断信息。"""
     store = WorkStateStore(settings or Settings.load())
     project_path = str(payload.get("cwd") or payload.get("project_path") or "").strip()
     if not project_path:
@@ -37,4 +40,5 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
 
 
 def hook_json(agent: str, event: str, payload: dict[str, Any], settings: Settings | None = None) -> str:
+    """将 ``handle_hook`` 的结果编码为紧凑 UTF-8 JSON，供 PowerShell 管道传递。"""
     return json.dumps(handle_hook(agent, event, payload, settings), ensure_ascii=False, separators=(",", ":"))

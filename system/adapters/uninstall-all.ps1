@@ -1,3 +1,5 @@
+# 卸载指定 Agent 的 AIKB 管理配置；共享模块负责精确识别并删除受管内容。
+# 不删除用户目录、备份文件或未标记的其他 Agent 配置。
 param(
     [ValidateSet('codex', 'claude-code')]
     [string[]]$Agents = @('codex', 'claude-code'),

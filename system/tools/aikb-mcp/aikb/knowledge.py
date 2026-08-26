@@ -1,3 +1,5 @@
+"""提供基于 SQLite 派生索引、回读当前 Markdown 的知识服务。"""
+
 from __future__ import annotations
 
 import json
@@ -15,6 +17,7 @@ _MARKDOWN_HEADING = re.compile(r"^(#{2,6})\s+(.+?)\s*$")
 
 
 def _clip(text: str, limit: int) -> tuple[str, bool]:
+    """压缩连续空白并按字符预算截断，返回正文和是否截断标记。"""
     normalized = re.sub(r"\s+", " ", text).strip()
     if len(normalized) <= limit:
         return normalized, False
@@ -22,6 +25,7 @@ def _clip(text: str, limit: int) -> tuple[str, bool]:
 
 
 def _select_section(body: str, section: str) -> str:
+    """选择匹配标题及其子章节；没有匹配章节时抛出 ``KeyError``。"""
     lines = body.splitlines()
     headings: list[tuple[int, int, str]] = []
     for line_number, line in enumerate(lines):
@@ -49,10 +53,12 @@ def _select_section(body: str, section: str) -> str:
 
 
 def _tags(connection: sqlite3.Connection, document_id: str) -> list[str]:
+    """按字典序读取文档标签。"""
     return [row[0] for row in connection.execute("SELECT tag FROM tags WHERE document_id = ? ORDER BY tag", (document_id,))]
 
 
 def _relations(connection: sqlite3.Connection, document_id: str) -> list[dict[str, str]]:
+    """同时读取文档的出边和入边关系，供客户端导航。"""
     rows = connection.execute(
         """
         SELECT 'outgoing', relation_type, target_id FROM relations WHERE source_id = ?
@@ -66,7 +72,10 @@ def _relations(connection: sqlite3.Connection, document_id: str) -> list[dict[st
 
 
 class KnowledgeService:
+    """执行知识搜索和安全回读；数据库定位，Markdown 内容负责最终事实。"""
+
     def __init__(self, settings: Settings):
+        """绑定本机路径设置，不在初始化阶段提前建立索引。"""
         self.settings = settings
 
     def search(
@@ -79,6 +88,7 @@ class KnowledgeService:
         limit: int = 5,
         excerpt_chars: int = 700,
     ) -> dict[str, Any]:
+        """合并元数据 LIKE 与 FTS 结果，并按分数、标签和数量预算返回候选。"""
         query = query.strip()
         if not query:
             raise ValueError("query 不能为空")
@@ -167,6 +177,7 @@ class KnowledgeService:
         matched_by: str,
         excerpt_chars: int,
     ) -> dict[str, Any]:
+        """把索引行转换为带摘要、标签和匹配来源的搜索候选。"""
         excerpt, truncated = _clip(row["content"], excerpt_chars)
         return {
             "id": row["id"],
@@ -191,6 +202,7 @@ class KnowledgeService:
         max_chars: int = 4000,
         include_relations: bool = True,
     ) -> dict[str, Any]:
+        """按稳定 ID 或逻辑路径读取当前 Markdown，可选返回章节和关系。"""
         identifier = identifier.strip()
         if not identifier:
             raise ValueError("id_or_path 不能为空")
@@ -241,4 +253,5 @@ class KnowledgeService:
 
 
 def compact_json(value: Any) -> str:
+    """使用无空白 JSON 编码 MCP 客户端可见结果。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))

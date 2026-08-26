@@ -1,3 +1,5 @@
+# 扫描 adapters/ 的直接子目录并读取 adapter.json，输出统一的适配器摘要。
+# 共享目录没有清单时会自然被跳过，避免把公共模块误报为 Agent 适配器。
 $ErrorActionPreference = 'Stop'
 
 Get-ChildItem -LiteralPath $PSScriptRoot -Directory |

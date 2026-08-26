@@ -1,3 +1,5 @@
+"""实现面向本机 Agent 的最小 JSON-RPC MCP stdio 服务。"""
+
 from __future__ import annotations
 
 import json
@@ -121,12 +123,16 @@ TOOLS: list[dict[str, Any]] = [
 
 
 class MCPServer:
+    """把 MCP 协议方法路由到知识服务和 Working State 存储。"""
+
     def __init__(self, settings: Settings):
+        """初始化共享路径设置下的知识和任务状态服务。"""
         self.settings = settings
         self.knowledge = KnowledgeService(settings)
         self.work = WorkStateStore(settings)
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        """处理一个 JSON-RPC 请求；通知类消息无 ID 时不返回响应。"""
         method = message.get("method")
         request_id = message.get("id")
         if request_id is None:
@@ -161,6 +167,7 @@ class MCPServer:
             return self._error(request_id, -32603, str(exc))
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """执行已声明的 MCP 工具，并将异常转换为客户端可读的工具错误。"""
         try:
             if name == "search_knowledge":
                 value = self.knowledge.search(
@@ -195,9 +202,11 @@ class MCPServer:
 
     @staticmethod
     def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+        """构造 JSON-RPC 错误响应，保持请求 ID 便于客户端关联。"""
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
     def run(self) -> None:
+        """从 stdin 按行读取 JSON-RPC，向 stdout 输出响应并隔离坏请求。"""
         sys.stdin.reconfigure(encoding="utf-8")
         sys.stdout.reconfigure(encoding="utf-8", newline="\n", write_through=True)
         for raw in sys.stdin:
@@ -214,4 +223,5 @@ class MCPServer:
 
 
 def run_server(settings: Settings | None = None) -> None:
+    """加载默认设置并启动 MCP stdio 循环。"""
     MCPServer(settings or Settings.load()).run()

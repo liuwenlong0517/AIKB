@@ -1,3 +1,5 @@
+# 首次配置编排器：设置双仓环境、运行校验、安装根指令与适配器并执行诊断。
+# 每个阶段调用独立脚本，便于按需跳过测试/索引或单独重复执行。
 param(
     [ValidateSet('codex', 'claude-code')]
     [string[]]$Agents = @('codex', 'claude-code'),
@@ -21,11 +23,13 @@ foreach ($command in @('git', 'pwsh', 'python')) {
     }
 }
 
+# 先建立当前进程可见的双仓环境，后续脚本都从同一解析结果工作。
 Write-Host '[1/6] 设置控制仓和知识仓路径' -ForegroundColor Cyan
 $resolvedKnowledgePath = if ($KnowledgePath) { $KnowledgePath } else { Join-Path $repoRoot 'content' }
 & (Join-Path $PSScriptRoot 'set-aikb-home.ps1') -Path $repoRoot -KnowledgePath $resolvedKnowledgePath -Target $EnvironmentTarget
 
 if (-not $SkipTests) {
+    # 结构、Python 核心和适配器测试按依赖顺序执行，任一步失败即停止安装。
     Write-Host '[2/6] 运行仓库与适配器测试' -ForegroundColor Cyan
     & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\tests\validate-structure.ps1')
     if ($LASTEXITCODE -ne 0) { throw '仓库结构测试失败' }
@@ -45,6 +49,7 @@ Write-Host '[4/6] 安装 MCP 与 hooks' -ForegroundColor Cyan
 & (Join-Path $repoRoot 'system\adapters\install-all.ps1') -Agents $Agents -CodexHome $CodexHome -ClaudeHome $ClaudeHome -ClaudeUserConfig $ClaudeUserConfig
 
 if (-not $SkipIndex) {
+    # 索引是可重建派生物；先验证 Markdown，再建立知识和工作状态数据库。
     Write-Host '[5/6] 验证知识并建立本机索引' -ForegroundColor Cyan
     $launcher = Join-Path $repoRoot 'system\tools\aikb-mcp\scripts\aikb.ps1'
     & $launcher validate

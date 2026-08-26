@@ -1,3 +1,5 @@
+"""维护本机 Working State：结构化检查点、恢复胶囊、索引和归档。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -27,15 +29,18 @@ TOKEN_VALUE_PATTERN = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0
 
 
 def _now() -> str:
+    """返回带本地时区信息的秒级 ISO-8601 时间。"""
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def _safe_slug(value: str, fallback: str) -> str:
+    """将外部标识归一化为安全的小写 slug，并限制长度。"""
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return (slug[:48].strip("-") or fallback)
 
 
 def project_id(project_path: str) -> str:
+    """由规范化项目路径生成可读且稳定的本机项目 ID。"""
     normalized = str(Path(project_path).expanduser().resolve()).replace("\\", "/").lower()
     name = _safe_slug(Path(normalized).name, "project")
     suffix = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:10]
@@ -43,12 +48,14 @@ def project_id(project_path: str) -> str:
 
 
 def _redact_text(value: str) -> str:
+    """移除常见密钥字段、令牌和 NUL 字符，避免写入工作状态。"""
     value = SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[REDACTED]", value)
     value = TOKEN_VALUE_PATTERN.sub("[REDACTED]", value)
     return value.replace("\x00", "")
 
 
 def _normalize_value(value: Any, *, max_items: int = 50) -> str | list[str]:
+    """把外部字段裁剪成可序列化的紧凑值，并在列表中执行脱敏。"""
     if value is None:
         return ""
     if isinstance(value, list):
@@ -123,6 +130,7 @@ def _repositories_signature(repositories: list[dict[str, Any]]) -> str:
 
 
 def _render_section(title: str, value: str | list[str]) -> str:
+    """把一个结构化字段渲染成工作状态 Markdown 二级章节。"""
     if isinstance(value, list):
         content = "\n".join(f"- {item}" for item in value) if value else "- 无"
     else:
@@ -131,6 +139,7 @@ def _render_section(title: str, value: str | list[str]) -> str:
 
 
 def _parse_sections(body: str) -> dict[str, str | list[str]]:
+    """解析工作状态章节，并识别纯无序列表字段。"""
     sections: dict[str, str | list[str]] = {}
     matches = list(re.finditer(r"^##\s+(.+?)\s*$", body, re.MULTILINE))
     for index, match in enumerate(matches):
@@ -143,6 +152,8 @@ def _parse_sections(body: str) -> dict[str, str | list[str]]:
 
 
 class WorkStateStore:
+    """管理 workspace/active 与 workspace/archive 中的状态文件及派生索引。"""
+
     SECTION_FIELDS = {
         "任务目标": "goal",
         "用户已确认决定": "decisions",
@@ -159,6 +170,7 @@ class WorkStateStore:
     }
 
     def __init__(self, settings: Settings):
+        """绑定运行面设置，并确保工作状态所需目录存在。"""
         self.settings = settings
         self.settings.ensure_runtime_dirs()
 
@@ -191,6 +203,7 @@ class WorkStateStore:
         return snapshots
 
     def checkpoint(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """追加一个脱敏且有大小上限的检查点，同时刷新工作索引。"""
         raw_project_path = str(payload.get("project_path") or "").strip()
         if not raw_project_path:
             raise ValueError("project_path 不能为空")
@@ -260,6 +273,7 @@ class WorkStateStore:
         }
 
     def get(self, *, project_path: str | None = None, work_id: str | None = None, limit: int = 5) -> dict[str, Any]:
+        """查询活动任务并返回有限数量的恢复胶囊，不读取聊天记录。"""
         self.ensure_index()
         limit = max(1, min(int(limit), 20))
         filters = ["status IN ('planned','active','blocked')"]
@@ -283,6 +297,7 @@ class WorkStateStore:
         return {"count": len(items), "unique": len(items) == 1, "items": items}
 
     def close(self, work_id: str, *, status: str, agent: str, session_id: str, note: str = "") -> dict[str, Any]:
+        """追加关闭检查点并将唯一匹配的活动任务安全移动到本机归档。"""
         if status not in {"completed", "abandoned", "superseded"}:
             raise ValueError("close status 必须是 completed、abandoned 或 superseded")
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", work_id):
@@ -328,6 +343,7 @@ class WorkStateStore:
         return {"work_id": work_id, "status": status, "last_checkpoint": checkpoint["checkpoint_id"], "archive_path": str(destination)}
 
     def rebuild_index(self) -> dict[str, Any]:
+        """扫描活动与归档状态，以临时 SQLite 原子替换工作索引。"""
         self.settings.ensure_runtime_dirs()
         handle, temp_name = tempfile.mkstemp(prefix="aikb-work-", suffix=".db", dir=self.settings.work_db.parent)
         os.close(handle)
@@ -381,6 +397,7 @@ class WorkStateStore:
         return {"items": count, "database": str(self.settings.work_db)}
 
     def ensure_index(self) -> None:
+        """检查工作索引指纹，缺失、损坏或过期时重建。"""
         if not self.settings.work_db.exists():
             self.rebuild_index()
             return
@@ -397,6 +414,7 @@ class WorkStateStore:
         self.rebuild_index()
 
     def is_dirty_since_checkpoint(self, project_path: str, item: dict[str, Any]) -> bool:
+        """比较检查点记录的单仓或多仓签名，判断工作区是否发生变化。"""
         repositories = item.get("repositories") or []
         if repositories:
             current = [
@@ -408,6 +426,7 @@ class WorkStateStore:
         return _git_signature(project_path)[3] != item.get("workspace_signature", "")
 
     def _load_work(self, path: Path) -> dict[str, Any]:
+        """读取并解析一个工作状态 Markdown；缺少 Front Matter 时拒绝使用。"""
         document = parse_markdown(path)
         if document is None:
             raise ValueError(f"工作状态缺少 Front Matter：{path}")
@@ -423,12 +442,14 @@ class WorkStateStore:
         return result
 
     def _render_work(self, metadata: dict[str, Any], fields: dict[str, str | list[str]]) -> str:
+        """按固定章节顺序生成完整工作状态文档。"""
         body = [f"# 工作状态：{metadata['work_id']}"]
         for title, field in self.SECTION_FIELDS.items():
             body.append(_render_section(title, fields.get(field, "")))
         return render_frontmatter(metadata) + "\n\n" + "\n\n".join(body) + "\n"
 
     def _metadata_fields(self) -> tuple[str, ...]:
+        """返回归档时允许从当前状态复制的元数据字段名。"""
         return (
             "work_id", "project_id", "status", "agent", "session_id", "role", "updated_at", "checkpoint_id",
             "based_on", "project_path", "branch", "base_revision", "workspace_dirty", "workspace_signature", "sensitivity",
@@ -436,6 +457,7 @@ class WorkStateStore:
         )
 
     def _safe_work_dir(self, path: Path) -> Path:
+        """校验工作目录位于 workspace/active 边界内，防止路径逃逸。"""
         resolved = path.resolve()
         active = (self.settings.workspace_root / "active").resolve()
         try:
@@ -445,6 +467,7 @@ class WorkStateStore:
         return resolved
 
     def _atomic_write(self, path: Path, content: str) -> None:
+        """通过同目录临时文件和替换写入 UTF-8 文本，避免半写文件。"""
         path.parent.mkdir(parents=True, exist_ok=True)
         handle, temp_name = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=path.parent)
         os.close(handle)
@@ -456,6 +479,7 @@ class WorkStateStore:
             temp_path.unlink(missing_ok=True)
 
     def _work_fingerprint(self) -> str:
+        """按活动与归档 work.md 内容计算工作索引指纹。"""
         digest = hashlib.sha256()
         for root_name in ("active", "archive"):
             for path in sorted((self.settings.workspace_root / root_name).rglob("work.md")):
@@ -464,6 +488,7 @@ class WorkStateStore:
         return digest.hexdigest()
 
     def _resume_item(self, row: dict[str, Any]) -> dict[str, Any]:
+        """将索引行转换为客户端恢复所需的最小字段和胶囊。"""
         try:
             repositories = json.loads(row.get("repositories") or "[]")
         except json.JSONDecodeError:
@@ -499,6 +524,7 @@ class WorkStateStore:
 
     @staticmethod
     def _as_text(value: Any) -> str:
+        """将列表或标量统一转换为索引所需的文本表示。"""
         if isinstance(value, list):
             return "；".join(str(item) for item in value)
         return str(value or "")

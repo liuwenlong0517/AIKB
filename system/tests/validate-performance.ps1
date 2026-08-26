@@ -1,3 +1,5 @@
+# 对已预热的知识搜索和 SessionStart hook 做本机热路径中位数验收。
+# 脚本会暂时设置进程级双仓变量，结束时恢复调用方环境。
 param(
     [string]$KnowledgePath,
     [ValidateRange(3, 21)]
@@ -32,6 +34,7 @@ $previousAikbHome = $env:AIKB_HOME
 $previousKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
 
 function Get-Median {
+    # 对样本排序后取中位值；奇偶样本都支持，便于调整验收参数。
     param([double[]]$Values)
 
     # 样本数由参数限制为奇数；仍采用通用实现，便于以后调整验收规模。
@@ -44,6 +47,7 @@ function Get-Median {
 }
 
 function Measure-Invocation {
+    # 只测量脚本块本身，不把结果输出混入计时调用方。
     param([scriptblock]$Action)
 
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -76,6 +80,7 @@ try {
 
     $searchMedian = [Math]::Round((Get-Median -Values $searchTimes), 2)
     $hookMedian = [Math]::Round((Get-Median -Values $hookTimes), 2)
+    # 先输出完整样本，便于定位抖动；随后再按用户阈值判定失败。
     [pscustomobject]@{
         control_root = $repoRoot
         knowledge_root = $resolvedKnowledgeRoot

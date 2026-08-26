@@ -1,3 +1,5 @@
+# 校验控制仓、独立知识仓和 workspace/ 的入口白名单、链接、规则预算及索引契约。
+# 该脚本只报告结构问题，不修改被校验仓库。
 param(
     [string]$KnowledgePath
 )
@@ -17,6 +19,7 @@ else {
 $errors = [System.Collections.Generic.List[string]]::new()
 
 function Add-ValidationError {
+    # 统一收集错误，脚本末尾一次性输出，便于 CI 或人工修复全部问题。
     param([string]$Message)
     $errors.Add($Message)
 }
@@ -31,6 +34,7 @@ $requiredRootFiles = @(
 )
 
 $requiredRootDirectories = @('system', 'workspace')
+# 这些白名单体现控制面与知识面、运行面之间的职责边界。
 $allowedSystemEntries = @('README.md', 'adapters', 'rules', 'schemas', 'templates', 'tests', 'tools')
 $allowedContentEntries = @('.aikb-knowledge.json', '.gitattributes', '.git', '.gitignore', 'CATALOG.md', 'INDEX.md', 'README.md', 'experience', 'knowledge', 'projects', 'workflows')
 $allowedWorkspaceEntries = @('.gitignore', 'README.md', 'active', 'archive', 'db', 'runtime')
@@ -84,6 +88,7 @@ Get-ChildItem -LiteralPath (Join-Path $repoRoot 'workspace') -Force |
     ForEach-Object { Add-ValidationError "workspace/ 存在未定义入口：$($_.Name)" }
 
 $markdownFiles = @(
+    # 同时检查控制仓和知识仓，但跳过各自 Git 元数据目录。
     Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Filter '*.md' |
         Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
     Get-ChildItem -LiteralPath $knowledgeRoot -Recurse -File -Filter '*.md' |
@@ -94,6 +99,7 @@ foreach ($file in $markdownFiles) {
     $text = Get-Content -Raw -LiteralPath $file.FullName
     $links = [regex]::Matches($text, '\[[^\]]+\]\(([^)#]+)(?:#[^)]+)?\)')
     foreach ($link in $links) {
+        # 外部 URL 和页内锚点不属于本地路径校验范围。
         $target = $link.Groups[1].Value
         if ($target -match '^(https?://|mailto:|#)') {
             continue
@@ -177,6 +183,7 @@ foreach ($requiredText in @('knowledge/README.md', 'experience/README.md', 'work
 }
 
 foreach ($relativePath in $roleRequirements.Keys) {
+    # 规则文本的职责词和禁止词共同防止层级边界逐渐漂移。
     $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
     foreach ($requiredText in $roleRequirements[$relativePath]) {
         if (-not $text.Contains($requiredText)) {
@@ -220,6 +227,7 @@ $ruleBudgets = @{
     'system/rules/AI_RULES.md' = 2100
     'system/rules/CONTRIBUTING.md' = 3200
 }
+# 核心入口需要保持短小，避免每个新会话加载过多控制面上下文。
 foreach ($relativePath in $ruleBudgets.Keys) {
     $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
     if ($text.Length -gt $ruleBudgets[$relativePath]) {

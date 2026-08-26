@@ -1,3 +1,5 @@
+# 共享适配器配置模块：负责 JSON/TOML 受管区块合并、备份、原子写入和精确卸载。
+# 公共函数只导出安装/卸载编排入口，其余函数保持模块内部实现细节。
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -6,6 +8,7 @@ $script:CodexMarkerEnd = '# <<< AIKB managed MCP <<<'
 $script:HookScriptName = 'aikb-hook.ps1'
 
 function Add-ObjectProperty {
+    # 对 PSCustomObject 执行新增或覆盖，统一处理 ConvertFrom-Json 的动态属性。
     param([object]$Object, [string]$Name, [object]$Value)
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) {
@@ -17,6 +20,7 @@ function Add-ObjectProperty {
 }
 
 function Read-JsonObject {
+    # 缺失或空文件按空对象处理；已有内容必须是合法 JSON 才能继续修改。
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return [pscustomobject]@{}
@@ -29,6 +33,7 @@ function Read-JsonObject {
 }
 
 function Backup-ConfigFile {
+    # 只在首次修改前创建一次备份，重复安装不会覆盖用户的原始快照。
     param([string]$Path)
     if ((Test-Path -LiteralPath $Path -PathType Leaf) -and -not (Test-Path -LiteralPath "$Path.aikb-backup")) {
         Copy-Item -LiteralPath $Path -Destination "$Path.aikb-backup"
@@ -36,6 +41,7 @@ function Backup-ConfigFile {
 }
 
 function Write-TextAtomic {
+    # 在目标同目录写入 UTF-8 无 BOM 临时文件，再替换目标以避免半写配置。
     param([string]$Path, [string]$Content)
     $directory = Split-Path -Parent $Path
     if (-not (Test-Path -LiteralPath $directory)) {
@@ -53,12 +59,14 @@ function Write-TextAtomic {
 }
 
 function Write-JsonAtomic {
+    # 使用固定深度序列化 JSON，并复用文本原子写入和备份策略。
     param([string]$Path, [object]$Value)
     $json = $Value | ConvertTo-Json -Depth 30
     Write-TextAtomic -Path $Path -Content ($json + [Environment]::NewLine)
 }
 
 function Remove-AikbHookHandlers {
+    # 删除命令中引用 aikb-hook.ps1 的组，同时保留同组内的非 AIKB handlers。
     param([object]$Hooks, [string]$Event)
     $property = $Hooks.PSObject.Properties[$Event]
     if ($null -eq $property) {
@@ -85,6 +93,7 @@ function Remove-AikbHookHandlers {
 }
 
 function Add-AikbHookHandler {
+    # 先清理同事件旧的 AIKB handler，再追加唯一受管组，保证安装幂等。
     param(
         [object]$Hooks,
         [string]$Event,
@@ -114,6 +123,7 @@ function Add-AikbHookHandler {
 }
 
 function Update-HooksJson {
+    # 根据 Agent 生成对应 shell 语法的生命周期 hooks，并保留用户其他 hooks。
     param([string]$Path, [string]$Agent)
     $config = Read-JsonObject -Path $Path
     $hooksProperty = $config.PSObject.Properties['hooks']
@@ -142,6 +152,7 @@ function Update-HooksJson {
 }
 
 function Remove-HooksJson {
+    # 遍历所有生命周期事件，只移除 AIKB hook 命令并保留配置骨架。
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $config = Read-JsonObject -Path $Path
@@ -154,12 +165,14 @@ function Remove-HooksJson {
 }
 
 function Update-CodexMcp {
+    # 替换 Codex 受管 TOML 区块；发现同名非受管服务时拒绝覆盖。
     param([string]$Path)
     $existing = if (Test-Path -LiteralPath $Path) { Get-Content -Raw -LiteralPath $Path } else { '' }
     if ($existing -match '(?m)^\s*\[mcp_servers\.aikb\]\s*$' -and $existing -notmatch [regex]::Escape($script:CodexMarkerStart)) {
         throw "Codex 已存在非 AIKB 安装器管理的 mcp_servers.aikb：$Path"
     }
     $pattern = '(?ms)^' + [regex]::Escape($script:CodexMarkerStart) + '.*?^' + [regex]::Escape($script:CodexMarkerEnd) + '\r?\n?'
+    # 配置仅保存环境变量引用，避免把当前机器的控制仓绝对路径写入用户文件。
     $clean = [regex]::Replace($existing, $pattern, '').TrimEnd()
     $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve"
     $tomlCommand = $launcherCommand.Replace('\', '\\').Replace('"', '\"')
@@ -179,6 +192,7 @@ $script:CodexMarkerEnd
 }
 
 function Remove-CodexMcp {
+    # 只删除带 AIKB 起止标记的 Codex MCP 区块。
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $existing = Get-Content -Raw -LiteralPath $Path
@@ -188,6 +202,7 @@ function Remove-CodexMcp {
 }
 
 function Update-ClaudeMcp {
+    # 写入带 AIKB_MANAGED 标记的 Claude MCP 对象，冲突对象不强行覆盖。
     param([string]$Path)
     $config = Read-JsonObject -Path $Path
     $serversProperty = $config.PSObject.Properties['mcpServers']
@@ -218,6 +233,7 @@ function Update-ClaudeMcp {
 }
 
 function Remove-ClaudeMcp {
+    # 仅当 Claude MCP 对象带 AIKB_MANAGED=1 时才删除 aikb 服务。
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $config = Read-JsonObject -Path $Path
@@ -236,6 +252,7 @@ function Remove-ClaudeMcp {
 }
 
 function Install-AikbAdapter {
+    # 校验双仓环境与目标仓一致后，安装指定 Agent 的 MCP 和 hooks 配置。
     param(
         [ValidateSet('codex', 'claude-code')][string]$Agent,
         [string]$RepoRoot,
@@ -257,6 +274,7 @@ function Install-AikbAdapter {
         throw 'AIKB_KNOWLEDGE_HOME 未指向有效知识仓。请先重新运行 set-aikb-home.ps1。'
     }
     if ($Agent -eq 'codex') {
+        # Codex 使用 TOML 受管区块，Claude Code 使用 JSON 标记对象。
         Update-CodexMcp -Path (Join-Path $CodexHome 'config.toml')
         Update-HooksJson -Path (Join-Path $CodexHome 'hooks.json') -Agent 'codex'
     }
@@ -267,6 +285,7 @@ function Install-AikbAdapter {
 }
 
 function Uninstall-AikbAdapter {
+    # 根据 Agent 选择对应配置入口，并只清除 AIKB 明确管理的内容。
     param(
         [ValidateSet('codex', 'claude-code')][string]$Agent,
         [string]$CodexHome,

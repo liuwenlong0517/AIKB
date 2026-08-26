@@ -1,3 +1,5 @@
+# 设置并校验 AIKB_HOME 与 AIKB_KNOWLEDGE_HOME；默认目标为脚本所在控制仓及其 content/。
+# User 级变更会广播环境刷新消息，但已运行的 Agent 仍需重启才能继承新值。
 param(
     [string]$Path = $(Join-Path $PSScriptRoot '..\..'),
     [string]$KnowledgePath,
@@ -29,6 +31,7 @@ if (-not (Test-Path -LiteralPath $knowledgeManifestPath -PathType Leaf)) {
     throw "目标不是有效的 AIKB 知识仓，缺少：$knowledgeManifestPath"
 }
 $knowledgeManifest = Get-Content -Raw -LiteralPath $knowledgeManifestPath | ConvertFrom-Json
+# 同时验证 kind 和契约版本，避免只凭目录存在就接受错误知识仓。
 if ($knowledgeManifest.kind -ne 'aikb-knowledge' -or $knowledgeManifest.contract_version -ne 1) {
     throw "AIKB 知识仓契约不兼容：$knowledgeManifestPath"
 }
@@ -46,6 +49,7 @@ $previousKnowledge = [Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME'
 [Environment]::SetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', $resolvedKnowledge, $environmentTarget)
 
 if ($Target -eq 'User') {
+    # 通知现有 Windows 进程环境发生变化；失败不会替代后续的持久化校验。
     if (-not ('AikbEnvironment.NativeMethods' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;

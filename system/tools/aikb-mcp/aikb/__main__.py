@@ -1,3 +1,5 @@
+"""AIKB 命令行入口，统一处理服务、检索、校验和 hook 子命令。"""
+
 from __future__ import annotations
 
 import argparse
@@ -23,10 +25,12 @@ def _configure_stdio_utf8() -> None:
 
 
 def _json(value: object) -> None:
+    """以便于人类查看的 UTF-8 JSON 输出结果，不改变调用方对象。"""
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器；实际路径解析交给 ``Settings.load``。"""
     parser = argparse.ArgumentParser(prog="aikb", description="AIKB local knowledge and work-state service")
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--knowledge-root", type=Path)
@@ -52,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """执行一个 CLI 命令并返回进程退出码；未指定命令时进入 MCP 服务。"""
     _configure_stdio_utf8()
     args = build_parser().parse_args(argv)
     settings = Settings.load(

@@ -1,3 +1,5 @@
+# 在隔离临时目录中验证双 Agent 适配器的配置合法性、UTF-8、幂等安装和精确卸载。
+# finally 块负责恢复进程环境并清理已验证位于临时目录下的测试目标。
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
@@ -18,6 +20,7 @@ $previousKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
 $previousUserKnowledgeHome = [Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User')
 
 function ConvertFrom-McpResponse {
+    # 将独立进程可能分段返回的 stdout 合并后再解析 JSON。
     param([object[]]$OutputSegments)
 
     $json = [string]::Concat([string[]]@($OutputSegments)).Trim()
@@ -33,6 +36,7 @@ function ConvertFrom-McpResponse {
 }
 
 function ConvertFrom-HookResponse {
+    # 按 Agent 名称附加错误上下文，便于区分两个 hook 入口的失败。
     param([object[]]$OutputSegments, [string]$Agent)
 
     $json = [string]::Concat([string[]]@($OutputSegments)).Trim()
@@ -48,6 +52,7 @@ function ConvertFrom-HookResponse {
 }
 
 function Invoke-McpInitialize {
+    # 用显式 UTF-8 编码和无 shell 进程启动 MCP，模拟真实 stdio 客户端。
     param([object]$Server, [string]$InitializeRequest, [int]$TimeoutMilliseconds = 10000)
 
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -100,6 +105,7 @@ function Invoke-McpInitialize {
 }
 
 try {
+    # 先验证环境脚本的 Process 级幂等行为，再把临时目录作为两个 Agent 的目标。
     $fragmentedResponse = ConvertFrom-McpResponse -OutputSegments @(
         '{"jsonrpc":"2.0","id":1,"result":{"instructions":"分段',
         '响应"}}'
@@ -151,6 +157,7 @@ try {
     }
 
     $claudeObject = Get-Content -Raw -LiteralPath $claudeConfig | ConvertFrom-Json
+    # 从生成配置实际启动 MCP，避免只验证文本而漏掉命令行或环境传递错误。
     $server = $claudeObject.mcpServers.aikb
     $initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"adapter-test","version":"1"}}}'
     $mcpResponse = Invoke-McpInitialize -Server $server -InitializeRequest $initialize
@@ -184,6 +191,7 @@ try {
     $previousPythonUtf8 = $env:PYTHONUTF8
     $previousPythonIoEncoding = $env:PYTHONIOENCODING
     try {
+        # 复制最小双仓结构到中文路径，专门验证 PowerShell 与 Python 的 UTF-8 往返。
         New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'content') -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'system\tools') -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'system\adapters\shared') -Force | Out-Null
@@ -233,6 +241,7 @@ try {
     }
 
     $before = (Get-FileHash -LiteralPath (Join-Path $codexHome 'hooks.json')).Hash
+    # 再次安装后文件哈希必须不变，卸载则只应删除 AIKB 受管内容。
     & (Join-Path $repoRoot 'system\adapters\install-all.ps1') -CodexHome $codexHome -ClaudeHome $claudeHome -ClaudeUserConfig $claudeConfig | Out-Null
     $after = (Get-FileHash -LiteralPath (Join-Path $codexHome 'hooks.json')).Hash
     if ($before -ne $after) { throw '适配器重复安装不是幂等操作' }

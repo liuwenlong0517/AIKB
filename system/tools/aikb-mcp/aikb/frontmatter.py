@@ -1,3 +1,5 @@
+"""实现 AIKB Markdown Front Matter 的受限解析和稳定渲染。"""
+
 from __future__ import annotations
 
 import json
@@ -8,11 +10,15 @@ from typing import Any
 
 
 class FrontMatterError(ValueError):
+    """表示文档不符合 AIKB 支持的 Front Matter 子集。"""
+
     pass
 
 
 @dataclass(frozen=True)
 class MarkdownDocument:
+    """保存解析后的路径、元数据、正文和一级标题。"""
+
     path: Path
     metadata: dict[str, Any]
     body: str
@@ -20,6 +26,7 @@ class MarkdownDocument:
 
 
 def _scalar(value: str) -> Any:
+    """将一个标量文本转换为布尔值、数字、列表或字符串。"""
     value = value.strip()
     if not value:
         return ""
@@ -50,6 +57,7 @@ def _scalar(value: str) -> Any:
 
 
 def _split_inline(value: str) -> list[str]:
+    """按未被引号包围的逗号拆分内联列表，保留列表项内部逗号。"""
     result: list[str] = []
     current: list[str] = []
     quote: str | None = None
@@ -70,7 +78,7 @@ def _split_inline(value: str) -> list[str]:
 
 
 def parse_yaml_subset(text: str) -> dict[str, Any]:
-    """Parse the deliberately small YAML subset used by AIKB front matter."""
+    """解析 AIKB 使用的刻意受限 YAML 子集；不支持的结构抛出 ``FrontMatterError``。"""
     lines = text.splitlines()
     result: dict[str, Any] = {}
     index = 0
@@ -115,6 +123,7 @@ def parse_yaml_subset(text: str) -> dict[str, Any]:
 
 
 def parse_markdown(path: Path) -> MarkdownDocument | None:
+    """读取带 UTF-8 BOM 容忍度的 Markdown；无 Front Matter 时返回 ``None``。"""
     text = path.read_text(encoding="utf-8-sig")
     if not text.startswith("---\n") and not text.startswith("---\r\n"):
         return None
@@ -130,6 +139,7 @@ def parse_markdown(path: Path) -> MarkdownDocument | None:
 
 
 def yaml_quote(value: Any) -> str:
+    """将受支持的 Python 值编码为可被本模块重新解析的 YAML 标量。"""
     if value is None:
         return "null"
     if isinstance(value, bool):
@@ -140,6 +150,7 @@ def yaml_quote(value: Any) -> str:
 
 
 def render_frontmatter(metadata: dict[str, Any]) -> str:
+    """按稳定字段顺序渲染元数据；复杂列表仅允许非空对象列表。"""
     lines = ["---"]
     for key, value in metadata.items():
         if isinstance(value, list):

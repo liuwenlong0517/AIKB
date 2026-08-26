@@ -1,3 +1,5 @@
+# 将统一模板中的最小入口指令写入各 Agent 用户级根指令文件。
+# 受管区块可重复生成，既保留用户内容又避免旧版本指令累积。
 param(
     [ValidateSet('codex', 'claude-code')]
     [string[]]$Agents = @('codex', 'claude-code'),
@@ -18,6 +20,7 @@ $markerStart = '<!-- >>> AIKB managed root instruction >>> -->'
 $markerEnd = '<!-- <<< AIKB managed root instruction <<< -->'
 
 function Write-RootInstruction {
+    # 仅替换 AIKB 管理区块；首次覆盖已有文件时先创建一次备份。
     param([string]$Path)
 
     $directory = Split-Path -Parent $Path
@@ -38,6 +41,7 @@ function Write-RootInstruction {
     $managedBlock = "$markerStart`n$instruction`n$markerEnd"
     $output = if ($clean) { "$clean`n`n$managedBlock`n" } else { "$managedBlock`n" }
 
+    # 临时文件与目标位于同一目录，Move-Item 才能提供接近原子替换的行为。
     $tempPath = Join-Path $directory ((Split-Path -Leaf $Path) + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
     try {
         [IO.File]::WriteAllText($tempPath, $output, [Text.UTF8Encoding]::new($false))

@@ -1,3 +1,5 @@
+# 安装指定 Agent 的根指令、MCP 和生命周期 hooks。
+# 所有用户配置修改都委托给共享模块，以统一备份、原子写入和冲突检测。
 param(
     [ValidateSet('codex', 'claude-code')]
     [string[]]$Agents = @('codex', 'claude-code'),
@@ -13,6 +15,7 @@ Import-Module (Join-Path $PSScriptRoot 'shared\AdapterConfig.psm1') -Force
 if (-not $env:AIKB_HOME) {
     throw '未设置 AIKB_HOME。请先运行 system/tools/set-aikb-home.ps1，并在新的终端中执行安装。'
 }
+# 双仓路径必须显式存在，避免安装后 Agent 继承到错误的知识仓。
 if (-not $env:AIKB_KNOWLEDGE_HOME) {
     throw '未设置 AIKB_KNOWLEDGE_HOME。请先运行 system/tools/set-aikb-home.ps1，并在新的终端中执行安装。'
 }

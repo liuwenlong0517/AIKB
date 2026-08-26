@@ -1,3 +1,5 @@
+# 检查 AIKB 双仓环境、运行时命令、适配器清单及目标 Agent 配置是否就绪。
+# 诊断只读取配置并输出结果，不自动修复或修改用户文件。
 param(
     [ValidateSet('codex', 'claude-code')]
     [string[]]$Agents = @('codex', 'claude-code'),
@@ -30,6 +32,7 @@ if ($EnvironmentTarget -eq 'User') {
 $results.Add([pscustomobject]@{ Check = 'AIKB_HOME:Process'; Passed = $processHomeValid; Detail = $(if ($processAikbHome) { $processAikbHome } else { '未继承，请重启终端或 Agent' }) })
 
 function Test-AikbKnowledgeHome {
+    # 知识仓必须同时具备目录、契约文件和兼容的 kind/contract_version。
     param([string]$Path)
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
     $manifestPath = Join-Path $Path '.aikb-knowledge.json'
@@ -64,6 +67,7 @@ foreach ($adapter in & (Join-Path $PSScriptRoot 'discover-adapters.ps1')) {
 }
 
 $checks = @()
+# 只为用户选择的 Agent 构造检查项，避免把未使用的配置误报为失败。
 if ($Agents -contains 'codex') {
     $checks += @{ Name = 'Codex Root'; Path = Join-Path $CodexHome 'AGENTS.md'; Pattern = 'AIKB_HOME.*ENTRY_RULES\.md' }
     $checks += @{ Name = 'Codex MCP'; Path = Join-Path $CodexHome 'config.toml'; Pattern = '\[mcp_servers\.aikb\]' }

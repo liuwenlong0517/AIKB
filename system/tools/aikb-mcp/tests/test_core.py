@@ -1,3 +1,5 @@
+"""AIKB Python 核心回归测试，覆盖双仓、索引、MCP、hook 与工作状态边界。"""
+
 from __future__ import annotations
 
 import json
@@ -23,6 +25,7 @@ from aikb.workstate import WorkStateStore
 
 
 def entry(entry_id: str, title: str, body: str, relations: list[dict[str, str]] | None = None) -> str:
+    """生成带嵌套章节和关系元数据的最小测试知识条目。"""
     metadata = {
         "id": entry_id,
         "type": "knowledge",
@@ -53,7 +56,10 @@ def initialize_git_repository(path: Path) -> None:
 
 
 class RepoFixture:
+    """创建隔离的临时控制仓、知识仓和 Working State 测试夹具。"""
+
     def __init__(self) -> None:
+        """准备一个包含正式条目和候选条目的临时知识仓。"""
         self.temp = tempfile.TemporaryDirectory(prefix="aikb-test-")
         self.root = Path(self.temp.name)
         (self.root / "ENTRY_RULES.md").write_text("# entry\n", encoding="utf-8")
@@ -96,11 +102,15 @@ class RepoFixture:
         self.settings = Settings.load(self.root, self.root / "workspace")
 
     def close(self) -> None:
+        """释放临时目录，避免测试数据留在本机。"""
         self.temp.cleanup()
 
 
 class FrontMatterTests(unittest.TestCase):
+    """验证 Front Matter 解析与嵌套关系往返。"""
+
     def test_round_trip_nested_relations(self) -> None:
+        """确认知识条目的稳定 ID 和关系对象能够被解析。"""
         fixture = RepoFixture()
         try:
             path = fixture.root / "content" / "knowledge" / "engineering" / "cache.md"
@@ -112,13 +122,18 @@ class FrontMatterTests(unittest.TestCase):
 
 
 class KnowledgeTests(unittest.TestCase):
+    """验证知识校验、索引重建、搜索、章节读取和指纹边界。"""
+
     def setUp(self) -> None:
+        """为每个知识测试创建独立夹具。"""
         self.fixture = RepoFixture()
 
     def tearDown(self) -> None:
+        """清理当前测试夹具。"""
         self.fixture.close()
 
     def test_validate_rebuild_search_read_and_relations(self) -> None:
+        """验证元数据报告、索引、搜索结果、章节内容和关系返回。"""
         report = metadata_report(self.fixture.settings)
         self.assertTrue(report["valid"], report["errors"])
         built = rebuild_knowledge_index(self.fixture.settings)
@@ -134,6 +149,7 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(read["relations"][0]["target"], "aikb:knowledge:engineering:index")
 
     def test_read_parent_section_includes_descendants(self) -> None:
+        """确认读取父章节包含子章节，而读取子章节不会越界到兄弟章节。"""
         service = KnowledgeService(self.fixture.settings)
         parent = service.read("aikb:knowledge:engineering:cache", section="解决方案", max_chars=1000)
         self.assertIn("### 第一部分", parent["content"])
@@ -150,6 +166,7 @@ class KnowledgeTests(unittest.TestCase):
             service.read("aikb:knowledge:engineering:cache", section="不存在的章节")
 
     def test_corrupt_database_is_rebuilt(self) -> None:
+        """确认数据库损坏时搜索路径会自动重建派生索引。"""
         rebuild_knowledge_index(self.fixture.settings)
         self.fixture.settings.knowledge_db.write_bytes(b"not sqlite")
         result = KnowledgeService(self.fixture.settings).search("SQLite")
@@ -157,6 +174,7 @@ class KnowledgeTests(unittest.TestCase):
         self.assertTrue(result["index"]["rebuilt"])
 
     def test_external_knowledge_root_keeps_stable_logical_paths(self) -> None:
+        """确认独立知识仓的物理位置不会改变客户端逻辑路径。"""
         with tempfile.TemporaryDirectory(prefix="aikb-split-test-") as temp:
             base = Path(temp)
             control = base / "control"
@@ -184,6 +202,7 @@ class KnowledgeTests(unittest.TestCase):
             self.assertEqual(result["path"], "content/knowledge/engineering/external.md")
 
     def test_navigation_git_metadata_and_control_changes_do_not_affect_fingerprint(self) -> None:
+        """确认导航文件、知识仓 Git 元数据和控制面变化不影响知识指纹。"""
         before = content_fingerprint(self.fixture.settings.content_root)
         (self.fixture.settings.content_root / "CATALOG.md").write_text("# catalog\n", encoding="utf-8")
         git_dir = self.fixture.settings.content_root / ".git"
@@ -196,14 +215,19 @@ class KnowledgeTests(unittest.TestCase):
 
 
 class WorkStateTests(unittest.TestCase):
+    """验证检查点脱敏、恢复、关闭、多仓和尺寸安全边界。"""
+
     def setUp(self) -> None:
+        """创建工作状态服务及其隔离夹具。"""
         self.fixture = RepoFixture()
         self.store = WorkStateStore(self.fixture.settings)
 
     def tearDown(self) -> None:
+        """释放工作状态测试夹具。"""
         self.fixture.close()
 
     def test_cross_agent_checkpoint_redaction_resume_and_close(self) -> None:
+        """确认跨 Agent 检查点会脱敏、可恢复并能移动到归档。"""
         first = self.store.checkpoint(
             {
                 "project_path": str(self.fixture.root),
@@ -244,6 +268,7 @@ class WorkStateTests(unittest.TestCase):
         self.assertEqual(self.store.get(project_path=str(self.fixture.root))["count"], 0)
 
     def test_session_start_only_injects_unique_item(self) -> None:
+        """确认 SessionStart 只为唯一活动任务注入恢复胶囊。"""
         self.store.checkpoint(
             {"project_path": str(self.fixture.root), "goal": "恢复测试", "agent": "future-agent", "session_id": "s1"}
         )
@@ -253,6 +278,7 @@ class WorkStateTests(unittest.TestCase):
         self.assertLessEqual(len(context), 1800)
 
     def test_hook_cli_forces_utf8_with_legacy_environment(self) -> None:
+        """确认旧代码页环境下 hook CLI 仍能无替换字符地往返中文。"""
         project = self.fixture.root / "中文项目"
         project.mkdir()
         self.store.checkpoint(
@@ -295,6 +321,7 @@ class WorkStateTests(unittest.TestCase):
         self.assertNotIn("\ufffd", raw_output)
 
     def test_checkpoint_size_and_close_id_are_bounded(self) -> None:
+        """确认检查点大小和关闭入口的工作 ID 都受到边界约束。"""
         with self.assertRaises(ValueError):
             self.store.checkpoint(
                 {
@@ -309,6 +336,7 @@ class WorkStateTests(unittest.TestCase):
             self.store.close("../outside", status="completed", agent="codex", session_id="s1")
 
     def test_aikb_maintenance_tracks_control_and_independent_knowledge_repositories(self) -> None:
+        """确认维护控制仓时会跟踪独立知识仓，并检测任一仓库变化。"""
         with tempfile.TemporaryDirectory(prefix="aikb-work-multi-repo-") as temp:
             base = Path(temp)
             control = base / "control"
@@ -345,15 +373,20 @@ class WorkStateTests(unittest.TestCase):
 
 
 class MCPTests(unittest.TestCase):
+    """验证 JSON-RPC MCP 初始化、工具调用和客户端预算。"""
+
     def setUp(self) -> None:
+        """建立已完成知识索引的 MCP 测试服务。"""
         self.fixture = RepoFixture()
         rebuild_knowledge_index(self.fixture.settings)
         self.server = MCPServer(self.fixture.settings)
 
     def tearDown(self) -> None:
+        """释放 MCP 测试夹具。"""
         self.fixture.close()
 
     def test_initialize_tools_and_call(self) -> None:
+        """确认协议协商、工具列表和知识工具调用均返回有效响应。"""
         initialized = self.server.handle(
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}}
         )
@@ -393,6 +426,7 @@ class MCPTests(unittest.TestCase):
         self.assertIn("### 第二部分", parent_payload["content"])
 
     def test_client_visible_budget(self) -> None:
+        """确认服务说明和工具声明不会超过客户端上下文预算。"""
         self.assertLessEqual(len(SERVER_INSTRUCTIONS), 512)
         self.assertLessEqual(len(json.dumps(TOOLS, ensure_ascii=False, separators=(",", ":"))), 4000)
         self.assertEqual([tool["name"] for tool in TOOLS], [

@@ -1,3 +1,5 @@
+# AIKB CLI 的 PowerShell 启动器：解析双仓环境、固定工作目录并转交 Python 模块。
+# 启动器不复制业务逻辑，保证直接调用和 Agent hook 使用同一 Python 入口。
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$AikbArguments
@@ -16,6 +18,7 @@ $knowledgeRoot = if ($env:AIKB_KNOWLEDGE_HOME) {
 else {
     (Resolve-Path -LiteralPath (Join-Path $repoRoot 'content')).Path
 }
+# 先验证契约文件，再允许 Python 读取知识仓，避免把普通目录当作知识源。
 if (-not (Test-Path -LiteralPath (Join-Path $knowledgeRoot '.aikb-knowledge.json') -PathType Leaf)) {
     throw "AIKB_KNOWLEDGE_HOME 不是有效的知识仓：$knowledgeRoot"
 }
@@ -27,6 +30,7 @@ if (-not $python) {
 
 $env:AIKB_HOME = $repoRoot
 $env:AIKB_KNOWLEDGE_HOME = $knowledgeRoot
+# Push-Location 让 Python 包可由当前工作树直接导入，finally 保证调用方目录恢复。
 Push-Location -LiteralPath $toolRoot
 try {
     & $python.Source -m aikb @AikbArguments

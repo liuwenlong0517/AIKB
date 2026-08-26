@@ -1,3 +1,5 @@
+"""扫描知识仓 Markdown，并构建可重建的 SQLite/FTS 派生索引。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -32,6 +34,8 @@ CONTENT_DIRECTORIES = ("knowledge", "experience", "workflows", "projects")
 
 @dataclass(frozen=True)
 class IndexedDocument:
+    """表示已通过解析的文档及其逻辑路径、指纹、摘要和章节块。"""
+
     document: MarkdownDocument
     relative_path: str
     content_hash: str
@@ -40,7 +44,7 @@ class IndexedDocument:
 
 
 def iter_content_files(content_root: Path) -> Iterable[Path]:
-    """只遍历知识分类正文，避免进入嵌套仓库的 .git 和导航文件。"""
+    """只遍历知识分类正文，避免进入嵌套仓库的 ``.git`` 和导航文件。"""
     for directory_name in CONTENT_DIRECTORIES:
         directory = content_root / directory_name
         if not directory.is_dir():
@@ -51,10 +55,12 @@ def iter_content_files(content_root: Path) -> Iterable[Path]:
 
 
 def _content_hash(path: Path) -> str:
+    """计算单个文件的 SHA-256 内容指纹。"""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def content_fingerprint(content_root: Path) -> str:
+    """按逻辑相对路径和文件指纹计算知识仓整体指纹。"""
     digest = hashlib.sha256()
     for path in iter_content_files(content_root):
         relative = path.relative_to(content_root).as_posix()
@@ -66,6 +72,7 @@ def content_fingerprint(content_root: Path) -> str:
 
 
 def _plain_summary(body: str, title: str) -> str:
+    """从正文提取去除 Markdown 标记的首段摘要，最长 600 字符。"""
     paragraphs = re.split(r"\n\s*\n", body)
     for paragraph in paragraphs:
         text = paragraph.strip()
@@ -80,6 +87,7 @@ def _plain_summary(body: str, title: str) -> str:
 
 
 def split_sections(body: str, title: str) -> list[tuple[str, str, int]]:
+    """按二级/三级标题切分正文，保留章节名与稳定顺序。"""
     heading = title
     buffer: list[str] = []
     chunks: list[tuple[str, str, int]] = []
@@ -102,10 +110,12 @@ def split_sections(body: str, title: str) -> list[tuple[str, str, int]]:
 
 
 def _list_of_strings(value: Any) -> bool:
+    """判断值是否为非空字符串组成的列表。"""
     return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
 
 
 def validate_document(document: MarkdownDocument, content_root: Path) -> list[str]:
+    """校验单篇知识的元数据、关系格式和正式条目字段，返回全部错误。"""
     metadata = document.metadata
     relative = document.path.relative_to(content_root).as_posix()
     errors: list[str] = []
@@ -147,6 +157,7 @@ def validate_document(document: MarkdownDocument, content_root: Path) -> list[st
 
 
 def load_documents(settings: Settings) -> tuple[list[IndexedDocument], list[str]]:
+    """加载并校验全部知识文档，同时检查稳定 ID 与关系目标是否重复或缺失。"""
     documents: list[IndexedDocument] = []
     errors: list[str] = []
     ids: dict[str, str] = {}
@@ -187,6 +198,7 @@ def load_documents(settings: Settings) -> tuple[list[IndexedDocument], list[str]
 
 
 def _create_schema(connection: sqlite3.Connection) -> str:
+    """创建索引表和 FTS 表；优先使用 trigram，失败时回退到 unicode61。"""
     connection.executescript(
         """
         PRAGMA foreign_keys = ON;
@@ -233,6 +245,7 @@ def _create_schema(connection: sqlite3.Connection) -> str:
         )
         return "trigram"
     except sqlite3.OperationalError:
+        # 发行版 SQLite 可能未编译 trigram tokenizer，unicode61 是兼容性兜底。
         connection.execute(
             "CREATE VIRTUAL TABLE chunks_fts USING fts5(document_id UNINDEXED, title, section, content, tags, path, tokenize='unicode61')"
         )
@@ -240,6 +253,7 @@ def _create_schema(connection: sqlite3.Connection) -> str:
 
 
 def rebuild_knowledge_index(settings: Settings) -> dict[str, Any]:
+    """从 Markdown 原子重建知识索引，并在提交前执行 SQLite 完整性检查。"""
     settings.ensure_runtime_dirs()
     documents, errors = load_documents(settings)
     if errors:
@@ -305,6 +319,7 @@ def rebuild_knowledge_index(settings: Settings) -> dict[str, Any]:
 
 
 def ensure_knowledge_index(settings: Settings) -> dict[str, Any]:
+    """检查索引版本和内容指纹；缺失、损坏或过期时触发重建。"""
     if not settings.knowledge_db.exists():
         return rebuild_knowledge_index(settings)
     expected = content_fingerprint(settings.content_root)
@@ -324,6 +339,7 @@ def ensure_knowledge_index(settings: Settings) -> dict[str, Any]:
 
 
 def metadata_report(settings: Settings) -> dict[str, Any]:
+    """返回知识元数据校验报告，不修改知识正文。"""
     documents, errors = load_documents(settings)
     return {
         "valid": not errors,
