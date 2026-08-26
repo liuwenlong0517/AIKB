@@ -112,7 +112,7 @@ $roleRequirements = @{
     'system/rules/USER_RULES.md' = @(
         '当前任务的明确要求', '只有用户明确要求时才能修改', 'Java', '使用中文',
         '用户指令或前提可能有误', '未知或无法确认', '删除任何文件或目录前',
-        'Agent 专属资料', '`AGENTS.md`'
+        'Agent 专属资料', '`AGENTS.md`', '类注释', '方法注释', '关键代码注释'
     )
     'system/rules/AI_RULES.md' = @(
         'ENTRY_RULES.md', 'INDEX.md', 'read_knowledge', 'search_knowledge', 'content_hash',
@@ -172,7 +172,7 @@ foreach ($relativePath in $portableRuleFiles) {
 $ruleBudgets = @{
     'ENTRY_RULES.md' = 800
     'INDEX.md' = 800
-    'system/rules/USER_RULES.md' = 600
+    'system/rules/USER_RULES.md' = 800
     'system/rules/AI_RULES.md' = 2100
     'system/rules/CONTRIBUTING.md' = 3200
 }
