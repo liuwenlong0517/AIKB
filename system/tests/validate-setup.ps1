@@ -14,6 +14,8 @@ $claudeHome = Join-Path $resolvedTestRoot 'claude'
 $claudeConfig = Join-Path $resolvedTestRoot 'claude.json'
 $previousProcessHome = $env:AIKB_HOME
 $previousUserHome = [Environment]::GetEnvironmentVariable('AIKB_HOME', 'User')
+$previousProcessKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
+$previousUserKnowledgeHome = [Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User')
 
 try {
     New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
@@ -74,11 +76,15 @@ try {
     if ([Environment]::GetEnvironmentVariable('AIKB_HOME', 'User') -ne $previousUserHome) {
         throw '一键配置 Process 测试意外修改了真实用户环境变量'
     }
+    if ([Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User') -ne $previousUserKnowledgeHome) {
+        throw '一键配置 Process 测试意外修改了真实用户知识仓环境变量'
+    }
 
     Write-Host '一键配置校验通过：独立脚本编排、根指令保留、配置生成、诊断和幂等性均正确。' -ForegroundColor Green
 }
 finally {
     $env:AIKB_HOME = $previousProcessHome
+    $env:AIKB_KNOWLEDGE_HOME = $previousProcessKnowledgeHome
     if ((Test-Path -LiteralPath $resolvedTestRoot) -and $resolvedTestRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
     }

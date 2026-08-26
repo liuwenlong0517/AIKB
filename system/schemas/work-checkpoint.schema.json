@@ -14,7 +14,24 @@
     "updated_at": {"type": "string"},
     "checkpoint_id": {"type": "string"},
     "project_path": {"type": "string"},
-    "workspace_dirty": {"type": "boolean"}
+    "workspace_dirty": {"type": "boolean"},
+    "repositories": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "required": ["role", "path", "branch", "revision", "dirty", "signature"],
+        "properties": {
+          "role": {"type": "string"},
+          "path": {"type": "string"},
+          "branch": {"type": "string"},
+          "revision": {"type": "string"},
+          "dirty": {"type": "boolean"},
+          "signature": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
   },
   "additionalProperties": true
 }

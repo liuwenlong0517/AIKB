@@ -18,6 +18,7 @@ Desktop.ini
 !.env.example
 
 # AIKB 本机运行面
+/content/
 workspace/active/
 workspace/archive/
 workspace/db/

@@ -14,6 +14,8 @@ $claudeHome = Join-Path $resolvedTestRoot 'claude'
 $claudeConfig = Join-Path $resolvedTestRoot 'claude.json'
 $previousAikbHome = $env:AIKB_HOME
 $previousUserAikbHome = [Environment]::GetEnvironmentVariable('AIKB_HOME', 'User')
+$previousKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
+$previousUserKnowledgeHome = [Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User')
 
 function ConvertFrom-McpResponse {
     param([object[]]$OutputSegments)
@@ -110,9 +112,13 @@ try {
     & $environmentScript -Path $repoRoot -Target Process -PassThru | Out-Null
     $secondEnvironmentWrite = & $environmentScript -Path $repoRoot -Target Process -PassThru
     if ($env:AIKB_HOME -ne $repoRoot) { throw 'Process 级 AIKB_HOME 初始化失败' }
+    if ($env:AIKB_KNOWLEDGE_HOME -ne (Join-Path $repoRoot 'content')) { throw 'Process 级 AIKB_KNOWLEDGE_HOME 初始化失败' }
     if ($secondEnvironmentWrite.Changed) { throw 'AIKB_HOME 初始化脚本重复执行不是幂等操作' }
     if ([Environment]::GetEnvironmentVariable('AIKB_HOME', 'User') -ne $previousUserAikbHome) {
         throw 'Process 级环境变量测试意外修改了真实用户环境变量'
+    }
+    if ([Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User') -ne $previousUserKnowledgeHome) {
+        throw 'Process 级知识仓环境变量测试意外修改了真实用户环境变量'
     }
     New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
     New-Item -ItemType Directory -Path $claudeHome -Force | Out-Null
@@ -122,8 +128,8 @@ try {
     Set-Content -LiteralPath $claudeConfig -Value '{"mcpServers":{"other":{"type":"stdio","command":"other.exe"}}}' -Encoding utf8NoBOM
     & (Join-Path $repoRoot 'system\adapters\install-all.ps1') -CodexHome $codexHome -ClaudeHome $claudeHome -ClaudeUserConfig $claudeConfig | Out-Null
     $codexToml = Get-Content -Raw -LiteralPath (Join-Path $codexHome 'config.toml')
-    if ($codexToml -notmatch '\[mcp_servers\.aikb\]' -or $codexToml -notmatch 'AIKB_HOME') {
-        throw 'Codex MCP 配置缺失或未通过 AIKB_HOME 解析路径'
+    if ($codexToml -notmatch '\[mcp_servers\.aikb\]' -or $codexToml -notmatch 'AIKB_HOME' -or $codexToml -notmatch 'AIKB_KNOWLEDGE_HOME') {
+        throw 'Codex MCP 配置缺失或未通过双根环境变量解析路径'
     }
     & python -c "import sys,tomllib; tomllib.load(open(sys.argv[1], 'rb'))" (Join-Path $codexHome 'config.toml')
     if ($LASTEXITCODE -ne 0) { throw 'Codex MCP TOML 配置无法解析' }
@@ -174,6 +180,7 @@ try {
     $encodingProject = Join-Path $encodingRepo '中文项目'
     $encodingToolRoot = Join-Path $encodingRepo 'system\tools\aikb-mcp'
     $previousEncodingAikbHome = $env:AIKB_HOME
+    $previousEncodingKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
     $previousPythonUtf8 = $env:PYTHONUTF8
     $previousPythonIoEncoding = $env:PYTHONIOENCODING
     try {
@@ -182,10 +189,12 @@ try {
         New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'system\adapters\shared') -Force | Out-Null
         New-Item -ItemType Directory -Path $encodingProject -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md') -Destination (Join-Path $encodingRepo 'ENTRY_RULES.md')
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'content\.aikb-knowledge.json') -Destination (Join-Path $encodingRepo 'content\.aikb-knowledge.json')
         Copy-Item -LiteralPath (Join-Path $repoRoot 'system\tools\aikb-mcp') -Destination (Join-Path $encodingRepo 'system\tools') -Recurse
         Copy-Item -LiteralPath (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Destination (Join-Path $encodingRepo 'system\adapters\shared\aikb-hook.ps1')
 
         $env:AIKB_HOME = $encodingRepo
+        $env:AIKB_KNOWLEDGE_HOME = Join-Path $encodingRepo 'content'
         Push-Location -LiteralPath $encodingToolRoot
         try {
             $checkpointCode = "import sys; from aikb.config import Settings; from aikb.workstate import WorkStateStore; WorkStateStore(Settings.load()).checkpoint({'project_path': sys.argv[1], 'goal': sys.argv[2], 'agent': 'adapter-test', 'session_id': 'utf8'})"
@@ -196,8 +205,7 @@ try {
             Pop-Location
         }
 
-        # Deliberately emulate the conflicting Windows defaults that originally
-        # turned Python GBK output into Unicode replacement characters.
+        # 主动模拟曾把 Python GBK 输出转换为 Unicode 替换字符的冲突 Windows 默认值。
         $env:PYTHONUTF8 = '0'
         $env:PYTHONIOENCODING = 'cp936'
         $unicodePayload = @{ cwd = $encodingProject; prompt = '中文输入' } | ConvertTo-Json -Compress
@@ -219,6 +227,7 @@ try {
     }
     finally {
         $env:AIKB_HOME = $previousEncodingAikbHome
+        $env:AIKB_KNOWLEDGE_HOME = $previousEncodingKnowledgeHome
         $env:PYTHONUTF8 = $previousPythonUtf8
         $env:PYTHONIOENCODING = $previousPythonIoEncoding
     }
@@ -238,6 +247,7 @@ try {
 }
 finally {
     $env:AIKB_HOME = $previousAikbHome
+    $env:AIKB_KNOWLEDGE_HOME = $previousKnowledgeHome
     if ((Test-Path -LiteralPath $resolvedTestRoot) -and $resolvedTestRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {

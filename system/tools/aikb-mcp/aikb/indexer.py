@@ -27,6 +27,7 @@ REQUIRED_FIELDS = {
     "relations",
 }
 FORMAL_REQUIRED_FIELDS = {"applicable_versions", "last_verified", "review_when"}
+CONTENT_DIRECTORIES = ("knowledge", "experience", "workflows", "projects")
 
 
 @dataclass(frozen=True)
@@ -39,9 +40,14 @@ class IndexedDocument:
 
 
 def iter_content_files(content_root: Path) -> Iterable[Path]:
-    for path in sorted(content_root.rglob("*.md")):
-        if path.name.lower() != "readme.md":
-            yield path
+    """只遍历知识分类正文，避免进入嵌套仓库的 .git 和导航文件。"""
+    for directory_name in CONTENT_DIRECTORIES:
+        directory = content_root / directory_name
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*.md")):
+            if ".git" not in path.parts and path.name.lower() != "readme.md":
+                yield path
 
 
 def _content_hash(path: Path) -> str:
@@ -153,7 +159,8 @@ def load_documents(settings: Settings) -> tuple[list[IndexedDocument], list[str]
         if parsed is None:
             continue
         errors.extend(validate_document(parsed, settings.content_root))
-        relative = path.relative_to(settings.repo_root).as_posix()
+        # 数据库继续暴露稳定的 content/... 逻辑路径，不泄漏知识仓物理位置。
+        relative = "content/" + path.relative_to(settings.content_root).as_posix()
         entry_id = parsed.metadata.get("id")
         if isinstance(entry_id, str):
             if entry_id in ids:

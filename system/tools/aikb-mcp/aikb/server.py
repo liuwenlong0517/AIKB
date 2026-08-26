@@ -85,6 +85,16 @@ TOOLS: list[dict[str, Any]] = [
                 "next_steps": {"type": "array", "items": {"type": "string"}},
                 "candidate_knowledge": {"type": "array", "items": {"type": "string"}},
                 "resume_checks": {"type": "array", "items": {"type": "string"}},
+                "repositories": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {"role": {"type": "string"}, "path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
+                },
                 "based_on": {"type": "string"}, "sensitivity": {"type": "string", "default": "normal"},
             },
             "required": ["project_path", "agent", "session_id"],
@@ -147,7 +157,7 @@ class MCPServer:
             else:
                 return self._error(request_id, -32601, f"Method not found: {method}")
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
-        except Exception as exc:  # MCP boundary must turn failures into tool/protocol errors.
+        except Exception as exc:  # MCP 边界必须把实现异常转换为工具或协议错误。
             return self._error(request_id, -32603, str(exc))
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:

@@ -13,6 +13,9 @@ Import-Module (Join-Path $PSScriptRoot 'shared\AdapterConfig.psm1') -Force
 if (-not $env:AIKB_HOME) {
     throw '未设置 AIKB_HOME。请先运行 system/tools/set-aikb-home.ps1，并在新的终端中执行安装。'
 }
+if (-not $env:AIKB_KNOWLEDGE_HOME) {
+    throw '未设置 AIKB_KNOWLEDGE_HOME。请先运行 system/tools/set-aikb-home.ps1，并在新的终端中执行安装。'
+}
 
 foreach ($agent in $Agents) {
     Install-AikbAdapter -Agent $agent -RepoRoot $repoRoot -CodexHome $CodexHome -ClaudeHome $ClaudeHome -ClaudeUserConfig $ClaudeUserConfig

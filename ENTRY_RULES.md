@@ -1,6 +1,6 @@
 # AIKB Agent 入口规则
 
-AIKB 根目录由 Windows 用户环境变量 `AIKB_HOME` 指定；路径缺失或目标无效时，不猜测路径或扫描磁盘，提示用户运行 `system/tools/set-aikb-home.ps1` 并在设置后重启 Agent。下文路径均相对于该根目录。
+AIKB 控制仓由 Windows 用户环境变量 `AIKB_HOME` 指定，知识仓由 `AIKB_KNOWLEDGE_HOME` 指定；知识仓变量未设置时默认使用 `%AIKB_HOME%\content`。路径缺失或目标无效时，不猜测路径或扫描磁盘，提示用户运行 `system/tools/set-aikb-home.ps1` 并在设置后重启 Agent。控制面路径相对控制仓，知识路径相对知识仓。
 
 每个新会话只在尚未加载时读取 `system/rules/USER_RULES.md`，并在本次会话中持续遵循。仅加载个人规则不代表已接入 AIKB，也无需反馈接入状态。根目录 `README.md` 是人类维护手册，不属于 Agent 默认上下文；仅在用户明确要求，或任务正在维护 AIKB 控制面、安装流程或文档时读取。
 

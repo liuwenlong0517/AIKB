@@ -14,6 +14,8 @@ $results = [System.Collections.Generic.List[object]]::new()
 
 $userAikbHome = [Environment]::GetEnvironmentVariable('AIKB_HOME', 'User')
 $processAikbHome = $env:AIKB_HOME
+$userKnowledgeHome = [Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User')
+$processKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
 $userHomeValid = $false
 if ($userAikbHome -and (Test-Path -LiteralPath $userAikbHome -PathType Container)) {
     $userHomeValid = (Resolve-Path -LiteralPath $userAikbHome).Path.Equals($repoRoot, [StringComparison]::OrdinalIgnoreCase)
@@ -26,6 +28,31 @@ if ($EnvironmentTarget -eq 'User') {
     $results.Add([pscustomobject]@{ Check = 'AIKB_HOME:User'; Passed = $userHomeValid; Detail = $(if ($userAikbHome) { $userAikbHome } else { '未设置' }) })
 }
 $results.Add([pscustomobject]@{ Check = 'AIKB_HOME:Process'; Passed = $processHomeValid; Detail = $(if ($processAikbHome) { $processAikbHome } else { '未继承，请重启终端或 Agent' }) })
+
+function Test-AikbKnowledgeHome {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+    $manifestPath = Join-Path $Path '.aikb-knowledge.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return $false }
+    try {
+        $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+        return $manifest.kind -eq 'aikb-knowledge' -and $manifest.contract_version -eq 1
+    }
+    catch { return $false }
+}
+
+if ($EnvironmentTarget -eq 'User') {
+    $results.Add([pscustomobject]@{
+        Check = 'AIKB_KNOWLEDGE_HOME:User'
+        Passed = Test-AikbKnowledgeHome -Path $userKnowledgeHome
+        Detail = $(if ($userKnowledgeHome) { $userKnowledgeHome } else { '未设置' })
+    })
+}
+$results.Add([pscustomobject]@{
+    Check = 'AIKB_KNOWLEDGE_HOME:Process'
+    Passed = Test-AikbKnowledgeHome -Path $processKnowledgeHome
+    Detail = $(if ($processKnowledgeHome) { $processKnowledgeHome } else { '未继承，请重启终端或 Agent' })
+})
 
 $python = Get-Command python -ErrorAction SilentlyContinue
 $results.Add([pscustomobject]@{ Check = 'Python'; Passed = $null -ne $python; Detail = $(if ($python) { $python.Source } else { '未找到 Python' }) })

@@ -168,7 +168,7 @@ $script:CodexMarkerStart
 [mcp_servers.aikb]
 command = "pwsh"
 args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$tomlCommand"]
-env_vars = ["AIKB_HOME"]
+env_vars = ["AIKB_HOME", "AIKB_KNOWLEDGE_HOME"]
 startup_timeout_sec = 10
 tool_timeout_sec = 60
 enabled = true
@@ -251,6 +251,10 @@ function Install-AikbAdapter {
     $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
     if (-not $resolvedConfiguredRoot.Equals($resolvedRepoRoot, [StringComparison]::OrdinalIgnoreCase)) {
         throw "AIKB_HOME 指向 $resolvedConfiguredRoot，但当前安装仓库是 $resolvedRepoRoot。请先重新运行 set-aikb-home.ps1。"
+    }
+    $configuredKnowledgeRoot = $env:AIKB_KNOWLEDGE_HOME
+    if (-not $configuredKnowledgeRoot -or -not (Test-Path -LiteralPath (Join-Path $configuredKnowledgeRoot '.aikb-knowledge.json') -PathType Leaf)) {
+        throw 'AIKB_KNOWLEDGE_HOME 未指向有效知识仓。请先重新运行 set-aikb-home.ps1。'
     }
     if ($Agent -eq 'codex') {
         Update-CodexMcp -Path (Join-Path $CodexHome 'config.toml')

@@ -19,21 +19,21 @@
 
 ## 2. 候选与确认边界
 
-有潜在价值但证据、范围或归类不足的内容进入 `content/experience/inbox/`，使用 `system/templates/inbox-entry.md`，记录来源、当前假设、待验证项、预期范围和下一步动作。候选使用 `status: candidate`，不得伪造验证日期；验证完成后晋升，确认重复、错误或无价值后删除。
+有潜在价值但证据、范围或归类不足的内容进入知识仓 `experience/inbox/`（逻辑路径 `content/experience/inbox/`），使用控制仓 `system/templates/inbox-entry.md`，记录来源、当前假设、待验证项、预期范围和下一步动作。候选使用 `status: candidate`，不得伪造验证日期；验证完成后晋升，确认重复、错误或无价值后删除。
 
 常规且满足本指南的知识写入无需逐次确认。涉及敏感信息、争议结论、分类或迁移范围存在明显争议，或需要替用户作出新的长期决策时，先使用 Inbox 保存非敏感候选并请求用户决定。
 
 ## 3. 归档位置
 
-- `content/knowledge/`：跨项目的通用工程、语言、框架和工具知识。
-- `content/experience/solutions/`：已验证的问题解决方案。
-- `content/experience/pitfalls/`：容易重复触发的陷阱及规避方式。
-- `content/experience/decisions/`：包含背景、备选方案和权衡的决策。
-- `content/workflows/`：可重复执行的开发、调试、评审和发布流程。
-- `content/projects/<project>/`：只对特定项目成立的长期事实和约定。
-- `content/experience/inbox/`：尚未满足正式准入条件的候选。
+- 知识仓 `knowledge/`：跨项目的通用工程、语言、框架和工具知识。
+- 知识仓 `experience/solutions/`：已验证的问题解决方案。
+- 知识仓 `experience/pitfalls/`：容易重复触发的陷阱及规避方式。
+- 知识仓 `experience/decisions/`：包含背景、备选方案和权衡的决策。
+- 知识仓 `workflows/`：可重复执行的开发、调试、评审和发布流程。
+- 知识仓 `projects/<project>/`：只对特定项目成立的长期事实和约定。
+- 知识仓 `experience/inbox/`：尚未满足正式准入条件的候选。
 
-所有候选和正式知识都位于 `content/`；不得写入根目录、`system/` 或 `workspace/`。除非任务正在维护 AIKB 控制面，否则不得修改 `system/`。
+所有候选和正式知识都位于 `AIKB_KNOWLEDGE_HOME`；对外仍使用 `content/...` 逻辑路径。不得写入控制仓根目录、`system/` 或 `workspace/`。除非任务正在维护 AIKB 控制面，否则不得修改控制仓。
 
 现有目录无法准确容纳已满足准入标准的知识时，可以创建职责清晰、名称稳定且不会引起大范围迁移的新分类。目录名使用英文小写短横线形式并包含说明范围和条目索引的 `README.md`；不得预建没有真实条目的空分类。边界有争议时先进入 Inbox。
 
@@ -52,7 +52,7 @@ Front Matter 必须符合 `system/schemas/knowledge-entry.schema.json`：
 
 ## 5. 索引维护
 
-`INDEX.md` 只保存稳定分层入口；`CATALOG.md` 登记全部 `content/` 文件；各级 `README.md` 负责局部导航。
+知识仓 `INDEX.md` 只保存稳定分类入口；知识仓 `CATALOG.md` 登记全部知识文件；各级 `README.md` 负责局部导航。控制仓根 `INDEX.md` 和 `CATALOG.md` 只是稳定转发页，普通知识变化不得修改。
 
 - 新增、移动、重命名或删除条目：更新最近一级 `README.md` 和 `CATALOG.md`。
 - 新增或删除主题：同时更新上一级分类 `README.md`。
@@ -69,7 +69,7 @@ Front Matter 必须符合 `system/schemas/knowledge-entry.schema.json`：
 2. 用当前权威证据验证结论，确定适用范围；不满足条件则转入 Inbox。
 3. 选择归档位置和模板，填写稳定元数据、正文、来源及关系。
 4. 更新必要的局部 README 和 `CATALOG.md`，仅在稳定入口变化时更新 `INDEX.md`。
-5. 运行 `pwsh -NoProfile -File system/tests/validate-structure.ps1`；失败时修正，不发布未通过校验的正式知识。
+5. 在控制仓运行 `pwsh -NoProfile -File system/tests/validate-structure.ps1 -KnowledgePath $env:AIKB_KNOWLEDGE_HOME`；失败时修正，不发布未通过校验的正式知识。
 6. 向用户报告写入位置、验证依据、适用边界和校验结果。
 
 发现既有条目过期或被推翻时，更新并记录验证依据；具有历史决策价值的旧结论标记为已废弃并关联替代条目，否则删除。定期清理 Inbox、过期和重复知识。

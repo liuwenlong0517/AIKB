@@ -11,18 +11,27 @@ if (-not $repoRoot -or -not (Test-Path -LiteralPath (Join-Path $repoRoot 'ENTRY_
     # Hook 必须 fail-open；环境变量缺失或失效时交给普通 Agent 会话继续。
     exit 0
 }
+$knowledgeRoot = if ($env:AIKB_KNOWLEDGE_HOME) {
+    Resolve-Path -LiteralPath $env:AIKB_KNOWLEDGE_HOME -ErrorAction SilentlyContinue
+}
+else {
+    Resolve-Path -LiteralPath (Join-Path $repoRoot 'content') -ErrorAction SilentlyContinue
+}
+if (-not $knowledgeRoot -or -not (Test-Path -LiteralPath (Join-Path $knowledgeRoot.Path '.aikb-knowledge.json') -PathType Leaf)) {
+    # 知识仓缺失时保持 fail-open，不能阻断普通 Agent 会话。
+    exit 0
+}
+$env:AIKB_KNOWLEDGE_HOME = $knowledgeRoot.Path
 $toolRoot = Join-Path $repoRoot 'system\tools\aikb-mcp'
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
     exit 0
 }
 
-# Hook JSON is an explicit UTF-8 protocol. Keep it independent from the Windows
-# active code page and from the parent Agent's PowerShell defaults.
-$utf8NoBom = [Text.UTF8Encoding]::new($false)
-[Console]::InputEncoding = $utf8NoBom
-[Console]::OutputEncoding = $utf8NoBom
-$OutputEncoding = $utf8NoBom
+# Hook JSON 是显式 UTF-8 协议，不能依赖 Windows 活动代码页或父 Agent 的 PowerShell 默认值。
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
 

@@ -10,6 +10,15 @@ $repoRoot = if ($env:AIKB_HOME) { (Resolve-Path -LiteralPath $env:AIKB_HOME).Pat
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md') -PathType Leaf)) {
     throw "AIKB_HOME 不是有效的 AIKB 仓库：$repoRoot"
 }
+$knowledgeRoot = if ($env:AIKB_KNOWLEDGE_HOME) {
+    (Resolve-Path -LiteralPath $env:AIKB_KNOWLEDGE_HOME).Path
+}
+else {
+    (Resolve-Path -LiteralPath (Join-Path $repoRoot 'content')).Path
+}
+if (-not (Test-Path -LiteralPath (Join-Path $knowledgeRoot '.aikb-knowledge.json') -PathType Leaf)) {
+    throw "AIKB_KNOWLEDGE_HOME 不是有效的知识仓：$knowledgeRoot"
+}
 
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {
@@ -17,6 +26,7 @@ if (-not $python) {
 }
 
 $env:AIKB_HOME = $repoRoot
+$env:AIKB_KNOWLEDGE_HOME = $knowledgeRoot
 Push-Location -LiteralPath $toolRoot
 try {
     & $python.Source -m aikb @AikbArguments

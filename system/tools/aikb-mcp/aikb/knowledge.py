@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import Settings
@@ -205,7 +205,9 @@ class KnowledgeService:
             ).fetchone()
             if row is None:
                 raise KeyError(f"未找到知识：{identifier}")
-            path = (self.settings.repo_root / row["path"]).resolve()
+            logical_path = PurePosixPath(str(row["path"]).replace("\\", "/"))
+            parts = logical_path.parts[1:] if logical_path.parts[:1] == ("content",) else logical_path.parts
+            path = self.settings.content_root.joinpath(*parts).resolve()
             try:
                 path.relative_to(self.settings.content_root.resolve())
             except ValueError as exc:

@@ -1,6 +1,6 @@
 # AIKB
 
-AIKB（AI Knowledge Base）是一套面向个人工程工作的长期知识与跨会话工作状态系统。它独立于具体项目和具体 AI Agent，以 Git 管理的 Markdown 作为长期知识事实源，同时在本机提供 SQLite 全文检索、关系索引、MCP 工具和 Session 生命周期适配。
+AIKB（AI Knowledge Base）是一套面向个人工程工作的长期知识与跨会话工作状态系统。控制面与知识内容由两个独立 Git 仓库管理，以知识仓 Markdown 作为长期知识事实源，同时由控制仓在本机提供 SQLite 全文检索、关系索引、MCP 工具和 Session 生命周期适配。
 
 当前实现面向 Windows，正式支持 OpenAI Codex 和 Claude Code。系统的目标不是保存全部聊天内容，而是让不同 Agent 在需要时找到经过验证的工程知识，并让尚未完成的任务能够在后续 Session 中以紧凑、可核对的状态继续。
 
@@ -10,8 +10,8 @@ AIKB（AI Knowledge Base）是一套面向个人工程工作的长期知识与�
 
 AIKB 将容易混淆的三类信息分开管理：
 
-1. **长期工程知识**：经过验证、可复用、具有明确适用范围的知识，保存在 `content/`，进入 Git 管理。
-2. **系统控制规则**：Agent 如何接入、检索、恢复任务和贡献知识，保存在 `system/`，进入 Git 管理。
+1. **长期工程知识**：经过验证、可复用、具有明确适用范围的知识，保存在独立知识仓，由知识仓 Git 管理。
+2. **系统控制规则**：Agent 如何接入、检索、恢复任务和贡献知识，保存在控制仓 `system/`，由控制仓 Git 管理。
 3. **当前工作状态**：未完成任务的目标、进度、验证结果、阻塞和下一步，保存在 `workspace/`，仅存在当前机器，不进入 Git。
 
 这种分离避免了两个常见问题：一是把临时对话或未经验证的结论当成长期知识；二是为了跨 Session 续接任务而把整段聊天重新塞入上下文。
@@ -32,7 +32,7 @@ AIKB 当前提供：
 
 ### 2.1 Markdown 是长期事实源
 
-正式知识以 `content/` 中的 Markdown 为准。`workspace/db/aikb-knowledge.db` 只是派生索引，可以删除并从 Markdown 重建。搜索结果只负责定位候选内容，Agent 最终使用的是当前 Markdown、元数据和内容哈希。
+正式知识以 `AIKB_KNOWLEDGE_HOME` 中的 Markdown 为准；默认知识仓位置是 `%AIKB_HOME%\content`。`workspace/db/aikb-knowledge.db` 只是派生索引，可以删除并从 Markdown 重建。搜索结果只负责定位候选内容，Agent 最终使用的是当前 Markdown、元数据和内容哈希。
 
 ### 2.2 SQLite 不是第二份知识库
 
@@ -40,7 +40,7 @@ SQLite 保存全文索引、标签、关系、内容哈希和本机工作状态�
 
 ### 2.3 Working State 不是聊天记忆
 
-`workspace/` 只记录恢复任务所需的结构化状态，不保存完整聊天、隐藏推理、密钥、原始终端日志或完整 diff。工作状态中的“候选知识”也不能自动成为正式知识，必须经过贡献和验证流程后才能进入 `content/`。
+`workspace/` 只记录恢复任务所需的结构化状态，不保存完整聊天、隐藏推理、密钥、原始终端日志或完整 diff。工作状态中的“候选知识”也不能自动成为正式知识，必须经过贡献和验证流程后才能进入知识仓。
 
 ### 2.4 Agent 适配不侵入核心
 
@@ -52,36 +52,41 @@ MCP、知识模型和工作状态模型不依赖 Codex 或 Claude Code。平台�
 
 ```text
 Agent 根指令
-  -> ENTRY_RULES.md
+  -> 控制仓 ENTRY_RULES.md
       -> USER_RULES.md（每个新会话最小加载）
       -> AI_RULES.md（仅任务需要接入 AIKB 时）
           -> MCP 搜索或准确读取
-          -> INDEX.md（仅 MCP 失败时的文件降级拓扑）
-              -> 最少的 content 局部 README/具体知识
+          -> 控制仓 INDEX.md（仅 MCP 失败时）
+              -> 知识仓 INDEX.md
+                  -> 最少的局部 README/具体知识
 ```
 
-只有用户明确要求、安装排障或维护 AIKB 自身时，Agent 才按需读取本 README。`CATALOG.md` 同样不在常规初始化中加载，只用于人类浏览、全库治理或正式写入前查重。
+只有用户明确要求、安装排障或维护 AIKB 自身时，Agent 才按需读取本 README。知识仓 `CATALOG.md` 同样不在常规初始化中加载，只用于人类浏览、全库治理或正式写入前查重。
 
 ## 3. 总体架构
 
 ```text
-%AIKB_HOME%
-├─ ENTRY_RULES.md          Agent 唯一稳定入口
-├─ INDEX.md                Agent 轻量拓扑和 MCP 失效降级入口
-├─ CATALOG.md              人类可读的完整知识目录，仅登记 content/
-├─ README.md               本文件，人类维护者手册
-├─ system/                 控制面：规则、Schema、工具、适配器、模板、测试
-├─ content/                内容面：正式知识和候选知识
-└─ workspace/              运行面：本机检查点、归档和派生数据库
+%AIKB_HOME%\                      控制仓 Git
+├─ ENTRY_RULES.md                 Agent 唯一稳定入口
+├─ INDEX.md / CATALOG.md          指向知识仓的稳定转发页
+├─ README.md                      本文件，人类维护者手册
+├─ system/                        规则、Schema、工具、适配器、模板、测试
+└─ workspace/                     本机检查点、归档和派生数据库，不进 Git
+
+%AIKB_KNOWLEDGE_HOME%\            独立知识仓 Git；默认 %AIKB_HOME%\content
+├─ .aikb-knowledge.json           知识仓类型与兼容契约
+├─ INDEX.md / CATALOG.md          知识导航与完整目录
+├─ knowledge/ / experience/
+└─ workflows/ / projects/
 ```
 
 典型调用链如下：
 
 ```text
 Codex / Claude Code
-  ├─ 根指令 -> ENTRY_RULES.md -> AI_RULES.md（INDEX.md 仅按需降级）
+  ├─ 根指令 -> 控制仓 ENTRY_RULES.md -> AI_RULES.md（双层 INDEX 仅按需降级）
   ├─ MCP stdio -> system/tools/aikb-mcp/
-  │                 ├─ content/*.md -> SQLite FTS/元数据/关系索引
+  │                 ├─ 知识仓 Markdown -> SQLite FTS/元数据/关系索引
   │                 └─ workspace/*.md -> SQLite 工作状态索引
   └─ hooks -> system/adapters/shared/aikb-hook.ps1
                   -> SessionStart 恢复提示 / Stop 检查点提醒
@@ -102,15 +107,15 @@ Codex / Claude Code
 
 ### `INDEX.md`
 
-面向 Agent 的轻量拓扑，不列出全部知识条目。MCP 不可用时，Agent 沿 `INDEX.md -> content 分类 README -> 主题 README -> 具体知识文件` 逐级读取最少内容。
+控制仓根文件只保存到知识仓的稳定路由，不列出知识分类。MCP 不可用时，Agent 从该文件进入 `AIKB_KNOWLEDGE_HOME/INDEX.md`，再沿分类 README、主题 README 和具体知识文件逐级读取最少内容。
 
 ### `CATALOG.md`
 
-面向人类的完整知识目录，只登记 `content/` 中的内容，不登记 `system/`、`workspace/` 或根目录控制文件。新增、移动、重命名或删除知识时需要同步维护。
+控制仓根文件是兼容转发页；真正的完整知识目录位于 `AIKB_KNOWLEDGE_HOME/CATALOG.md`。新增、移动、重命名或删除知识时只维护知识仓目录，不修改控制仓转发页。
 
 ### `.gitignore`
 
-排除 Python 缓存、虚拟环境和 `workspace/` 中的本机运行数据。`workspace/.gitignore` 进一步确保活动任务、归档、数据库和运行时文件不会进入 Git。
+排除默认装配位置 `/content/`、Python 缓存、虚拟环境和 `workspace/` 中的本机运行数据。控制仓不记录知识仓 gitlink；`content/` 是普通独立仓库而不是 submodule。`workspace/.gitignore` 进一步确保活动任务、归档、数据库和运行时文件不会进入任一 Git 仓库。
 
 ## 5. `system/`：系统控制面
 
@@ -232,7 +237,7 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 ### 5.4 `system/tools/`：本机初始化与运行工具
 
-`set-aikb-home.ps1` 是项目位置初始化脚本。默认从脚本位置向上定位仓库，验证关键入口后使用 .NET 环境变量 API 写入当前用户的 `AIKB_HOME`；重复运行结果一致。它还支持 `-Path` 显式指定目录和 `-Target Process` 测试模式。正常安装必须使用默认的 `User` 目标，`Process` 目标只服务于自动测试和临时诊断。
+`set-aikb-home.ps1` 是双仓位置初始化脚本。它从脚本位置定位控制仓，通过 `-KnowledgePath` 接受任意知识仓位置；未指定时使用控制仓下的 `content/`。脚本验证两个仓库契约后幂等写入当前用户的 `AIKB_HOME` 与 `AIKB_KNOWLEDGE_HOME`。`-Target Process` 只服务于自动测试和临时诊断。
 
 `setup-aikb.ps1` 是首次使用的一键编排器。它不复制环境设置、根指令、适配器、索引或诊断逻辑，而是按顺序调用对应的独立脚本；因此每个步骤仍可单独运行、排障和重复执行。
 
@@ -243,19 +248,19 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 #### Python 模块职责
 
 - `aikb/__main__.py`：命令行入口，提供 `serve`、`validate`、`rebuild`、`search`、`read`、`work-get` 和 `hook` 子命令。
-- `aikb/config.py`：解析仓库根目录和本机 `workspace/` 路径，统一数据库位置并创建运行目录。
+- `aikb/config.py`：分别解析控制仓、知识仓和本机 `workspace/`，验证知识仓契约并创建运行目录。
 - `aikb/frontmatter.py`：读取和渲染受控 YAML 风格 Front Matter；不依赖 PyYAML。
 - `aikb/indexer.py`：扫描正式知识、验证元数据、构建 FTS/元数据/标签/关系表并原子替换数据库。
 - `aikb/knowledge.py`：实现搜索、过滤、短词回退、按稳定 ID 或准确路径读取、章节裁剪和关系返回。
 - `aikb/workstate.py`：创建检查点、脱敏、Git 状态签名、恢复胶囊、工作索引重建和任务归档。
 - `aikb/server.py`：实现 JSON-RPC stdio MCP 协议、工具声明、参数边界和错误转换。
 - `aikb/hooks.py`：把 Session 生命周期事件转换为工作状态恢复或检查点提醒。
-- `scripts/aikb.ps1`：Windows 启动器，优先从 `AIKB_HOME` 定位仓库和 Python 模块；在仓库内手工执行且变量缺失时可以从脚本位置回退定位。
+- `scripts/aikb.ps1`：Windows 启动器，从 `AIKB_HOME` 定位控制面代码，从 `AIKB_KNOWLEDGE_HOME` 定位知识；知识变量缺失时回退到控制仓 `content/`。
 - `tests/test_core.py`：核心行为单元测试。
 
 #### 知识数据库
 
-`workspace/db/aikb-knowledge.db` 由 `content/` 中带合法知识元数据的 Markdown 派生，主要包含：
+`workspace/db/aikb-knowledge.db` 由知识仓中带合法知识元数据的 Markdown 派生，主要包含：
 
 - 文档元数据和内容哈希；
 - 标签表；
@@ -303,25 +308,26 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 ### 5.6 `system/tests/`
 
-- `validate-structure.ps1`：检查根目录白名单、三平面边界、Markdown 本地链接、知识元数据、稳定 ID、关系目标、适配器清单和规则文件预算。
+- `validate-structure.ps1`：检查控制仓与可外置知识仓白名单、Markdown 本地链接、知识元数据、稳定 ID、关系目标、适配器清单和规则文件预算。
 - `validate-adapters.ps1`：在临时用户目录中安装两次并卸载，验证幂等性、配置合法性、无关配置保留和精确清理，不触碰真实用户配置。
 - `validate-setup.ps1`：在临时用户目录中运行完整一键编排，再重复运行轻量编排，验证根指令迁移、原内容保留、备份、诊断和整体幂等性。
+- `validate-performance.ps1`：预热派生索引后重复测量热搜索与 SessionStart hook，中位耗时默认必须分别不超过 500 ms；阈值可通过参数显式收紧。
 - `agent-behavior-checklist.md`：供 Codex、Claude Code 或未来 Agent 执行的人工行为验收场景。
 - `system/tools/aikb-mcp/tests/test_core.py`：验证 Front Matter、数据库损坏重建、中文检索、关系读取、MCP 协议、工作状态、脱敏、归档和上下文预算。
 
-## 6. `content/`：长期知识内容面
+## 6. 独立知识仓：长期知识内容面
 
-`content/` 是唯一允许保存长期知识的区域：
+`AIKB_KNOWLEDGE_HOME` 是唯一允许保存长期知识的仓库；默认装配在 `%AIKB_HOME%\content`，也可放在其他目录或磁盘：
 
-- `content/knowledge/`：跨项目通用的工程知识；
-- `content/experience/inbox/`：未完成验证或归类的候选知识；
-- `content/experience/solutions/`：经过验证的问题解决方案；
-- `content/experience/pitfalls/`：容易重复触发的陷阱；
-- `content/experience/decisions/`：需要保留背景和取舍的重要决策；
-- `content/workflows/`：可重复执行的开发、调试、评审和发布流程；
-- `content/projects/<project>/`：只对特定项目成立的长期事实。
+- `knowledge/`：跨项目通用的工程知识；
+- `experience/inbox/`：未完成验证或归类的候选知识；
+- `experience/solutions/`：经过验证的问题解决方案；
+- `experience/pitfalls/`：容易重复触发的陷阱；
+- `experience/decisions/`：需要保留背景和取舍的重要决策；
+- `workflows/`：可重复执行的开发、调试、评审和发布流程；
+- `projects/<project>/`：只对特定项目成立的长期事实。
 
-主题目录中的 README 是局部导航，不集中堆放知识正文。正式知识遵循“一条知识一个文件”，必须包含证据、验证结果、适用范围和复核条件。
+主题目录中的 README 是局部导航，不集中堆放知识正文。正式知识遵循“一条知识一个文件”，必须包含证据、验证结果、适用范围和复核条件。MCP 对外保留 `content/...` 逻辑路径，因此知识仓物理移动不会改变稳定引用。
 
 ## 7. `workspace/`：本机运行面
 
@@ -341,7 +347,7 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 ### 8.1 一键配置
 
-仓库已经放到最终位置后，在仓库根目录执行：
+控制仓和知识仓已经放到最终位置后，在控制仓根目录执行：
 
 ```powershell
 & .\system\tools\setup-aikb.ps1
@@ -350,14 +356,20 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 默认一键流程依次执行：
 
 1. 检查 Git、PowerShell 7 和 Python；
-2. 调用 `set-aikb-home.ps1` 写入用户级 `AIKB_HOME`；
+2. 调用 `set-aikb-home.ps1` 写入用户级 `AIKB_HOME` 与 `AIKB_KNOWLEDGE_HOME`；
 3. 调用结构测试、Python 核心测试和适配器测试；
 4. 调用 `install-root-instructions.ps1` 配置 Codex/Claude Code 根指令；
 5. 调用 `install-all.ps1` 安装 MCP 和 hooks；
 6. 调用 MCP 启动器验证知识元数据并重建本机索引；
 7. 调用 `doctor.ps1` 做最终诊断。
 
-一键脚本会修改当前用户环境变量和所选 Agent 的用户配置，但不会覆盖已有根指令或其他 MCP/hooks 配置。已有文件首次修改前会创建 `.aikb-backup`；重复执行保持幂等。完成后需要重启 Agent。
+一键脚本会验证两个仓库并修改当前用户环境变量和所选 Agent 的用户配置，但不会自动 pull、checkout 或覆盖知识仓，也不会覆盖已有根指令或其他 MCP/hooks 配置。已有文件首次修改前会创建 `.aikb-backup`；重复执行保持幂等。完成后需要重启 Agent。
+
+知识仓不在默认 `content/` 时显式传入：
+
+```powershell
+& .\system\tools\setup-aikb.ps1 -KnowledgePath <知识仓目录>
+```
 
 只配置一个 Agent：
 
@@ -399,18 +411,19 @@ python --version
 
 当前 Python 核心只依赖标准库，不需要执行 `pip install`。
 
-#### 第 2 步：克隆到稳定位置
+#### 第 2 步：分别克隆两个仓库
 
 推荐保持入口路径稳定：
 
 ```powershell
-git clone <你的-AIKB-仓库地址> <你选择的稳定目录>\AIKB
+git clone <控制仓地址> <你选择的稳定目录>\AIKB
+git clone <知识仓地址> <你选择的稳定目录>\AIKB\content
 Set-Location <你选择的稳定目录>\AIKB
 ```
 
-目录可以位于任意本机磁盘，但应在运行下一步之前安顿好位置。`workspace/` 不跨机器同步，因此换电脑时只需要重新克隆知识库并重新初始化环境变量。
+上例把知识仓装配到默认位置。知识仓也可克隆到其他目录或磁盘，之后用 `-KnowledgePath` 登记。两个仓库分别 clone、pull、commit 和 push；控制仓不使用 submodule，也不记录知识仓 commit 指针。`workspace/` 不跨机器同步。
 
-#### 第 3 步：登记 `AIKB_HOME`
+#### 第 3 步：登记控制仓和知识仓
 
 在仓库根目录执行：
 
@@ -420,30 +433,31 @@ Set-Location <你选择的稳定目录>\AIKB
 
 脚本会：
 
-- 从自身位置解析当前仓库根目录；
-- 验证 `ENTRY_RULES.md`、`system/` 和 `content/` 是否存在；
-- 幂等写入当前 Windows 用户的 `AIKB_HOME` 环境变量，并广播环境设置变化；
+- 从自身位置解析控制仓根目录；
+- 验证控制仓 `ENTRY_RULES.md`、`system/` 以及知识仓 `.aikb-knowledge.json` 契约；
+- 幂等写入当前 Windows 用户的 `AIKB_HOME` 与 `AIKB_KNOWLEDGE_HOME`，并广播环境设置变化；
 - 同时更新脚本进程中的变量并回读验证；
 - 输出是否发生变化以及需要重启 Agent/终端的提示。
 
 也可以显式指定已经安顿好的目录：
 
 ```powershell
-& .\system\tools\set-aikb-home.ps1 -Path <AIKB目录>
+& .\system\tools\set-aikb-home.ps1 -Path <控制仓目录> -KnowledgePath <知识仓目录>
 ```
 
 确认用户级值：
 
 ```powershell
 [Environment]::GetEnvironmentVariable('AIKB_HOME', 'User')
+[Environment]::GetEnvironmentVariable('AIKB_KNOWLEDGE_HOME', 'User')
 ```
 
-使用上述 `&` 方式时，当前 PowerShell 会立即获得 `$env:AIKB_HOME`，可以继续执行安装。其他已经打开的终端和 Agent 不会自动刷新父进程环境；完成设置后请重新启动它们。如果改用 `pwsh -File` 启动脚本，也需要新开终端后再运行安装器。
+使用上述 `&` 方式时，当前 PowerShell 会立即获得两个变量，可以继续执行安装。其他已经打开的终端和 Agent 不会自动刷新父进程环境；完成设置后请重新启动它们。如果改用 `pwsh -File` 启动脚本，也需要新开终端后再运行安装器。
 
 #### 第 4 步：先验证仓库
 
 ```powershell
-pwsh -NoProfile -File system/tests/validate-structure.ps1
+pwsh -NoProfile -File system/tests/validate-structure.ps1 -KnowledgePath $env:AIKB_KNOWLEDGE_HOME
 python -m unittest discover -s system/tools/aikb-mcp/tests -v
 pwsh -NoProfile -File system/tests/validate-adapters.ps1
 ```
@@ -488,7 +502,7 @@ pwsh -NoProfile -File system/adapters/install-all.ps1 -Agents codex
 pwsh -NoProfile -File system/adapters/install-all.ps1 -Agents claude-code
 ```
 
-这个步骤会修改当前用户的 Agent 配置，所以必须显式执行。安装器会先确认当前进程的 `AIKB_HOME` 与正在安装的仓库一致；生成的 MCP 和 hook 命令在运行时读取 `AIKB_HOME`，不保存仓库绝对路径。安装器不修改 `AGENTS.md` 或 `CLAUDE.md`，也不会把 `workspace/` 数据写入 Git。
+这个步骤会修改当前用户的 Agent 配置，所以必须显式执行。安装器会先确认当前进程的 `AIKB_HOME` 与控制仓一致，并验证 `AIKB_KNOWLEDGE_HOME` 的知识仓契约；生成的 MCP 和 hook 命令在运行时读取这两个变量，不保存仓库绝对路径。安装器不修改 `AGENTS.md` 或 `CLAUDE.md`，也不会把 `workspace/` 数据写入 Git。
 
 Codex 和 Claude Code 的配置机制可分别参考 [Codex 配置](https://developers.openai.com/codex/config-reference)、[Codex MCP](https://developers.openai.com/codex/mcp)、[Claude Code hooks](https://code.claude.com/docs/en/hooks)和 [Claude Code MCP](https://code.claude.com/docs/en/mcp)。
 
@@ -500,7 +514,8 @@ pwsh -NoProfile -File system/adapters/doctor.ps1
 
 诊断应确认：
 
-- 用户级和当前进程的 `AIKB_HOME` 有效并指向当前仓库；
+- 用户级和当前进程的 `AIKB_HOME` 有效并指向当前控制仓；
+- 用户级和当前进程的 `AIKB_KNOWLEDGE_HOME` 有效并带有知识仓契约标记；
 - 可以找到 Python；
 - 可以找到 PowerShell 7 的 `pwsh`；
 - `codex` 和 `claude-code` 清单可发现；
@@ -546,8 +561,8 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 search "检索缓�
 2. 已知稳定 ID 或准确文件：直接读取。
 3. 不知道位置：调用 `search_knowledge`。
 4. 从候选中选择目标：调用 `read_knowledge`，尽量限制章节和字符数。
-5. MCP 不可用：沿 `INDEX.md` 和 `content/` 局部 README 降级。
-6. 只有全库治理或正式写入前查重才读取 `CATALOG.md`。
+5. MCP 不可用：从控制仓 `INDEX.md` 转到知识仓 `INDEX.md`，再沿知识仓局部 README 降级。
+6. 只有全库治理或正式写入前查重才读取知识仓 `CATALOG.md`。
 
 根 README 不参与以上流程。
 
@@ -574,10 +589,11 @@ SessionStart 可以发现当前项目唯一活动任务并提供紧凑恢复胶�
 3. 用代码、测试、运行结果、权威文档或用户确认验证结论。
 4. 选择 `system/templates/` 中最接近的模板。
 5. 为条目分配稳定 ID、类型、标签、适用范围和关系。
-6. 更新最近一级局部 README 和 `CATALOG.md`。
+6. 更新知识仓中最近一级局部 README 和 `CATALOG.md`。
 7. 运行结构测试和核心测试。
+8. 只在知识仓中审查并提交本次知识变更；控制面修改另在控制仓提交。
 
-证据不足的内容进入 `content/experience/inbox/`，不要包装成 `verified`。
+证据不足的内容进入知识仓 `experience/inbox/`（MCP 逻辑路径为 `content/experience/inbox/`），不要包装成 `verified`。
 
 ## 10. 常用维护命令
 
@@ -611,6 +627,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 read "aikb:稳定�
 ```powershell
 pwsh -NoProfile -File system/tests/validate-structure.ps1
 pwsh -NoProfile -File system/tests/validate-adapters.ps1
+pwsh -NoProfile -File system/tests/validate-performance.ps1
 python -m unittest discover -s system/tools/aikb-mcp/tests -v
 ```
 
@@ -645,9 +662,9 @@ pwsh -NoProfile -File system/adapters/uninstall-all.ps1 -Agents claude-code
 2. `doctor.ps1` 是否通过；
 3. 是否完全重启了 Agent；
 4. 用户配置中是否已经存在非 AIKB 管理的同名 MCP；
-5. 仓库是否被移动，而用户级 `AIKB_HOME` 仍指向旧路径。
+5. 控制仓或知识仓是否被移动，而用户级 `AIKB_HOME` 或 `AIKB_KNOWLEDGE_HOME` 仍指向旧路径。
 
-仓库移动后，在新目录重新运行 `set-aikb-home.ps1` 并重启 Agent。适配器配置通过环境变量解析路径，通常不需要重新安装；仍建议运行一次 `doctor.ps1` 复核。
+任一仓库移动后，在新目录重新运行 `set-aikb-home.ps1 -Path <控制仓> -KnowledgePath <知识仓>` 并重启 Agent。适配器配置通过环境变量解析路径，通常不需要重新安装；仍建议运行一次 `doctor.ps1` 复核。
 
 ### 搜索结果为空或过期
 
@@ -658,7 +675,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 validate
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 ```
 
-随后确认目标 Markdown 位于 `content/`、带有合法 Front Matter，并且状态和过滤条件匹配。主题导航 README 不作为正式知识条目进入 FTS。
+随后确认目标 Markdown 位于 `AIKB_KNOWLEDGE_HOME` 的四个知识分类目录之一、带有合法 Front Matter，并且状态和过滤条件匹配。MCP 返回的 `content/...` 是稳定逻辑路径，不要求物理知识仓位于控制仓内。主题导航 README 不作为正式知识条目进入 FTS。
 
 ### 安装器拒绝覆盖同名 MCP
 
@@ -681,7 +698,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 - 不做跨机器 Working State 同步。
 - 不保存完整 Session transcript，也不使用 transcript 自动生成权威知识。
 - MCP 不提供正式知识写入；正式知识仍通过文件修改、审查和 Git 提交完成。
-- 根入口和运行时配置依赖用户环境变量 `AIKB_HOME`；仓库移动后需要重新设置变量并重启相关进程。
+- 根入口依赖用户环境变量 `AIKB_HOME`，知识定位依赖 `AIKB_KNOWLEDGE_HOME`；任一仓库移动后需要重新设置变量并重启相关进程。
 
 未来可以在不改变 Markdown 权威地位的前提下扩展：
 
@@ -693,19 +710,23 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 
 ## 13. Git 管理边界
 
-应该提交：
+控制仓提交：
 
-- `ENTRY_RULES.md`、`INDEX.md`、`CATALOG.md` 和本 README；
+- `ENTRY_RULES.md`、转发用的 `INDEX.md` / `CATALOG.md` 和本 README；
 - `system/` 中的规则、Schema、工具、适配器、模板和测试；
-- `content/` 中经过治理的知识；
 - `workspace/README.md` 和 `workspace/.gitignore`。
 
-不应该提交：
+知识仓提交：
 
-- `workspace/active/`；
-- `workspace/archive/`；
-- `workspace/db/`；
-- `workspace/runtime/`；
+- `.aikb-knowledge.json` 契约标记；
+- 知识仓自己的 `README.md`、`INDEX.md` 和 `CATALOG.md`；
+- `knowledge/`、`experience/`、`workflows/` 和 `projects/` 中经过治理的知识与局部导航。
+
+控制仓通过 `.gitignore` 排除默认装配目录 `/content/`，不记录知识仓 gitlink 或 commit 指针。两个仓库分别审查、提交和推送；一次工作同时修改两边时，检查点会记录两个 Git 快照，但提交仍保持独立。
+
+两边都不应该提交：
+
+- `workspace/active/`、`workspace/archive/`、`workspace/db/` 或 `workspace/runtime/`；
 - Agent 用户配置和 `.aikb-backup`；
 - Python 缓存、虚拟环境、密钥或原始 Session 数据。
 
@@ -716,4 +737,4 @@ pwsh -NoProfile -File system/tests/validate-structure.ps1
 git diff --check
 ```
 
-涉及 MCP、工作状态或适配器时，再运行对应的 Python 和适配器测试。
+涉及 MCP、工作状态或适配器时，再运行对应的 Python 和适配器测试。改变知识根解析、索引范围或 SessionStart 路径时，还应运行 `validate-performance.ps1`，确认双仓定位没有引入明显的热路径回退。

@@ -14,7 +14,7 @@ from .workstate import WorkStateStore
 
 
 def _configure_stdio_utf8() -> None:
-    """Keep the CLI JSON protocol independent from the Windows active code page."""
+    """让 CLI JSON 协议不依赖 Windows 活动代码页。"""
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")
     for stream in (sys.stdout, sys.stderr):
@@ -29,6 +29,7 @@ def _json(value: object) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aikb", description="AIKB local knowledge and work-state service")
     parser.add_argument("--repo-root", type=Path)
+    parser.add_argument("--knowledge-root", type=Path)
     parser.add_argument("--workspace-root", type=Path)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("serve")
@@ -53,7 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     _configure_stdio_utf8()
     args = build_parser().parse_args(argv)
-    settings = Settings.load(args.repo_root, args.workspace_root)
+    settings = Settings.load(
+        repo_root=args.repo_root,
+        workspace_root=args.workspace_root,
+        knowledge_root=args.knowledge_root,
+    )
     command = args.command or "serve"
     if command == "serve":
         run_server(settings)
@@ -71,7 +76,8 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "work-get":
         _json(WorkStateStore(settings).get(project_path=args.project_path, work_id=args.work_id))
     elif command == "hook":
-        raw = sys.stdin.read().strip()
+        # Windows PowerShell 管道偶尔会在 UTF-8 JSON 前保留 BOM，协议入口需容忍该边界。
+        raw = sys.stdin.read().lstrip("\ufeff").strip()
         payload = json.loads(raw) if raw else {}
         print(json.dumps(handle_hook(args.agent, args.event, payload, settings), ensure_ascii=False, separators=(",", ":")))
     return 0

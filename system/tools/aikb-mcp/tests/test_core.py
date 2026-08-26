@@ -16,7 +16,7 @@ if str(TOOL_ROOT) not in sys.path:
 from aikb.config import Settings
 from aikb.frontmatter import parse_markdown, render_frontmatter
 from aikb.hooks import handle_hook
-from aikb.indexer import metadata_report, rebuild_knowledge_index
+from aikb.indexer import content_fingerprint, iter_content_files, metadata_report, rebuild_knowledge_index
 from aikb.knowledge import KnowledgeService
 from aikb.server import MCPServer, SERVER_INSTRUCTIONS, TOOLS
 from aikb.workstate import WorkStateStore
@@ -43,6 +43,15 @@ def entry(entry_id: str, title: str, body: str, relations: list[dict[str, str]] 
     )
 
 
+def initialize_git_repository(path: Path) -> None:
+    """初始化只供 Working State 多仓测试使用的最小 Git 仓库。"""
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "AIKB Test"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "aikb-test@example.invalid"], cwd=path, check=True)
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "test fixture"], cwd=path, check=True, capture_output=True)
+
+
 class RepoFixture:
     def __init__(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="aikb-test-")
@@ -50,6 +59,13 @@ class RepoFixture:
         (self.root / "ENTRY_RULES.md").write_text("# entry\n", encoding="utf-8")
         topic = self.root / "content" / "knowledge" / "engineering"
         topic.mkdir(parents=True)
+        (self.root / "content" / ".aikb-knowledge.json").write_text(
+            json.dumps(
+                {"kind": "aikb-knowledge", "contract_version": 1, "knowledge_schema_version": 1},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         (topic / "cache.md").write_text(
             entry(
                 "aikb:knowledge:engineering:cache",
@@ -139,6 +155,44 @@ class KnowledgeTests(unittest.TestCase):
         result = KnowledgeService(self.fixture.settings).search("SQLite")
         self.assertGreater(result["count"], 0)
         self.assertTrue(result["index"]["rebuilt"])
+
+    def test_external_knowledge_root_keeps_stable_logical_paths(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aikb-split-test-") as temp:
+            base = Path(temp)
+            control = base / "control"
+            knowledge = base / "knowledge-store"
+            (control / "system").mkdir(parents=True)
+            (control / "ENTRY_RULES.md").write_text("# entry\n", encoding="utf-8")
+            topic = knowledge / "knowledge" / "engineering"
+            topic.mkdir(parents=True)
+            (knowledge / ".aikb-knowledge.json").write_text(
+                json.dumps(
+                    {"kind": "aikb-knowledge", "contract_version": 1, "knowledge_schema_version": 1},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (topic / "external.md").write_text(
+                entry("aikb:knowledge:engineering:external", "外置知识仓", "知识仓位置不影响逻辑路径。"),
+                encoding="utf-8",
+            )
+            settings = Settings.load(control, control / "workspace", knowledge)
+            built = rebuild_knowledge_index(settings)
+            self.assertEqual(built["documents"], 1)
+            result = KnowledgeService(settings).read("content/knowledge/engineering/external.md")
+            self.assertEqual(result["id"], "aikb:knowledge:engineering:external")
+            self.assertEqual(result["path"], "content/knowledge/engineering/external.md")
+
+    def test_navigation_git_metadata_and_control_changes_do_not_affect_fingerprint(self) -> None:
+        before = content_fingerprint(self.fixture.settings.content_root)
+        (self.fixture.settings.content_root / "CATALOG.md").write_text("# catalog\n", encoding="utf-8")
+        git_dir = self.fixture.settings.content_root / ".git"
+        git_dir.mkdir()
+        (git_dir / "metadata.md").write_text("# ignored\n", encoding="utf-8")
+        (self.fixture.root / "ENTRY_RULES.md").write_text("# changed control\n", encoding="utf-8")
+        after = content_fingerprint(self.fixture.settings.content_root)
+        self.assertEqual(before, after)
+        self.assertNotIn(git_dir / "metadata.md", list(iter_content_files(self.fixture.settings.content_root)))
 
 
 class WorkStateTests(unittest.TestCase):
@@ -253,6 +307,41 @@ class WorkStateTests(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             self.store.close("../outside", status="completed", agent="codex", session_id="s1")
+
+    def test_aikb_maintenance_tracks_control_and_independent_knowledge_repositories(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aikb-work-multi-repo-") as temp:
+            base = Path(temp)
+            control = base / "control"
+            knowledge = base / "knowledge"
+            (control / "system").mkdir(parents=True)
+            (control / "ENTRY_RULES.md").write_text("# entry\n", encoding="utf-8")
+            (control / ".gitignore").write_text("workspace/\n", encoding="utf-8")
+            topic = knowledge / "knowledge" / "engineering"
+            topic.mkdir(parents=True)
+            (knowledge / ".aikb-knowledge.json").write_text(
+                json.dumps({"kind": "aikb-knowledge", "contract_version": 1, "knowledge_schema_version": 1}),
+                encoding="utf-8",
+            )
+            document_path = topic / "multi-repo.md"
+            document_path.write_text(
+                entry("aikb:knowledge:engineering:multi-repo", "双仓工作状态", "同时跟踪两个仓库。"),
+                encoding="utf-8",
+            )
+            initialize_git_repository(control)
+            initialize_git_repository(knowledge)
+
+            settings = Settings.load(control, control / "workspace", knowledge)
+            store = WorkStateStore(settings)
+            checkpoint = store.checkpoint(
+                {"project_path": str(control), "goal": "双仓检查点", "agent": "codex", "session_id": "multi"}
+            )
+            state = store.get(work_id=checkpoint["work_id"])["items"][0]
+            self.assertEqual([item["role"] for item in state["repositories"]], ["project", "knowledge"])
+            self.assertIn("knowledge=main@", state["resume_capsule"])
+            self.assertFalse(store.is_dirty_since_checkpoint(str(control), state))
+
+            document_path.write_text(document_path.read_text(encoding="utf-8") + "\n变化。\n", encoding="utf-8")
+            self.assertTrue(store.is_dirty_since_checkpoint(str(control), state))
 
 
 class MCPTests(unittest.TestCase):

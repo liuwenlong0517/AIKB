@@ -4,6 +4,7 @@ param(
     [string]$CodexHome = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }),
     [string]$ClaudeHome = $(Join-Path $HOME '.claude'),
     [string]$ClaudeUserConfig = $(Join-Path $HOME '.claude.json'),
+    [string]$KnowledgePath,
     [ValidateSet('User', 'Process')]
     [string]$EnvironmentTarget = 'User',
     [switch]$SkipTests,
@@ -20,8 +21,9 @@ foreach ($command in @('git', 'pwsh', 'python')) {
     }
 }
 
-Write-Host '[1/6] 设置 AIKB_HOME' -ForegroundColor Cyan
-& (Join-Path $PSScriptRoot 'set-aikb-home.ps1') -Path $repoRoot -Target $EnvironmentTarget
+Write-Host '[1/6] 设置控制仓和知识仓路径' -ForegroundColor Cyan
+$resolvedKnowledgePath = if ($KnowledgePath) { $KnowledgePath } else { Join-Path $repoRoot 'content' }
+& (Join-Path $PSScriptRoot 'set-aikb-home.ps1') -Path $repoRoot -KnowledgePath $resolvedKnowledgePath -Target $EnvironmentTarget
 
 if (-not $SkipTests) {
     Write-Host '[2/6] 运行仓库与适配器测试' -ForegroundColor Cyan

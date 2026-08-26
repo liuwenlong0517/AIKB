@@ -4,8 +4,8 @@
 
 - `active/`：尚未完成的任务及其结构化检查点。
 - `archive/`：已经完成、放弃或被替代的任务。
-- `db/aikb-knowledge.db`：从 `content/` Markdown 派生的知识索引。
+- `db/aikb-knowledge.db`：从 `AIKB_KNOWLEDGE_HOME` Markdown 派生的知识索引。
 - `db/aikb-work.db`：从工作状态 Markdown 派生的任务索引。
 - `runtime/`：本机锁、临时文件和适配器运行标记。
 
-除本说明和 `.gitignore` 外，本目录内容均不得进入 Git。正式知识只能写入 `content/`；工作检查点不能自动提升为正式知识，也不得保存完整聊天记录、隐藏推理、密钥、原始日志或完整 diff。
+除本说明和 `.gitignore` 外，本目录内容均不得进入控制仓或知识仓。正式知识只能写入知识仓；工作检查点不能自动提升为正式知识，也不得保存完整聊天记录、隐藏推理、密钥、原始日志或完整 diff。

@@ -17,7 +17,7 @@ from .config import Settings
 from .frontmatter import parse_markdown, render_frontmatter
 
 
-WORK_SCHEMA_VERSION = "1"
+WORK_SCHEMA_VERSION = "2"
 ALLOWED_WORK_STATUS = {"planned", "active", "blocked", "completed", "abandoned", "superseded"}
 OPEN_STATUS = {"planned", "active", "blocked"}
 SECRET_PATTERN = re.compile(
@@ -56,10 +56,30 @@ def _normalize_value(value: Any, *, max_items: int = 50) -> str | list[str]:
     return _redact_text(str(value))[:12000]
 
 
-def _git_signature(project_path: str) -> tuple[str, str, bool, str]:
+def _git_top_level(project_path: str) -> Path | None:
+    """返回路径所属 Git 仓库的规范根目录；非仓库返回空。"""
     path = Path(project_path)
     if not path.is_dir():
-        return "", "", False
+        return None
+    try:
+        output = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        return Path(output).resolve() if output else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _git_signature(project_path: str) -> tuple[str, str, bool, str]:
+    """读取单个 Git 仓库的 revision、分支、脏状态和稳定签名。"""
+    path = Path(project_path)
+    if not path.is_dir():
+        return "", "", False, ""
     try:
         revision = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, timeout=5, check=True
@@ -74,6 +94,32 @@ def _git_signature(project_path: str) -> tuple[str, str, bool, str]:
         return revision, branch, bool(status.strip()), digest
     except (OSError, subprocess.SubprocessError):
         return "", "", False, ""
+
+
+def _repository_snapshot(role: str, path: Path) -> dict[str, Any]:
+    """生成可写入 Working State 的单仓紧凑快照。"""
+    revision, branch, dirty, signature = _git_signature(str(path))
+    return {
+        "role": _safe_slug(role, "repository"),
+        "path": str(path.resolve()),
+        "branch": branch,
+        "revision": revision,
+        "dirty": dirty,
+        "signature": signature,
+    }
+
+
+def _repositories_signature(repositories: list[dict[str, Any]]) -> str:
+    """按固定顺序计算多仓组合签名，避免遗漏任一仓库变化。"""
+    normalized = [
+        {
+            "role": item.get("role", ""),
+            "path": str(item.get("path", "")).replace("\\", "/").lower(),
+            "signature": item.get("signature", ""),
+        }
+        for item in repositories
+    ]
+    return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def _render_section(title: str, value: str | list[str]) -> str:
@@ -116,6 +162,34 @@ class WorkStateStore:
         self.settings = settings
         self.settings.ensure_runtime_dirs()
 
+    def _repository_snapshots(self, project_path: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """收集主项目及显式关联仓库；维护 AIKB 本身时自动纳入独立知识仓。"""
+        targets: list[tuple[str, Path]] = [("project", Path(project_path).resolve())]
+        configured = payload.get("repositories") or []
+        if not isinstance(configured, list) or len(configured) > 8:
+            raise ValueError("repositories 必须是最多 8 项的列表")
+        for item in configured:
+            if not isinstance(item, dict) or not str(item.get("path") or "").strip():
+                raise ValueError("repositories 每项必须包含 path")
+            targets.append((str(item.get("role") or "related"), Path(str(item["path"])).expanduser().resolve()))
+
+        project_root = _git_top_level(project_path)
+        control_root = _git_top_level(str(self.settings.repo_root))
+        knowledge_root = _git_top_level(str(self.settings.knowledge_root))
+        if project_root and control_root and project_root == control_root and knowledge_root == self.settings.knowledge_root.resolve():
+            targets.append(("knowledge", knowledge_root))
+
+        snapshots: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for role, candidate in targets:
+            git_root = _git_top_level(str(candidate)) or candidate
+            key = str(git_root).replace("\\", "/").lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            snapshots.append(_repository_snapshot(role, git_root))
+        return snapshots
+
     def checkpoint(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_project_path = str(payload.get("project_path") or "").strip()
         if not raw_project_path:
@@ -140,7 +214,12 @@ class WorkStateStore:
         work_dir = self._safe_work_dir(self.settings.workspace_root / "active" / p_id / work_id)
         checkpoints_dir = work_dir / "checkpoints"
 
-        revision, branch, dirty, signature = _git_signature(resolved_project)
+        repositories = self._repository_snapshots(resolved_project, payload)
+        primary = repositories[0]
+        revision = str(primary.get("revision") or "")
+        branch = str(primary.get("branch") or "")
+        dirty = any(bool(item.get("dirty")) for item in repositories)
+        signature = _repositories_signature(repositories)
         updated_at = _now()
         previous = previous or (self._load_work(work_dir / "work.md") if (work_dir / "work.md").exists() else None)
         based_on = payload.get("based_on") or (previous or {}).get("checkpoint_id") or ""
@@ -160,6 +239,7 @@ class WorkStateStore:
             "base_revision": revision,
             "workspace_dirty": dirty,
             "workspace_signature": signature,
+            "repositories": repositories,
             "sensitivity": str(payload.get("sensitivity") or "normal"),
         }
         fields = {field: _normalize_value(payload.get(field)) for field in self.SECTION_FIELDS.values()}
@@ -263,7 +343,8 @@ class WorkStateStore:
                         work_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, project_path TEXT NOT NULL,
                         status TEXT NOT NULL, agent TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL,
                         updated_at TEXT NOT NULL, checkpoint_id TEXT NOT NULL, branch TEXT, base_revision TEXT,
-                        workspace_dirty INTEGER NOT NULL, workspace_signature TEXT, goal TEXT NOT NULL,
+                        workspace_dirty INTEGER NOT NULL, workspace_signature TEXT, repositories TEXT NOT NULL,
+                        goal TEXT NOT NULL,
                         current_state TEXT, next_steps TEXT, blockers TEXT, path TEXT NOT NULL
                     );
                     CREATE INDEX idx_work_project_status ON work_items(project_id, status, updated_at);
@@ -273,12 +354,14 @@ class WorkStateStore:
                     for path in sorted((self.settings.workspace_root / root_name).rglob("work.md")):
                         data = self._load_work(path)
                         connection.execute(
-                            "INSERT OR REPLACE INTO work_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "INSERT OR REPLACE INTO work_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (
                                 data.get("work_id"), data.get("project_id"), data.get("project_path"), data.get("status"),
                                 data.get("agent"), data.get("session_id"), data.get("role"), data.get("updated_at"),
                                 data.get("checkpoint_id"), data.get("branch"), data.get("base_revision"),
-                                int(bool(data.get("workspace_dirty"))), data.get("workspace_signature"), data.get("goal"),
+                                int(bool(data.get("workspace_dirty"))), data.get("workspace_signature"),
+                                json.dumps(data.get("repositories") or [], ensure_ascii=False, separators=(",", ":")),
+                                data.get("goal"),
                                 self._as_text(data.get("current_state")), self._as_text(data.get("next_steps")),
                                 self._as_text(data.get("blockers")), str(path),
                             ),
@@ -314,6 +397,14 @@ class WorkStateStore:
         self.rebuild_index()
 
     def is_dirty_since_checkpoint(self, project_path: str, item: dict[str, Any]) -> bool:
+        repositories = item.get("repositories") or []
+        if repositories:
+            current = [
+                _repository_snapshot(str(repository.get("role") or "repository"), Path(str(repository["path"])))
+                for repository in repositories
+                if isinstance(repository, dict) and repository.get("path")
+            ]
+            return _repositories_signature(current) != item.get("workspace_signature", "")
         return _git_signature(project_path)[3] != item.get("workspace_signature", "")
 
     def _load_work(self, path: Path) -> dict[str, Any]:
@@ -341,6 +432,7 @@ class WorkStateStore:
         return (
             "work_id", "project_id", "status", "agent", "session_id", "role", "updated_at", "checkpoint_id",
             "based_on", "project_path", "branch", "base_revision", "workspace_dirty", "workspace_signature", "sensitivity",
+            "repositories",
         )
 
     def _safe_work_dir(self, path: Path) -> Path:
@@ -372,6 +464,10 @@ class WorkStateStore:
         return digest.hexdigest()
 
     def _resume_item(self, row: dict[str, Any]) -> dict[str, Any]:
+        try:
+            repositories = json.loads(row.get("repositories") or "[]")
+        except json.JSONDecodeError:
+            repositories = []
         result = {
             "work_id": row["work_id"], "project_id": row["project_id"], "status": row["status"],
             "agent": row["agent"], "session_id": row["session_id"], "role": row["role"],
@@ -380,13 +476,23 @@ class WorkStateStore:
             "blockers": row.get("blockers") or "", "branch": row.get("branch") or "",
             "base_revision": row.get("base_revision") or "", "workspace_dirty": bool(row.get("workspace_dirty")),
             "workspace_signature": row.get("workspace_signature") or "", "path": row["path"],
+            "repositories": repositories,
         }
+        repository_summary = "、".join(
+            f"{item.get('role') or 'repo'}={item.get('branch') or 'unknown'}@{str(item.get('revision') or 'unknown')[:8]}"
+            + ("(dirty)" if item.get("dirty") else "")
+            for item in repositories
+        )
         capsule = (
             f"任务 {result['work_id']}（{result['status']}）：{result['goal']}\n"
             f"当前状态：{result['current_state'] or '未记录'}\n"
             f"下一步：{result['next_steps'] or '未记录'}\n"
             f"阻塞：{result['blockers'] or '无'}\n"
-            f"恢复前核对 branch={result['branch'] or 'unknown'} revision={result['base_revision'] or 'unknown'}。"
+            + (
+                f"恢复前核对 repositories: {repository_summary}。"
+                if repository_summary
+                else f"恢复前核对 branch={result['branch'] or 'unknown'} revision={result['base_revision'] or 'unknown'}。"
+            )
         )
         result["resume_capsule"] = capsule[:1500]
         return result
