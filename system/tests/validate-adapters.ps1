@@ -104,6 +104,17 @@ function Invoke-McpInitialize {
     }
 }
 
+# 原生命令输出捕获必须显式固定为 UTF-8：在重定向或非控制台环境下，PowerShell 的
+# [Console]::OutputEncoding 会退化为系统活动代码页（中文系统为 gb2312），用它解码
+# 内层 pwsh 返回的 UTF-8 JSON 会损坏中文并导致 JSON 解析失败。这里保存原始值，
+# 测试期间统一使用 UTF-8，finally 中恢复，避免影响调用方进程。
+$previousConsoleOutputEncoding = [Console]::OutputEncoding
+$previousConsoleInputEncoding = [Console]::InputEncoding
+$previousOutputEncoding = $OutputEncoding
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
+
 try {
     # 先验证环境脚本的 Process 级幂等行为，再把临时目录作为两个 Agent 的目标。
     $fragmentedResponse = ConvertFrom-McpResponse -OutputSegments @(
@@ -303,6 +314,9 @@ try {
 finally {
     $env:AIKB_HOME = $previousAikbHome
     $env:AIKB_KNOWLEDGE_HOME = $previousKnowledgeHome
+    [Console]::OutputEncoding = $previousConsoleOutputEncoding
+    [Console]::InputEncoding = $previousConsoleInputEncoding
+    $OutputEncoding = $previousOutputEncoding
     if ((Test-Path -LiteralPath $resolvedTestRoot) -and $resolvedTestRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
