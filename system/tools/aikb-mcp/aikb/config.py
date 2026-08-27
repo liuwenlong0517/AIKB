@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 KNOWLEDGE_HOME_ENV = "AIKB_KNOWLEDGE_HOME"
+AUDIT_CAPTURE_LEVEL_ENV = "AIKB_AUDIT_CAPTURE_LEVEL"
 KNOWLEDGE_MANIFEST = ".aikb-knowledge.json"
 KNOWLEDGE_CONTRACT_VERSION = 1
 
@@ -66,6 +67,7 @@ class Settings:
     workspace_root: Path
     knowledge_db: Path
     work_db: Path
+    audit_capture_level: str = "safe"
 
     @classmethod
     def load(
@@ -92,6 +94,9 @@ class Settings:
                 continue
             raise RuntimeError(f"知识仓不得位于控制面或运行面内：{knowledge}")
         db_root = workspace / "db"
+        capture_level = os.environ.get(AUDIT_CAPTURE_LEVEL_ENV, "safe").strip().lower()
+        if capture_level not in {"safe", "diagnostic", "full-local"}:
+            capture_level = "safe"
         return cls(
             repo_root=root,
             knowledge_root=knowledge,
@@ -99,6 +104,7 @@ class Settings:
             workspace_root=workspace,
             knowledge_db=db_root / "aikb-knowledge.db",
             work_db=db_root / "aikb-work.db",
+            audit_capture_level=capture_level,
         )
 
     def ensure_runtime_dirs(self) -> None:

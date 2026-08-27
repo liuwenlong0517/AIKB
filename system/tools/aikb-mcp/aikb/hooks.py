@@ -23,11 +23,19 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
         payload.get("session_id") or payload.get("sessionId") or payload.get("conversation_id") or ""
     ) or None
     project = audit_project_id(project_path)
+    session_label = audit.resolve_session_label(
+        agent=agent, source="hook", session_id=session_id, connection_id=None, project_id=project,
+        supplied_label=str(payload.get("session_name") or payload.get("conversation_title") or "") or None,
+    )
     invocation: dict[str, Any] | None = None
     try:
         invocation = audit.start(
             source="hook", agent=agent, operation=normalized_event,
-            action={"event": normalized_event, "project_id": project}, session_id=session_id, project_id=project,
+            action={"event": normalized_event, "project_id": project}, session_id=session_id, session_label=session_label, project_id=project,
+        )
+        audit.write_diagnostic(
+            invocation_id=invocation["invocation_id"], source="hook", agent=agent, operation=normalized_event, phase="input",
+            session_id=session_id, session_label=session_label, payload={"payload": payload},
         )
     except Exception:
         pass
@@ -38,7 +46,11 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
         try:
             audit.finish(
                 invocation, source="hook", agent=agent, operation=normalized_event, status=status,
-                outcome_code=outcome_code, result_summary=result_summary, session_id=session_id, project_id=project,
+                outcome_code=outcome_code, result_summary=result_summary, session_id=session_id, session_label=session_label, project_id=project,
+            )
+            audit.write_diagnostic(
+                invocation_id=invocation["invocation_id"], source="hook", agent=agent, operation=normalized_event, phase="output",
+                session_id=session_id, session_label=session_label, payload={"outcome_code": outcome_code, "result_summary": result_summary},
             )
         except Exception:
             pass
@@ -90,7 +102,7 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
                 audit.finish(
                     invocation, source="hook", agent=agent, operation=normalized_event, status="failed",
                     outcome_code="handler_failed", error_type=type(exc).__name__, session_id=session_id,
-                    project_id=project,
+                    session_label=session_label, project_id=project,
                 )
             except Exception:
                 pass

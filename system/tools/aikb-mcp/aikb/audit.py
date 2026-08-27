@@ -20,11 +20,11 @@ from xml.sax.saxutils import escape as xml_escape
 from .config import Settings
 
 
-AUDIT_SCHEMA_VERSION = 1
+AUDIT_SCHEMA_VERSION = 2
 AUDIT_FIELDS = (
     "schema_version", "record_type", "event_id", "invocation_id", "timestamp", "source", "agent",
-    "client", "connection_id", "session_id", "project_id", "operation", "action", "status",
-    "outcome_code", "result_summary", "duration_ms", "error_type",
+    "client", "connection_id", "session_id", "session_label", "project_id", "operation", "action", "action_text",
+    "status", "outcome_code", "result_summary", "result_text", "capture_level", "duration_ms", "error_type",
 )
 FINISHED_STATUS = {"succeeded", "failed", "noop", "blocked"}
 SECRET_PATTERN = re.compile(
@@ -65,6 +65,39 @@ def _sanitize(value: Any, *, depth: int = 0) -> Any:
     return _redact_text(str(value))
 
 
+def _sanitize_diagnostic(value: Any, *, limit: int, collection_limit: int, depth: int = 0) -> Any:
+    """保存诊断附件前递归脱敏并限制总体体积，full-local 也不绕过密钥保护。"""
+    if depth > 10:
+        return "[TRUNCATED: depth]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _redact_text(value, min(limit, 16_000))
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in list(value.items())[:collection_limit]:
+            safe_key = _redact_text(str(key), 120)
+            result[safe_key] = "[REDACTED]" if re.search(r"(?i)(authorization|cookie|password|secret|token|private[_-]?key)", safe_key) else _sanitize_diagnostic(item, limit=limit, collection_limit=collection_limit, depth=depth + 1)
+        if len(value) > collection_limit:
+            result["_truncated_fields"] = len(value) - collection_limit
+        return _truncate_diagnostic(result, limit)
+    if isinstance(value, (list, tuple, set)):
+        result = [_sanitize_diagnostic(item, limit=limit, collection_limit=collection_limit, depth=depth + 1) for item in list(value)[:collection_limit]]
+        if len(value) > collection_limit:
+            result.append(f"[TRUNCATED: {len(value) - collection_limit} items]")
+        return _truncate_diagnostic(result, limit)
+    return _redact_text(str(value), min(limit, 16_000))
+
+
+def _truncate_diagnostic(value: Any, limit: int) -> Any:
+    """以 UTF-8 字节预算约束诊断记录，保证恶意或异常返回不会无限膨胀。"""
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    preview = encoded[:limit].decode("utf-8", errors="ignore")
+    return {"_truncated": True, "_original_bytes": len(encoded), "preview": preview}
+
+
 def audit_project_id(project_path: str | None) -> str | None:
     """将本机项目路径转换为不暴露绝对路径的稳定标识。"""
     if not project_path or not str(project_path).strip():
@@ -79,14 +112,13 @@ def audit_project_id(project_path: str | None) -> str | None:
 
 
 def summarize_tool_action(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """只从白名单字段构造 MCP 动作摘要，避免落盘正文或任意参数。"""
+    """只从白名单字段构造 MCP 动作摘要，保留足以人工审查的脱敏关键词预览。"""
     if name == "search_knowledge":
-        # 查询文本和标签均可能来自用户输入；审计只需要证明发生了检索及其过滤形态，不能保存原文。
+        # 检索词对审计有解释价值，因此保存限长且脱敏的预览，仍不保存完整 prompt。
         return {
-            "query_chars": len(str(arguments.get("query") or "")),
-            "has_type_filter": bool(arguments.get("type")),
-            "has_status_filter": bool(arguments.get("status")),
-            "tag_count": len(arguments.get("tags") or []),
+            "query_preview": _redact_text(str(arguments.get("query") or ""), 160),
+            "type": _sanitize(arguments.get("type")), "status": _sanitize(arguments.get("status")),
+            "tags": _sanitize(arguments.get("tags") or []),
             "limit": _sanitize(arguments.get("limit", 5)),
         }
     if name == "read_knowledge":
@@ -107,6 +139,59 @@ def summarize_tool_action(name: str, arguments: dict[str, Any]) -> dict[str, Any
     if name == "close_work_state":
         return _sanitize({"work_id": arguments.get("work_id"), "status": arguments.get("status")})
     return {"tool": _redact_text(name, 120)}
+
+
+def describe_action(operation: str, action: dict[str, Any] | None) -> str:
+    """把白名单动作摘要翻译为稳定中文说明，不依赖模型生成或原始 prompt。"""
+    action = action or {}
+    if operation == "search_knowledge":
+        filters = []
+        if action.get("type"):
+            filters.append(f"类型 {action['type']}")
+        if action.get("status"):
+            filters.append(f"状态 {action['status']}")
+        if action.get("tags"):
+            filters.append("标签 " + "、".join(str(tag) for tag in action["tags"]))
+        suffix = f"；过滤：{'，'.join(filters)}" if filters else ""
+        return f"检索知识：关键词“{action.get('query_preview') or '（空）'}”；最多返回 {action.get('limit', 5)} 条{suffix}"
+    if operation == "read_knowledge":
+        section = action.get("section") or "全文"
+        return f"读取知识“{action.get('id_or_path') or '未知对象'}”的“{section}”；字符预算 {action.get('max_chars', 4000)}"
+    if operation == "get_work_state":
+        return f"查询项目 {action.get('project_id') or '未知项目'} 的活动任务"
+    if operation == "checkpoint_work_state":
+        return f"为任务 {action.get('work_id') or '新任务'} 写入 {action.get('status') or 'active'} 检查点；变更文件 {action.get('changed_files_count', 0)} 个"
+    if operation == "close_work_state":
+        return f"关闭任务 {action.get('work_id') or '未知任务'}；状态 {action.get('status') or '未知'}"
+    if operation == "initialize":
+        return "初始化 MCP 连接"
+    event = action.get("event") or operation
+    return f"处理生命周期事件：{event}"
+
+
+def describe_result(operation: str, status: str, outcome_code: str | None, result: dict[str, Any] | None) -> str:
+    """将结果代码和最小统计信息转换为可读结论，失败不写入完整异常文本。"""
+    result = result or {}
+    if status == "failed":
+        return f"执行失败：{outcome_code or '未知错误'}"
+    messages = {
+        "results_returned": f"检索完成，返回 {result.get('count', 0)} 条结果",
+        "knowledge_read": "已读取知识" + ("（内容已截断）" if result.get("truncated") else ""),
+        "work_state_returned": f"找到 {result.get('count', 0)} 个活动任务" + ("（唯一候选）" if result.get("unique") else ""),
+        "checkpoint_created": "检查点已创建",
+        "work_state_closed": "任务已关闭",
+        "connection_initialized": "MCP 连接已初始化",
+        "resume_context_injected": "已注入唯一活动任务的恢复信息",
+        "no_active_work": "没有活动任务，无需处理",
+        "multiple_active_work": f"发现 {result.get('candidate_count', 0)} 个候选，未注入恢复信息",
+        "checkpoint_required": "检测到检查点后的 Git 变化，已阻止结束",
+        "git_unchanged": "Git 状态未变化，无需阻止结束",
+        "recursion_skipped": "检测到递归 Stop hook，已跳过",
+        "pre_compact_observed": "已记录上下文压缩前事件",
+        "session_end_observed": "已记录会话结束事件",
+        "invalid_project": "未提供有效项目路径",
+    }
+    return messages.get(outcome_code or "", f"处理完成：{outcome_code or status}")
 
 
 def summarize_tool_result(name: str, value: Any) -> tuple[str, dict[str, Any]]:
@@ -134,8 +219,10 @@ class AuditStore:
         self.clock = clock
         self.root = settings.workspace_root / "audit"
         self.events_root = self.root / "events"
+        self.diagnostic_root = self.root / "diagnostic"
         self.fallback_root = self.root / "fallback"
         self.reports_root = self.root / "reports"
+        self.session_registry_path = self.root / "sessions.json"
         self.lock_path = settings.workspace_root / "runtime" / "audit.lock"
 
     @staticmethod
@@ -148,6 +235,46 @@ class AuditStore:
 
     def _event_path(self, current: datetime) -> Path:
         return self.events_root / f"{current:%Y}" / f"{current:%m}" / f"{current:%Y-%m-%d}.jsonl"
+
+    def _diagnostic_path(self, current: datetime) -> Path:
+        return self.diagnostic_root / f"{current:%Y}" / f"{current:%m}" / f"{current:%Y-%m-%d}.jsonl"
+
+    def resolve_session_label(
+        self, *, agent: str, source: str, session_id: str | None, connection_id: str | None,
+        project_id: str | None, supplied_label: str | None = None,
+    ) -> str:
+        """分配可读且跨进程稳定的本机会话标签，不把连接 ID 伪装成真实会话 ID。"""
+        provided = _redact_text(str(supplied_label or "").strip(), 240)
+        identity = str(session_id or connection_id or "").strip()
+        if not identity:
+            return provided or f"{agent or 'unknown'} · 未提供会话 ID"
+        key = hashlib.sha256(f"{agent}|{source}|{identity}".encode("utf-8")).hexdigest()
+        try:
+            with self._lock():
+                registry: dict[str, str] = {}
+                if self.session_registry_path.is_file():
+                    registry = json.loads(self.session_registry_path.read_text(encoding="utf-8"))
+                if key in registry:
+                    return registry[key]
+                project_name = (project_id or "项目").rsplit("-", 1)[0] or "项目"
+                ordinal = 1 + sum(value.startswith(f"{agent} ·") for value in registry.values())
+                kind = "会话" if session_id else "MCP 连接"
+                label = provided or f"{agent or 'unknown'} · {project_name} · {kind} {ordinal:03d} · {self.clock().astimezone():%Y-%m-%d %H:%M}"
+                registry[key] = label
+                self.session_registry_path.parent.mkdir(parents=True, exist_ok=True)
+                fd, temporary = tempfile.mkstemp(prefix="sessions.", suffix=".tmp", dir=self.session_registry_path.parent)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                        json.dump(registry, stream, ensure_ascii=False, separators=(",", ":"))
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, self.session_registry_path)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+                return label
+        except Exception:
+            return provided or f"{agent or 'unknown'} · {'会话' if session_id else 'MCP 连接'}"
 
     @contextmanager
     def _lock(self, timeout: float = 1.0) -> Iterator[None]:
@@ -197,14 +324,16 @@ class AuditStore:
         normalized["timestamp"] = str(normalized.get("timestamp") or timestamp)
         normalized["agent"] = _redact_text(str(normalized.get("agent") or "unknown"), 120)
         for field, limit in (
-            ("invocation_id", 120), ("connection_id", 120), ("session_id", 160), ("project_id", 120),
+            ("invocation_id", 120), ("connection_id", 120), ("session_id", 160), ("session_label", 240), ("project_id", 120),
             ("operation", 120), ("status", 40), ("outcome_code", 120), ("error_type", 120),
+            ("action_text", 1200), ("result_text", 1200),
         ):
             if normalized.get(field) is not None:
                 normalized[field] = _redact_text(str(normalized[field]), limit)
         normalized["action"] = _sanitize(normalized.get("action"))
         normalized["result_summary"] = _sanitize(normalized.get("result_summary"))
         normalized["client"] = _sanitize(normalized.get("client"))
+        normalized["capture_level"] = normalized.get("capture_level") if normalized.get("capture_level") in {"safe", "diagnostic", "full-local"} else "safe"
         return {field: normalized.get(field) for field in AUDIT_FIELDS}
 
     def _write_fallback(self, record: dict[str, Any], current: datetime) -> dict[str, Any]:
@@ -242,17 +371,65 @@ class AuditStore:
         except Exception:
             return self._write_fallback(normalized, current)
 
+    def write_diagnostic(
+        self, *, invocation_id: str, source: str, agent: str, operation: str, phase: str,
+        session_id: str | None, session_label: str | None, payload: Any,
+    ) -> None:
+        """按显式分级保存本机诊断附件；任何故障均被吞没，不能影响业务调用。"""
+        level = self.settings.audit_capture_level
+        if level == "safe":
+            return
+        current, timestamp = self._timestamp()
+        limit = 32_000 if level == "diagnostic" else 256_000
+        value = _sanitize_diagnostic(payload, limit=limit, collection_limit=50 if level == "diagnostic" else 500)
+        record = {
+            "schema_version": 1, "record_type": "diagnostic", "event_id": self.new_id(), "invocation_id": invocation_id,
+            "timestamp": timestamp, "source": source, "agent": _redact_text(agent, 120), "operation": operation,
+            "phase": phase, "session_id": _redact_text(session_id, 160) if session_id else None,
+            "session_label": _redact_text(session_label, 240) if session_label else None,
+            "capture_level": level, "payload": value,
+        }
+        try:
+            target = self._diagnostic_path(current)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock():
+                with target.open("a", encoding="utf-8", newline="\n") as stream:
+                    stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    stream.flush()
+        except Exception:
+            pass
+
+    def read_diagnostics(self, invocation_id: str) -> dict[str, Any]:
+        """读取某次调用的独立诊断附件；损坏附件不影响主审计查询。"""
+        items: list[dict[str, Any]] = []
+        damaged: list[str] = []
+        if self.diagnostic_root.exists():
+            for path in sorted(self.diagnostic_root.rglob("*.jsonl")):
+                try:
+                    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                        if line.strip():
+                            value = json.loads(line)
+                            if value.get("invocation_id") == invocation_id:
+                                items.append(value)
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    damaged.append(f"{path}:{number if 'number' in locals() else 1}")
+        return {"count": len(items), "items": items, "damaged": damaged}
+
     def start(
         self, *, source: str, agent: str, operation: str, action: dict[str, Any] | None = None,
         client: dict[str, Any] | None = None, connection_id: str | None = None,
-        session_id: str | None = None, project_id: str | None = None,
+        session_id: str | None = None, project_id: str | None = None, session_label: str | None = None,
     ) -> dict[str, Any]:
+        session_label = session_label or self.resolve_session_label(
+            agent=agent, source=source, session_id=session_id, connection_id=connection_id, project_id=project_id,
+        )
         invocation_id = self.new_id()
         started = time.perf_counter()
         result = self.write({
             "record_type": "invocation_started", "invocation_id": invocation_id, "source": source,
             "agent": agent or "unknown", "client": client, "connection_id": connection_id,
-            "session_id": session_id, "project_id": project_id, "operation": operation, "action": action,
+            "session_id": session_id, "session_label": session_label, "project_id": project_id, "operation": operation, "action": action,
+            "action_text": describe_action(operation, action), "capture_level": self.settings.audit_capture_level,
             "status": "started",
         })
         return {"invocation_id": invocation_id, "started": started, "write": result}
@@ -261,23 +438,29 @@ class AuditStore:
         self, invocation: dict[str, Any], *, source: str, agent: str, operation: str, status: str,
         outcome_code: str, result_summary: dict[str, Any] | None = None, error_type: str | None = None,
         client: dict[str, Any] | None = None, connection_id: str | None = None,
-        session_id: str | None = None, project_id: str | None = None,
+        session_id: str | None = None, project_id: str | None = None, session_label: str | None = None,
     ) -> dict[str, Any]:
         safe_status = status if status in FINISHED_STATUS else "failed"
         duration = max(0, round((time.perf_counter() - float(invocation["started"])) * 1000))
         return self.write({
             "record_type": "invocation_finished", "invocation_id": invocation["invocation_id"],
             "source": source, "agent": agent or "unknown", "client": client, "connection_id": connection_id,
-            "session_id": session_id, "project_id": project_id, "operation": operation,
+            "session_id": session_id, "session_label": session_label, "project_id": project_id, "operation": operation,
             "status": safe_status, "outcome_code": outcome_code, "result_summary": result_summary,
-            "duration_ms": duration, "error_type": error_type,
+            "result_text": describe_result(operation, safe_status, outcome_code, result_summary),
+            "capture_level": self.settings.audit_capture_level, "duration_ms": duration, "error_type": error_type,
         })
 
     def connection_initialized(self, *, agent: str, client: dict[str, Any], connection_id: str) -> dict[str, Any]:
+        session_label = self.resolve_session_label(
+            agent=agent, source="mcp", session_id=None, connection_id=connection_id, project_id=None,
+        )
         return self.write({
             "record_type": "connection_initialized", "source": "mcp", "agent": agent or "unknown",
-            "client": client, "connection_id": connection_id, "operation": "initialize", "status": "succeeded",
-            "outcome_code": "connection_initialized",
+            "client": client, "connection_id": connection_id, "session_label": session_label, "operation": "initialize", "status": "succeeded",
+            "outcome_code": "connection_initialized", "action_text": describe_action("initialize", None),
+            "result_text": describe_result("initialize", "succeeded", "connection_initialized", None),
+            "capture_level": self.settings.audit_capture_level,
         })
 
     def _iter_source_files(self) -> Iterator[tuple[Path, bool]]:
@@ -373,11 +556,11 @@ def combine_invocations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             item["started_at"] = event.get("timestamp")
         else:
             for key in (
-                "schema_version", "source", "agent", "client", "connection_id", "session_id", "project_id", "operation",
+                "schema_version", "source", "agent", "client", "connection_id", "session_id", "session_label", "project_id", "operation", "capture_level",
             ):
                 if key not in item or item.get(key) is None:
                     item[key] = event.get(key)
-            for key in ("status", "outcome_code", "result_summary", "duration_ms", "error_type"):
+            for key in ("status", "outcome_code", "result_summary", "result_text", "duration_ms", "error_type"):
                 item[key] = event.get(key)
             item["finished_at"] = event.get("timestamp")
             item["finish_event_id"] = event.get("event_id")
@@ -387,6 +570,14 @@ def combine_invocations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             item["status"] = "incomplete"
             item["outcome_code"] = "missing_finish_event"
     combined = list(invocations.values()) + standalone
+    # v1 历史日志没有可读字段；报告阶段即时派生，避免迁移或改写审计事实源。
+    for item in combined:
+        item["action_text"] = item.get("action_text") or describe_action(str(item.get("operation") or ""), item.get("action"))
+        item["result_text"] = item.get("result_text") or describe_result(
+            str(item.get("operation") or ""), str(item.get("status") or ""), item.get("outcome_code"), item.get("result_summary"),
+        )
+        item["session_label"] = item.get("session_label") or f"{item.get('agent') or 'unknown'} · 历史记录（未提供会话标签）"
+        item["capture_level"] = item.get("capture_level") or "safe"
     combined.sort(key=lambda item: str(item.get("started_at") or item.get("timestamp") or ""))
     return combined
 
@@ -426,14 +617,13 @@ def render_markdown(items: list[dict[str, Any]], summary: dict[str, Any], title_
     ])
     for agent, count in sorted(summary["agents"].items()):
         lines.append(f"| {esc(agent)} | {count} |")
-    lines.extend(["", "## 调用明细", "", "| 时间 | Agent | 来源 | 操作 | 动作摘要 | 结果 | 耗时 |", "|---|---|---|---|---|---|---:|"])
+    lines.extend(["", "## 调用明细", "", "| 时间 | 会话 | Agent | 来源 | 动作说明 | 结果说明 | 耗时 |", "|---|---|---|---|---|---|---:|"])
     for item in items:
         timestamp = item.get("started_at") or item.get("timestamp") or ""
-        action = json.dumps(item.get("action"), ensure_ascii=False, separators=(",", ":")) if item.get("action") else ""
         duration = "" if item.get("duration_ms") is None else f"{item['duration_ms']} ms"
         lines.append(
-            f"| {esc(timestamp)} | {esc(item.get('agent'))} | {esc(item.get('source'))} | {esc(item.get('operation'))} | "
-            f"{esc(action)} | {esc(item.get('status'))}/{esc(item.get('outcome_code'))} | {esc(duration)} |"
+            f"| {esc(timestamp)} | {esc(item.get('session_label'))} | {esc(item.get('agent'))} | {esc(item.get('source'))} | "
+            f"{esc(item.get('action_text'))} | {esc(item.get('result_text'))} | {esc(duration)} |"
         )
     if summary["damaged"]:
         lines.extend(["", "## 无法解析的记录", ""] + [f"- `{path}`" for path in summary["damaged"]])
@@ -603,7 +793,7 @@ def write_excel_report(path: Path, items: list[dict[str, Any]], summary: dict[st
         overview_rows.append(_xlsx_row(tail_row, [("", 4, False), ("", 4, False), (source, 4, False), (count, 4, True)]))
         tail_row += 1
 
-    headers = ["开始时间", "结束时间", "Agent", "来源", "操作", "动作摘要", "状态", "结果代码", "耗时 (ms)", "项目 ID", "Session ID", "调用 ID", "结果摘要", "错误类型", "Fallback"]
+    headers = ["开始时间", "结束时间", "会话名称", "Agent", "来源", "操作", "动作说明", "结果说明", "状态", "耗时 (ms)", "项目 ID", "诊断级别", "调用 ID", "原始会话 ID", "技术动作摘要", "技术结果摘要", "错误类型", "Fallback"]
     detail_rows = [_xlsx_row(1, [(header, 2, False) for header in headers])]
     for row_number, item in enumerate(items, start=2):
         action = item.get("action") if item.get("action") is not None else ""
@@ -612,17 +802,18 @@ def write_excel_report(path: Path, items: list[dict[str, Any]], summary: dict[st
         status_style = {"succeeded": 5, "failed": 6, "blocked": 7}.get(status, 4)
         detail_rows.append(_xlsx_row(row_number, [
             (item.get("started_at") or item.get("timestamp"), 4, False), (item.get("finished_at"), 4, False),
-            (item.get("agent"), 4, False), (item.get("source"), 4, False), (item.get("operation"), 4, False),
-            (action, 8, False), (status, status_style, False), (item.get("outcome_code"), 4, False),
-            (item.get("duration_ms"), 4, True), (item.get("project_id"), 4, False), (item.get("session_id"), 4, False),
-            (item.get("invocation_id") or item.get("event_id"), 4, False), (result, 8, False),
+            (item.get("session_label"), 4, False), (item.get("agent"), 4, False), (item.get("source"), 4, False),
+            (item.get("operation"), 4, False), (item.get("action_text"), 8, False), (item.get("result_text"), 8, False),
+            (status, status_style, False), (item.get("duration_ms"), 4, True), (item.get("project_id"), 4, False),
+            (item.get("capture_level"), 4, False), (item.get("invocation_id") or item.get("event_id"), 4, False),
+            (item.get("session_id"), 4, False), (action, 8, False), (result, 8, False),
             (item.get("error_type"), 4, False), ("是" if item.get("_fallback") else "否", 4, False),
         ]))
     damaged_rows = [_xlsx_row(1, [("无法解析的审计文件", 2, False)])]
     damaged_rows.extend(_xlsx_row(row, [(damaged, 4, False)]) for row, damaged in enumerate(summary["damaged"], start=2))
 
     overview = _xlsx_sheet_xml(overview_rows, columns=[24, 18, 20, 30], merges=["A1:D1"])
-    details = _xlsx_sheet_xml(detail_rows, columns=[25, 25, 18, 12, 26, 42, 14, 28, 14, 25, 24, 40, 36, 24, 12], freeze_row=1, freeze_columns=5, auto_filter=f"A1:O{max(1, len(items) + 1)}")
+    details = _xlsx_sheet_xml(detail_rows, columns=[25, 25, 38, 18, 12, 26, 44, 44, 14, 14, 25, 16, 40, 28, 40, 36, 24, 12], freeze_row=1, freeze_columns=6, auto_filter=f"A1:R{max(1, len(items) + 1)}")
     damaged = _xlsx_sheet_xml(damaged_rows, columns=[100], freeze_row=1, auto_filter=f"A1:A{max(1, len(summary['damaged']) + 1)}")
     content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'''

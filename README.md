@@ -50,7 +50,7 @@ MCP、知识模型和工作状态模型不依赖 Codex 或 Claude Code。平台�
 
 ### 2.5 审计不是知识或 Working State
 
-`workspace/audit/events/*.jsonl` 是本机操作审计事实源，Markdown 日报只是可重建视图。审计只保存白名单字段的脱敏摘要，不保存 prompt、transcript、隐藏推理、知识正文、完整 MCP 返回值或 hook payload；写入失败必须 fail-open，历史不会自动清理。
+`workspace/audit/events/*.jsonl` 是本机操作审计事实源，Excel 日报是主可重建视图，Markdown 仅保留兼容入口。默认 `safe` 审计只保存白名单字段的脱敏摘要；用户显式开启 `diagnostic` 或 `full-local` 后，受预算和脱敏保护的 MCP/hook 输入输出会写入独立诊断目录。任何级别都不保存聊天全文、隐藏推理、transcript、二进制附件、未脱敏密钥或完整 traceback；写入失败必须 fail-open，历史不会自动清理。
 
 ### 2.6 根 README 不参与默认 Agent 上下文
 
@@ -345,7 +345,8 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 - `archive/`：已完成、放弃或被替代的任务；
 - `audit/events/`：按日 JSONL 审计事实源；
 - `audit/fallback/`：主写入或 hook wrapper 启动失败时的独立 JSON；
-- `audit/reports/`：显式生成、可重建的 Markdown 报告；
+- `audit/diagnostic/`：按调用 ID 关联、仅在显式级别开启时写入的本机诊断输入输出；
+- `audit/reports/`：显式生成、可重建的 Excel 报告；Markdown 兼容报告暂时弃用；
 - `db/aikb-knowledge.db`：知识派生索引；
 - `db/aikb-work.db`：工作状态派生索引；
 - `runtime/`：锁、临时文件和运行标记。
@@ -646,9 +647,13 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report --date 2026-08-27 --output E:\Reports\aikb-audit-2026-08-27.xlsx
 # 暂时弃用：保留 Markdown 兼容报告，默认写入 workspace/audit/reports/2026-08-27.md
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report-md --date 2026-08-27
+# 查看某次调用在 diagnostic/full-local 级别保存的本机输入输出
+pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit diagnostic <调用ID>
 ```
 
-`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，并输出 JSON 格式的文件路径与记录数；工作簿包含“概览”“调用明细”“损坏记录”三个工作表，其中调用明细可筛选且冻结表头。同一日期再次生成会原子覆盖该派生报告。`--output` 必须是 `.xlsx` 文件路径，不能传目录，例如不能传 `workspace/audit/`；传入目录或错误扩展名会得到明确错误。Markdown 方案暂时保留为 `audit report-md`，该命令会给出弃用提示。审计没有自动保留期或清理行为。
+`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，并输出 JSON 格式的文件路径与记录数；工作簿包含“概览”“调用明细”“损坏记录”三个工作表，其中调用明细默认显示可读会话名称、中文动作说明和中文结果说明，原始会话 ID 与技术摘要置于靠后列。Markdown 方案暂时保留为 `audit report-md`，该命令会给出弃用提示。
+
+审计捕获级别由当前进程环境变量 `AIKB_AUDIT_CAPTURE_LEVEL` 控制：默认 `safe` 只写安全摘要；`diagnostic` 额外写入经脱敏、限长的 MCP/hook 输入输出；`full-local` 提高诊断记录预算，仍会脱敏常见密钥、忽略隐藏推理和二进制附件。诊断数据位于 `workspace/audit/diagnostic/`，通过调用 ID 与主审计记录关联，可用 `audit diagnostic <调用ID>` 查询。示例：`$env:AIKB_AUDIT_CAPTURE_LEVEL = 'diagnostic'`。所有审计数据均不进 Git，且没有自动保留期或清理行为。
 
 ### 运行完整自动测试
 

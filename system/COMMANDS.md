@@ -408,7 +408,11 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 ### 4.9 `audit`：查询本机审计
 
-审计命令读取 `workspace/audit/events/**/*.jsonl` 和 fallback JSON，先把同一 invocation 的开始/结束事件合并；缺少结束事件的调用显示为 `incomplete`。所有时间过滤使用本机时区。审计命令只读审计文件，报告是可重建派生物。
+审计命令读取 `workspace/audit/events/**/*.jsonl` 和 fallback JSON，先把同一 invocation 的开始/结束事件合并；缺少结束事件的调用显示为 `incomplete`。所有时间过滤使用本机时区。审计命令只读审计文件，报告是可重建派生物。默认 `safe` 级别只保存可读会话标签、中文动作/结果说明及安全摘要；若要保存本机诊断输入输出，须在启动 Agent 或命令前设置当前进程环境变量：
+
+    $env:AIKB_AUDIT_CAPTURE_LEVEL = 'diagnostic'
+
+可用值为 `safe`（默认）、`diagnostic`（脱敏且限长的输入输出）和 `full-local`（提高诊断记录预算，仍脱敏常见密钥，不保存隐藏推理、二进制或完整 traceback）。诊断附件写入 `workspace/audit/diagnostic/`，不会进入 Git。
 
 #### `audit list`
 
@@ -434,6 +438,19 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 参数只有必填位置参数 `event_id`。它可以是开始事件 ID、结束事件 ID 或 invocation ID；命令会在合并后的记录中查找。找到时输出完整的脱敏审计项并返回 `0`；找不到时输出错误 JSON 并返回 `1`。该子命令没有 `--date`、`--since` 等过滤选项。
 
+#### `audit diagnostic`
+
+    python -m aikb audit diagnostic 'invocation-id'
+
+参数只有必填位置参数 `invocation_id`，必须是一次 MCP 或 hook 调用的 invocation ID。命令只读取该调用在 `workspace/audit/diagnostic/` 中的输入、输出或错误诊断附件，输出 JSON `count`、`items` 和 `damaged`；没有附件时返回成功的 `count=0`。通常表示未设置 `AIKB_AUDIT_CAPTURE_LEVEL`，或该次调用发生在设置前。
+
+示例：
+
+    $env:AIKB_AUDIT_CAPTURE_LEVEL = 'diagnostic'
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-mcp/scripts/aikb.ps1 audit diagnostic 'a1b2c3d4...'
+
+诊断记录始终经过密钥脱敏、NUL 清理和大小限制；`full-local` 只增加预算，不等同于保存聊天记录或模型隐藏推理。
+
 #### `audit summary`
 
     python -m aikb audit summary --since 7d --agent codex
@@ -456,7 +473,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
     python -m aikb audit report
     python -m aikb audit report --date 2026-08-27 --output 'E:\Reports\aikb-audit-2026-08-27.xlsx'
 
-结果：输出 JSON `{"output":"绝对路径","count":数量}`。工作簿包含“概览”“调用明细”“损坏记录”三个工作表；调用明细支持筛选并冻结表头。重复生成同一输出会原子覆盖旧派生报告，不改变 JSONL 审计事实源。
+结果：输出 JSON `{"output":"绝对路径","count":数量}`。工作簿包含“概览”“调用明细”“损坏记录”三个工作表；调用明细优先展示会话名称、中文动作说明和中文结果说明，原始 session ID 与技术摘要位于靠后列；表支持筛选并冻结表头。重复生成同一输出会原子覆盖旧派生报告，不改变 JSONL 审计事实源。
 
 异常情况：目录作为 `--output`、扩展名不是 `.xlsx`、父路径是文件或输出不可写时失败；目录/扩展名校验返回 `2`，写入系统错误返回 `1`。日期格式错误会在过滤阶段失败。
 
@@ -599,6 +616,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 | 查知识 | `aikb.ps1 search`，再 `aikb.ps1 read` |
 | 查活动任务 | `aikb.ps1 work-get` |
 | 查审计事件 | `aikb.ps1 audit list/show/summary` |
+| 查看已启用的诊断输入输出 | `aikb.ps1 audit diagnostic <调用ID>` |
 | 生成人类审计报告 | `aikb.ps1 audit report` |
 | 结构/适配器/配置/性能验收 | `validate-structure.ps1`、`validate-adapters.ps1`、`validate-setup.ps1`、`validate-performance.ps1` |
 

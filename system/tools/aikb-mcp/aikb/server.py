@@ -187,11 +187,18 @@ class MCPServer:
         """执行已声明的 MCP 工具，并将异常转换为客户端可读的工具错误。"""
         session_id = str(arguments.get("session_id") or "") or None
         project = audit_project_id(arguments.get("project_path"))
+        session_label = self.audit.resolve_session_label(
+            agent=self.agent, source="mcp", session_id=session_id, connection_id=self.connection_id, project_id=project,
+        )
         invocation: dict[str, Any] | None = None
         try:
             invocation = self.audit.start(
                 source="mcp", agent=self.agent, operation=name, action=summarize_tool_action(name, arguments),
-                client=self.client, connection_id=self.connection_id, session_id=session_id, project_id=project,
+                client=self.client, connection_id=self.connection_id, session_id=session_id, session_label=session_label, project_id=project,
+            )
+            self.audit.write_diagnostic(
+                invocation_id=invocation["invocation_id"], source="mcp", agent=self.agent, operation=name, phase="input",
+                session_id=session_id, session_label=session_label, payload={"arguments": arguments},
             )
         except Exception:
             pass
@@ -229,7 +236,11 @@ class MCPServer:
                     self.audit.finish(
                         invocation, source="mcp", agent=self.agent, operation=name, status="succeeded",
                         outcome_code=outcome_code, result_summary=result_summary, client=self.client,
-                        connection_id=self.connection_id, session_id=session_id, project_id=project,
+                        connection_id=self.connection_id, session_id=session_id, session_label=session_label, project_id=project,
+                    )
+                    self.audit.write_diagnostic(
+                        invocation_id=invocation["invocation_id"], source="mcp", agent=self.agent, operation=name, phase="output",
+                        session_id=session_id, session_label=session_label, payload={"result": value},
                     )
                 except Exception:
                     pass
@@ -240,7 +251,12 @@ class MCPServer:
                     self.audit.finish(
                         invocation, source="mcp", agent=self.agent, operation=name, status="failed",
                         outcome_code="tool_failed", error_type=type(exc).__name__, client=self.client,
-                        connection_id=self.connection_id, session_id=session_id, project_id=project,
+                        connection_id=self.connection_id, session_id=session_id, session_label=session_label, project_id=project,
+                    )
+                    self.audit.write_diagnostic(
+                        invocation_id=invocation["invocation_id"], source="mcp", agent=self.agent, operation=name, phase="error",
+                        session_id=session_id, session_label=session_label,
+                        payload={"error_type": type(exc).__name__, "error_message": str(exc)},
                     )
                 except Exception:
                     pass

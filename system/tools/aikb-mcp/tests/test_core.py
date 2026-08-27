@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -236,7 +237,8 @@ class AuditTests(unittest.TestCase):
             {"query": query, "type": "knowledge", "status": "verified", "tags": ["内部", "秘密"], "limit": 5},
         )
         self.assertEqual(action, {
-            "query_chars": len(query), "has_type_filter": True, "has_status_filter": True, "tag_count": 2, "limit": 5,
+            "query_preview": "中文 Authorization=[REDACTED]", "type": "knowledge", "status": "verified",
+            "tags": ["内部", "秘密"], "limit": 5,
         })
         invocation = self.store.start(
             source="mcp", agent="codex", operation="search_knowledge",
@@ -256,14 +258,17 @@ class AuditTests(unittest.TestCase):
         loaded = self.store.read_events()
         self.assertTrue(all(set(event) - {"_fallback"} == set(AUDIT_FIELDS) for event in loaded["events"]))
         schema = json.loads((TOOL_ROOT.parents[1] / "schemas" / "audit-event.schema.json").read_text(encoding="utf-8"))
-        self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+        self.assertIn(2, schema["properties"]["schema_version"]["enum"])
         items = combine_invocations(loaded["events"])
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["status"], "succeeded")
+        self.assertIn("MCP 连接", items[0]["session_label"])
+        self.assertIn("检索知识", items[0]["action_text"])
+        self.assertIn("返回 2 条结果", items[0]["result_text"])
         summary = audit_summary(items, damaged=loaded["damaged"], fallback_count=0)
         markdown = render_markdown(items, summary, "2026-08-27")
         self.assertIn("AIKB 审计报告", markdown)
-        self.assertIn("search_knowledge", markdown)
+        self.assertIn("检索知识", markdown)
         base = [
             sys.executable, "-m", "aikb", "--repo-root", str(self.fixture.root),
             "--workspace-root", str(self.fixture.settings.workspace_root), "audit",
@@ -291,7 +296,7 @@ class AuditTests(unittest.TestCase):
             styles_xml = report.read("xl/styles.xml").decode("utf-8")
         self.assertIn("search_knowledge", detail_xml)
         self.assertIn("autoFilter", detail_xml)
-        self.assertIn('xSplit="5"', detail_xml)
+        self.assertIn('xSplit="6"', detail_xml)
         self.assertIn('wrapText="1"', styles_xml)
         custom_path = self.fixture.settings.workspace_root / "custom-audit.xlsx"
         subprocess.run(
@@ -306,7 +311,7 @@ class AuditTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(deprecated.stdout)["output"], str(markdown_path.resolve()))
         self.assertIn("暂时弃用", deprecated.stderr)
-        self.assertIn("search_knowledge", markdown_path.read_text(encoding="utf-8"))
+        self.assertIn("检索知识", markdown_path.read_text(encoding="utf-8"))
         invalid_output = subprocess.run(
             [*base, "report", "--date", "2026-08-27", "--output", str(self.fixture.settings.workspace_root / "audit")],
             cwd=TOOL_ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
@@ -320,6 +325,21 @@ class AuditTests(unittest.TestCase):
         )
         self.assertEqual(invalid_extension.returncode, 2)
         self.assertIn("--output 必须使用 .xlsx 扩展名", invalid_extension.stderr)
+
+    def test_diagnostic_capture_is_opt_in_and_redacted(self) -> None:
+        """确认诊断输入输出只在显式开启后保存，并继续脱敏敏感字段。"""
+        diagnostic_store = AuditStore(replace(self.fixture.settings, audit_capture_level="diagnostic"), clock=self.store.clock)
+        invocation = diagnostic_store.start(source="mcp", agent="codex", operation="search_knowledge", connection_id="test-connection")
+        diagnostic_store.write_diagnostic(
+            invocation_id=invocation["invocation_id"], source="mcp", agent="codex", operation="search_knowledge",
+            phase="input", session_id=None, session_label="Codex · MCP 连接 001",
+            payload={"query": "缓存", "authorization": "Bearer plain-text-secret-value"},
+        )
+        captured = diagnostic_store.read_diagnostics(invocation["invocation_id"])
+        self.assertEqual(captured["count"], 1)
+        serialized = json.dumps(captured, ensure_ascii=False)
+        self.assertIn("缓存", serialized)
+        self.assertNotIn("plain-text-secret-value", serialized)
 
     def test_redaction_covers_bearer_and_multiword_secret_values(self) -> None:
         """确认常见认证头和包含空格的秘密不会在审计文本中残留后半段。"""

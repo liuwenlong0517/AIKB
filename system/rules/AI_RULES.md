@@ -44,4 +44,4 @@
 
 `AIKB_HOME` 控制仓保存稳定入口和 `system/` 控制面；`AIKB_KNOWLEDGE_HOME` 知识仓保存候选、正式知识、知识索引和目录；`workspace/` 保存本机状态与派生数据库。控制面不进入知识仓 `CATALOG.md`，工作状态不进入知识索引，正式知识只写入知识仓。拆仓后两仓分别提交，知识变更不得修改控制仓的转发入口。
 
-`workspace/audit/` 是与 Working State 分离的本机操作审计面。AIKB 核心可以自动记录 MCP tool 和 hook 的时间、Agent、动作安全摘要、结果与耗时，但不得记录聊天全文、prompt、隐藏推理、transcript、完整 MCP 返回值、完整 hook payload、知识正文、密钥或完整 traceback。JSONL 是审计事实源，Markdown 报告只是可重建视图；审计失败必须 fail-open，日志不得自动进入知识仓或被自动清理。
+`workspace/audit/` 是独立本机审计面。默认 `safe` 记录 MCP/hook 的时间、Agent、会话标签、摘要、结果和耗时；显式设置 `AIKB_AUDIT_CAPTURE_LEVEL=diagnostic|full-local` 时，可在 `audit/diagnostic/` 保存脱敏、限长的输入输出。任何级别均不得记录聊天全文、隐藏推理、transcript、二进制、未脱敏密钥或完整 traceback。JSONL 是事实源，Excel 是主视图，Markdown 兼容报告暂时弃用；审计必须 fail-open，不进知识仓且不自动清理。

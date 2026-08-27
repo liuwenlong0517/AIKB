@@ -65,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     audit_list.add_argument("--status", choices=["succeeded", "failed", "noop", "blocked", "incomplete"])
     audit_show = audit_sub.add_parser("show")
     audit_show.add_argument("event_id")
+    audit_diagnostic = audit_sub.add_parser("diagnostic", help="按调用 ID 查看本机诊断输入/输出；需启用 diagnostic 或 full-local")
+    audit_diagnostic.add_argument("invocation_id")
     audit_summary_parser = audit_sub.add_parser("summary")
     audit_summary_parser.add_argument("--since")
     audit_summary_parser.add_argument("--date")
@@ -132,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
             }), None)
             _json(match or {"error": f"未找到审计事件：{args.event_id}"})
             return 0 if match else 1
+        elif args.audit_command == "diagnostic":
+            _json(store.read_diagnostics(args.invocation_id))
         else:
             summary = audit_summary(items, damaged=loaded["damaged"], fallback_count=fallback_count)
             if args.audit_command == "summary":

@@ -27,10 +27,12 @@ python -m aikb audit report --date 2026-08-27
 python -m aikb audit report --date 2026-08-27 --output C:\Reports\aikb-audit-2026-08-27.xlsx
 # 暂时弃用：保留 Markdown 兼容报告
 python -m aikb audit report-md --date 2026-08-27
+# 读取诊断输入输出（需在服务启动前设置 AIKB_AUDIT_CAPTURE_LEVEL）
+python -m aikb audit diagnostic <调用ID>
 ```
 
-审计默认只保存工具/事件白名单字段的脱敏摘要，不保存知识正文、完整结果、prompt、transcript 或 hook 原始 payload。`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，提供概览、可筛选调用明细和损坏记录；`--output` 只接受 `.xlsx` 文件路径，传入目录或错误扩展名会得到明确错误。`audit report-md` 暂时弃用，但会继续生成兼容的 Markdown 报告。重复生成同一日期会原子覆盖同名派生报告。审计历史不会自动清理。
+审计默认级别为 `safe`：只保存工具/事件白名单字段的脱敏摘要、可读会话标签及中文动作/结果说明。把 `AIKB_AUDIT_CAPTURE_LEVEL` 设为 `diagnostic` 或 `full-local` 后，MCP/hook 的输入输出会以同一调用 ID 保存至独立 `workspace/audit/diagnostic/`；两个级别都会脱敏常见密钥、移除 NUL 并限制大小，`full-local` 仅提高预算，不记录隐藏推理或二进制附件。`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，提供概览、可筛选调用明细和损坏记录；`audit report-md` 暂时弃用，但会继续生成兼容的 Markdown 报告。审计历史不会自动清理。
 
-`system/schemas/audit-event.schema.json` 定义 JSONL schema v1。稳定字段为 `schema_version`、`record_type`、`event_id`、`invocation_id`、`timestamp`、`source`、`agent`、`client`、`connection_id`、`session_id`、`project_id`、`operation`、`action`、`status`、`outcome_code`、`result_summary`、`duration_ms` 和 `error_type`。一次调用以同一 `invocation_id` 的 `invocation_started` / `invocation_finished` 配对；缺少结束事件时报告为 `incomplete`。平台没有提供的真实 Session ID 保持 `null`。
+`system/schemas/audit-event.schema.json` 定义兼容 v1/v2 的 JSONL schema。v2 新增 `session_label`、`action_text`、`result_text` 和 `capture_level`，但保留原始 `session_id` 作为技术关联字段。一次调用以同一 `invocation_id` 的 `invocation_started` / `invocation_finished` 配对；缺少结束事件时报告为 `incomplete`。平台没有提供的真实 Session ID 保持 `null`，AIKB 会显示明确的降级会话标签而不会伪造 ID。
 
 也可以从仓库根目录执行 `system/tools/aikb-mcp/scripts/aikb.ps1`。Agent 安装由 `system/adapters/` 中的显式安装器完成。
