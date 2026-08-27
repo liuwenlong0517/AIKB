@@ -35,7 +35,7 @@ $requiredRootFiles = @(
 
 $requiredRootDirectories = @('system', 'workspace')
 # 这些白名单体现控制面与知识面、运行面之间的职责边界。
-$allowedSystemEntries = @('README.md', 'adapters', 'rules', 'schemas', 'templates', 'tests', 'tools')
+$allowedSystemEntries = @('README.md', 'COMMANDS.md', 'adapters', 'rules', 'schemas', 'templates', 'tests', 'tools')
 $allowedContentEntries = @('.aikb-knowledge.json', '.gitattributes', '.git', '.gitignore', 'CATALOG.md', 'INDEX.md', 'README.md', 'experience', 'knowledge', 'projects', 'workflows')
 $allowedWorkspaceEntries = @('.gitignore', 'README.md', 'active', 'archive', 'audit', 'db', 'runtime')
 
