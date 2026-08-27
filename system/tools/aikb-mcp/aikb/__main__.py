@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .audit import AuditStore, audit_summary, combine_invocations, filter_events, render_markdown, write_report
+from .audit import AuditStore, audit_summary, combine_invocations, filter_events, render_markdown, write_excel_report, write_report
 from .config import Settings
 from .hooks import handle_hook
 from .indexer import metadata_report, rebuild_knowledge_index
@@ -71,8 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     audit_summary_parser.add_argument("--agent")
     audit_summary_parser.add_argument("--source", choices=["mcp", "hook"])
     audit_report = audit_sub.add_parser("report")
-    audit_report.add_argument("--date")
-    audit_report.add_argument("--output", type=Path)
+    audit_report.add_argument("--date", help="报告日期，格式 YYYY-MM-DD；默认今天")
+    audit_report.add_argument("--output", type=Path, help="Excel 报告文件路径（.xlsx）；默认 workspace/audit/reports/YYYY-MM-DD.xlsx")
+    audit_report_markdown = audit_sub.add_parser("report-md", help="暂时弃用：生成 Markdown 兼容报告")
+    audit_report_markdown.add_argument("--date", help="报告日期，格式 YYYY-MM-DD；默认今天")
+    audit_report_markdown.add_argument("--output", type=Path, help="Markdown 报告文件路径（.md）；默认 workspace/audit/reports/YYYY-MM-DD.md")
     return parser
 
 
@@ -110,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         store = AuditStore(settings)
         loaded = store.read_events()
         selected_date = getattr(args, "date", None)
-        if args.audit_command == "report" and not selected_date:
+        if args.audit_command in {"report", "report-md"} and not selected_date:
             selected_date = datetime.now().astimezone().date().isoformat()
         combined = combine_invocations(loaded["events"])
         items = filter_events(
@@ -135,12 +138,21 @@ def main(argv: list[str] | None = None) -> int:
                 _json(summary)
             else:
                 title_date = selected_date
-                markdown = render_markdown(items, summary, title_date)
-                if args.output:
-                    write_report(args.output, markdown)
-                    _json({"output": str(args.output.expanduser().resolve()), "count": len(items)})
-                else:
-                    print(markdown, end="")
+                try:
+                    if args.audit_command == "report-md":
+                        report_path = args.output or (settings.workspace_root / "audit" / "reports" / f"{title_date}.md")
+                        write_report(report_path, render_markdown(items, summary, title_date))
+                        print("警告：audit report-md 暂时弃用；请改用 audit report 生成 Excel 审计报告。", file=sys.stderr)
+                    else:
+                        report_path = args.output or (settings.workspace_root / "audit" / "reports" / f"{title_date}.xlsx")
+                        write_excel_report(report_path, items, summary, title_date)
+                except ValueError as exc:
+                    print(f"错误：{exc}", file=sys.stderr)
+                    return 2
+                except OSError as exc:
+                    print(f"错误：无法写入审计报告 {report_path}：{exc}", file=sys.stderr)
+                    return 1
+                _json({"output": str(report_path.expanduser().resolve()), "count": len(items)})
     return 0
 
 

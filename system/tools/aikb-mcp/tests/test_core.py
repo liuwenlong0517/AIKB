@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -228,7 +229,7 @@ class AuditTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.fixture.close()
 
-    def test_jsonl_round_trip_redaction_and_markdown(self) -> None:
+    def test_jsonl_round_trip_redaction_and_reports(self) -> None:
         query = "中文 Authorization: Bearer plain-text-secret-value"
         action = summarize_tool_action(
             "search_knowledge",
@@ -277,12 +278,48 @@ class AuditTests(unittest.TestCase):
             capture_output=True, text=True, encoding="utf-8", check=True,
         )
         self.assertEqual(json.loads(shown.stdout)["status"], "succeeded")
-        report_path = self.fixture.settings.workspace_root / "audit" / "reports" / "2026-08-27.md"
-        subprocess.run(
-            [*base, "report", "--date", "2026-08-27", "--output", str(report_path)], cwd=TOOL_ROOT,
+        report_path = self.fixture.settings.workspace_root / "audit" / "reports" / "2026-08-27.xlsx"
+        generated = subprocess.run(
+            [*base, "report", "--date", "2026-08-27"], cwd=TOOL_ROOT,
             capture_output=True, text=True, encoding="utf-8", check=True,
         )
-        self.assertIn("search_knowledge", report_path.read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(generated.stdout)["output"], str(report_path.resolve()))
+        self.assertTrue(zipfile.is_zipfile(report_path))
+        with zipfile.ZipFile(report_path) as report:
+            self.assertIn("xl/worksheets/sheet2.xml", report.namelist())
+            detail_xml = report.read("xl/worksheets/sheet2.xml").decode("utf-8")
+            styles_xml = report.read("xl/styles.xml").decode("utf-8")
+        self.assertIn("search_knowledge", detail_xml)
+        self.assertIn("autoFilter", detail_xml)
+        self.assertIn('xSplit="5"', detail_xml)
+        self.assertIn('wrapText="1"', styles_xml)
+        custom_path = self.fixture.settings.workspace_root / "custom-audit.xlsx"
+        subprocess.run(
+            [*base, "report", "--date", "2026-08-27", "--output", str(custom_path)], cwd=TOOL_ROOT,
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        self.assertTrue(custom_path.is_file())
+        markdown_path = self.fixture.settings.workspace_root / "audit" / "reports" / "2026-08-27.md"
+        deprecated = subprocess.run(
+            [*base, "report-md", "--date", "2026-08-27"], cwd=TOOL_ROOT,
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        self.assertEqual(json.loads(deprecated.stdout)["output"], str(markdown_path.resolve()))
+        self.assertIn("暂时弃用", deprecated.stderr)
+        self.assertIn("search_knowledge", markdown_path.read_text(encoding="utf-8"))
+        invalid_output = subprocess.run(
+            [*base, "report", "--date", "2026-08-27", "--output", str(self.fixture.settings.workspace_root / "audit")],
+            cwd=TOOL_ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        self.assertEqual(invalid_output.returncode, 2)
+        self.assertIn("--output 必须是报告文件路径，不能是目录", invalid_output.stderr)
+        self.assertNotIn("Traceback", invalid_output.stderr)
+        invalid_extension = subprocess.run(
+            [*base, "report", "--date", "2026-08-27", "--output", str(self.fixture.settings.workspace_root / "bad.md")],
+            cwd=TOOL_ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        self.assertEqual(invalid_extension.returncode, 2)
+        self.assertIn("--output 必须使用 .xlsx 扩展名", invalid_extension.stderr)
 
     def test_redaction_covers_bearer_and_multiword_secret_values(self) -> None:
         """确认常见认证头和包含空格的秘密不会在审计文本中残留后半段。"""

@@ -6,7 +6,7 @@
 - `search_knowledge`、`read_knowledge` 两个只读知识工具；
 - `get_work_state`、`checkpoint_work_state`、`close_work_state` 三个本机任务状态工具；
 - Codex、Claude Code 和未来 Agent 共用的 stdio MCP 协议入口。
-- 按日 JSONL 的 MCP/hook 本机审计，以及按需 Markdown 汇总报告。
+- 按日 JSONL 的 MCP/hook 本机审计，以及按需 Excel 汇总报告。
 
 知识 Markdown 是长期事实源，`workspace/db/*.db` 均可删除重建；`workspace/audit/events/*.jsonl` 是独立的本机操作审计事实源，不是知识或 Working State。服务不会连接外部 RAG、向量数据库或网络服务，也不提供正式知识写入工具。
 
@@ -21,10 +21,15 @@ python -m aikb search "检索缓存"
 python -m aikb serve --agent codex
 python -m aikb audit list --since 24h
 python -m aikb audit summary --since 7d
+# 默认写入 workspace/audit/reports/2026-08-27.xlsx
 python -m aikb audit report --date 2026-08-27
+# 指定自定义 .xlsx 文件路径
+python -m aikb audit report --date 2026-08-27 --output C:\Reports\aikb-audit-2026-08-27.xlsx
+# 暂时弃用：保留 Markdown 兼容报告
+python -m aikb audit report-md --date 2026-08-27
 ```
 
-审计默认只保存工具/事件白名单字段的脱敏摘要，不保存知识正文、完整结果、prompt、transcript 或 hook 原始 payload。`audit report` 默认向终端输出 Markdown；只有显式传入 `--output` 才写入报告文件。审计历史不会自动清理。
+审计默认只保存工具/事件白名单字段的脱敏摘要，不保存知识正文、完整结果、prompt、transcript 或 hook 原始 payload。`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，提供概览、可筛选调用明细和损坏记录；`--output` 只接受 `.xlsx` 文件路径，传入目录或错误扩展名会得到明确错误。`audit report-md` 暂时弃用，但会继续生成兼容的 Markdown 报告。重复生成同一日期会原子覆盖同名派生报告。审计历史不会自动清理。
 
 `system/schemas/audit-event.schema.json` 定义 JSONL schema v1。稳定字段为 `schema_version`、`record_type`、`event_id`、`invocation_id`、`timestamp`、`source`、`agent`、`client`、`connection_id`、`session_id`、`project_id`、`operation`、`action`、`status`、`outcome_code`、`result_summary`、`duration_ms` 和 `error_type`。一次调用以同一 `invocation_id` 的 `invocation_started` / `invocation_finished` 配对；缺少结束事件时报告为 `incomplete`。平台没有提供的真实 Session ID 保持 `null`。
 

@@ -9,11 +9,13 @@ import re
 import tempfile
 import time
 import uuid
+import zipfile
 from collections import Counter
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from xml.sax.saxutils import escape as xml_escape
 
 from .config import Settings
 
@@ -404,6 +406,11 @@ def audit_summary(items: list[dict[str, Any]], *, damaged: list[str], fallback_c
 
 
 def render_markdown(items: list[dict[str, Any]], summary: dict[str, Any], title_date: str) -> str:
+    """暂时弃用：保留 Markdown 审计报告，供已有自动化和兼容性使用。
+
+    新的人类审计入口使用 :func:`write_excel_report` 生成可筛选的 Excel 工作簿。
+    Markdown 仍是可重建派生物，且不会反向修改 JSONL 审计事实源。
+    """
     def esc(value: Any) -> str:
         return str(value if value is not None else "").replace("|", "\\|").replace("\n", " ")
 
@@ -434,11 +441,35 @@ def render_markdown(items: list[dict[str, Any]], summary: dict[str, Any], title_
 
 
 def write_report(path: Path, content: str) -> None:
+    """暂时弃用：原子写入 Markdown 报告，供 ``audit report-md`` 兼容入口使用。"""
+    _validate_report_path(path, suffix=".md", format_name="Markdown")
+    _write_report_bytes(path, content.encode("utf-8"))
+
+
+def _validate_report_path(path: Path, *, suffix: str, format_name: str) -> Path:
+    """校验派生报告输出位置，避免把原子替换目标误传成目录。
+
+    ``os.replace`` 面对目录目标会在 Windows 报出不直观的 ``WinError 5``。在写入前
+    统一验证目标类型和扩展名，使用户能直接修正命令，并防止将 Excel 内容保存为 Markdown
+    等错误后缀。返回值是解析后的绝对路径，供所有报告格式复用。
+    """
+    path = path.expanduser().resolve()
+    if path.exists() and path.is_dir():
+        raise ValueError(f"--output 必须是报告文件路径，不能是目录：{path}")
+    if path.parent.exists() and not path.parent.is_dir():
+        raise ValueError(f"--output 的父路径不是目录：{path.parent}")
+    if path.suffix.lower() != suffix:
+        raise ValueError(f"--output 必须使用 {suffix} 扩展名以生成 {format_name} 报告：{path}")
+    return path
+
+
+def _write_report_bytes(path: Path, content: bytes) -> None:
+    """原子写入二进制报告；失败时保留原报告且不遗留临时文件。"""
     path = path.expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+        with os.fdopen(fd, "wb") as stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
@@ -446,3 +477,169 @@ def write_report(path: Path, content: str) -> None:
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
+
+
+def _excel_column(index: int) -> str:
+    """把从零开始的列序号转换为 OOXML 使用的 A1 列名。"""
+    result = ""
+    while True:
+        index, remainder = divmod(index, 26)
+        result = chr(ord("A") + remainder) + result
+        if index == 0:
+            return result
+        index -= 1
+
+
+def _excel_text(value: Any) -> str:
+    """将审计值转换成安全、可显示的单元格文本，避免 XML 和公式注入边界。"""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    # 使用 inlineStr 强制作为文本保存，避免以 =、+、-、@ 开头的外部输入被 Excel 当成公式。
+    text = _redact_text(str(value), limit=2_000)
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _xlsx_cell(reference: str, value: Any, style: int = 0, *, numeric: bool = False) -> str:
+    """生成单个 OOXML 单元格；审计文本统一使用 inlineStr，不信任外部输入。"""
+    style_attr = f' s="{style}"' if style else ""
+    if numeric and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f'<c r="{reference}"{style_attr}><v>{value}</v></c>'
+    text = xml_escape(_excel_text(value))
+    preserve = ' xml:space="preserve"' if text[:1].isspace() or text[-1:].isspace() else ""
+    return f'<c r="{reference}"{style_attr} t="inlineStr"><is><t{preserve}>{text}</t></is></c>'
+
+
+def _xlsx_row(row_number: int, values: list[tuple[Any, int, bool]]) -> str:
+    """生成一行 OOXML，参数依次为值、样式索引和是否按数值写入。"""
+    cells = "".join(
+        _xlsx_cell(f"{_excel_column(column)}{row_number}", value, style, numeric=numeric)
+        for column, (value, style, numeric) in enumerate(values)
+    )
+    return f'<row r="{row_number}">{cells}</row>'
+
+
+def _xlsx_sheet_xml(
+    rows: list[str], *, columns: list[float], freeze_row: int | None = None, freeze_columns: int | None = None,
+    auto_filter: str | None = None, merges: list[str] | None = None,
+) -> str:
+    """封装通用工作表 XML，集中处理列宽、冻结窗格、筛选和合并区域。"""
+    column_xml = "".join(
+        f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
+        for index, width in enumerate(columns, start=1)
+    )
+    pane = ""
+    if freeze_row or freeze_columns:
+        split_row = freeze_row or 0
+        split_columns = freeze_columns or 0
+        top_left = f"{_excel_column(split_columns)}{split_row + 1}"
+        active_pane = "bottomRight" if split_row and split_columns else ("bottomLeft" if split_row else "topRight")
+        pane = (
+            f'<pane xSplit="{split_columns}" ySplit="{split_row}" topLeftCell="{top_left}" '
+            f'activePane="{active_pane}" state="frozen"/>'
+        )
+    merge_xml = "".join(f'<mergeCell ref="{reference}"/>' for reference in (merges or []))
+    merge_section = f'<mergeCells count="{len(merges or [])}">{merge_xml}</mergeCells>' if merges else ""
+    filter_section = f'<autoFilter ref="{auto_filter}"/>' if auto_filter else ""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetViews><sheetView workbookViewId="0" showGridLines="0">{pane}</sheetView></sheetViews>'
+        f'<cols>{column_xml}</cols><sheetData>{"".join(rows)}</sheetData>{merge_section}{filter_section}</worksheet>'
+    )
+
+
+def _xlsx_styles_xml() -> str:
+    """提供审计工作簿所需的紧凑样式表；样式按角色而非逐格随意上色。"""
+    return '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="3"><font><sz val="10"/><name val="Aptos"/></font><font><b/><sz val="16"/><color rgb="FFFFFFFF"/><name val="Aptos Display"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Aptos"/></font></fonts>
+  <fills count="7"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2F0D9"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFCE4D6"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFE699"/><bgColor indexed="64"/></patternFill></fill></fills>
+  <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFD9E2F3"/></left><right style="thin"><color rgb="FFD9E2F3"/></right><top style="thin"><color rgb="FFD9E2F3"/></top><bottom style="thin"><color rgb="FFD9E2F3"/></bottom><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="9"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"/><xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0"/><xf numFmtId="0" fontId="0" fillId="5" borderId="1" xfId="0"/><xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>'''
+
+
+def write_excel_report(path: Path, items: list[dict[str, Any]], summary: dict[str, Any], title_date: str) -> None:
+    """将审计聚合结果生成可筛选的 Excel 工作簿，且不引入第三方运行时依赖。
+
+    审计 CLI 需要在已安装的 Agent 环境中独立运行，不能依赖当前 Codex 会话的 Node
+    包或 Python 扩展。因此仅使用 Python 标准库写入稳定的 OOXML/ZIP 容器；输出只包含
+    已脱敏的审计聚合字段。生成失败向调用者报告，由 CLI 决定退出码，不影响审计事实源。
+    """
+    path = _validate_report_path(path, suffix=".xlsx", format_name="Excel")
+    generated_at = _now().isoformat(timespec="seconds")
+    overview_rows = [
+        _xlsx_row(1, [(f"AIKB 审计报告：{title_date}", 1, False)]),
+        _xlsx_row(3, [("报告日期", 3, False), (title_date, 4, False), ("生成时间", 3, False), (generated_at, 4, False)]),
+        _xlsx_row(5, [("审计总览", 2, False), ("数量", 2, False)]),
+        _xlsx_row(6, [("逻辑事件", 3, False), (summary["count"], 4, True)]),
+    ]
+    for offset, status in enumerate(("succeeded", "noop", "blocked", "failed", "incomplete"), start=7):
+        style = {"succeeded": 5, "failed": 6, "blocked": 7}.get(status, 4)
+        overview_rows.append(_xlsx_row(offset, [(status, 3, False), (summary["statuses"].get(status, 0), style, True)]))
+    overview_rows.extend([
+        _xlsx_row(12, [("fallback 记录", 3, False), (summary["fallback_records"], 4, True)]),
+        _xlsx_row(13, [("损坏记录", 3, False), (summary["damaged_count"], 4, True)]),
+        _xlsx_row(14, [("平均耗时 (ms)", 3, False), (summary["average_duration_ms"], 4, True)]),
+        _xlsx_row(15, [("最近活动", 3, False), (summary["last_activity"], 4, False)]),
+        _xlsx_row(17, [("Agent", 2, False), ("调用次数", 2, False), ("来源", 2, False), ("调用次数", 2, False)]),
+    ])
+    overview_rows.extend(
+        _xlsx_row(row, [(agent, 4, False), (count, 4, True), (source, 4, False), (source_count, 4, True)])
+        for row, ((agent, count), (source, source_count)) in enumerate(
+            zip(sorted(summary["agents"].items()), sorted(summary["sources"].items())), start=18
+        )
+    )
+    # Agent 和来源的行数可能不同，补齐未被 zip 覆盖的尾部，保证两个汇总表信息完整。
+    tail_row = 18 + min(len(summary["agents"]), len(summary["sources"]))
+    for agent, count in list(sorted(summary["agents"].items()))[len(summary["sources"]):]:
+        overview_rows.append(_xlsx_row(tail_row, [(agent, 4, False), (count, 4, True), ("", 4, False), ("", 4, False)]))
+        tail_row += 1
+    for source, count in list(sorted(summary["sources"].items()))[len(summary["agents"]):]:
+        overview_rows.append(_xlsx_row(tail_row, [("", 4, False), ("", 4, False), (source, 4, False), (count, 4, True)]))
+        tail_row += 1
+
+    headers = ["开始时间", "结束时间", "Agent", "来源", "操作", "动作摘要", "状态", "结果代码", "耗时 (ms)", "项目 ID", "Session ID", "调用 ID", "结果摘要", "错误类型", "Fallback"]
+    detail_rows = [_xlsx_row(1, [(header, 2, False) for header in headers])]
+    for row_number, item in enumerate(items, start=2):
+        action = item.get("action") if item.get("action") is not None else ""
+        result = item.get("result_summary") if item.get("result_summary") is not None else ""
+        status = str(item.get("status") or "")
+        status_style = {"succeeded": 5, "failed": 6, "blocked": 7}.get(status, 4)
+        detail_rows.append(_xlsx_row(row_number, [
+            (item.get("started_at") or item.get("timestamp"), 4, False), (item.get("finished_at"), 4, False),
+            (item.get("agent"), 4, False), (item.get("source"), 4, False), (item.get("operation"), 4, False),
+            (action, 8, False), (status, status_style, False), (item.get("outcome_code"), 4, False),
+            (item.get("duration_ms"), 4, True), (item.get("project_id"), 4, False), (item.get("session_id"), 4, False),
+            (item.get("invocation_id") or item.get("event_id"), 4, False), (result, 8, False),
+            (item.get("error_type"), 4, False), ("是" if item.get("_fallback") else "否", 4, False),
+        ]))
+    damaged_rows = [_xlsx_row(1, [("无法解析的审计文件", 2, False)])]
+    damaged_rows.extend(_xlsx_row(row, [(damaged, 4, False)]) for row, damaged in enumerate(summary["damaged"], start=2))
+
+    overview = _xlsx_sheet_xml(overview_rows, columns=[24, 18, 20, 30], merges=["A1:D1"])
+    details = _xlsx_sheet_xml(detail_rows, columns=[25, 25, 18, 12, 26, 42, 14, 28, 14, 25, 24, 40, 36, 24, 12], freeze_row=1, freeze_columns=5, auto_filter=f"A1:O{max(1, len(items) + 1)}")
+    damaged = _xlsx_sheet_xml(damaged_rows, columns=[100], freeze_row=1, auto_filter=f"A1:A{max(1, len(summary['damaged']) + 1)}")
+    content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'''
+    relationships = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'''
+    workbook = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="概览" sheetId="1" r:id="rId1"/><sheet name="调用明细" sheetId="2" r:id="rId2"/><sheet name="损坏记录" sheetId="3" r:id="rId3"/></sheets></workbook>'''
+    workbook_relationships = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'''
+    with tempfile.TemporaryDirectory(prefix="aikb-audit-xlsx-") as temp_dir:
+        archive_path = Path(temp_dir) / "report.xlsx"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, content in {
+                "[Content_Types].xml": content_types, "_rels/.rels": relationships, "xl/workbook.xml": workbook,
+                "xl/_rels/workbook.xml.rels": workbook_relationships, "xl/styles.xml": _xlsx_styles_xml(),
+                "xl/worksheets/sheet1.xml": overview, "xl/worksheets/sheet2.xml": details,
+                "xl/worksheets/sheet3.xml": damaged,
+            }.items():
+                archive.writestr(name, content.encode("utf-8"))
+        _write_report_bytes(path, archive_path.read_bytes())

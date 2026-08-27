@@ -638,10 +638,17 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 read "aikb:稳定�
 ```powershell
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit list --since 24h
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit summary --since 7d
+# 默认写入 workspace/audit/reports/2026-08-27.xlsx
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report --date 2026-08-27
+# 省略 --date 时使用当天日期并按同一规则命名
+pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report
+# --output 必须是 .xlsx 文件路径；用于自定义目录或文件名
+pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report --date 2026-08-27 --output E:\Reports\aikb-audit-2026-08-27.xlsx
+# 暂时弃用：保留 Markdown 兼容报告，默认写入 workspace/audit/reports/2026-08-27.md
+pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report-md --date 2026-08-27
 ```
 
-`audit report` 默认向终端输出 Markdown；只有显式指定 `--output` 时才写报告文件。审计没有自动保留期或清理行为。
+`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，并输出 JSON 格式的文件路径与记录数；工作簿包含“概览”“调用明细”“损坏记录”三个工作表，其中调用明细可筛选且冻结表头。同一日期再次生成会原子覆盖该派生报告。`--output` 必须是 `.xlsx` 文件路径，不能传目录，例如不能传 `workspace/audit/`；传入目录或错误扩展名会得到明确错误。Markdown 方案暂时保留为 `audit report-md`，该命令会给出弃用提示。审计没有自动保留期或清理行为。
 
 ### 运行完整自动测试
 
