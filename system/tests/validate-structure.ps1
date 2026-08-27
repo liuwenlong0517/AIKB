@@ -163,9 +163,10 @@ foreach ($requiredText in @(
 
 $roleRequirements = @{
     'system/rules/USER_RULES.md' = @(
-        '当前任务的明确要求', '只有用户明确要求时才能修改', 'Java', '使用中文',
-        '用户指令或前提可能有误', '未知或无法确认', '删除任何文件或目录前',
-        'Agent 专属资料', '`AGENTS.md`', '类注释', '方法注释', '关键代码注释'
+        '当前任务及更高优先级指令优先', '未经用户明确要求不得修改', 'Java', '使用中文',
+        '对用户前提和事实保持独立判断', '无法可靠确认', '实际执行任何文件或目录删除前',
+        '类/模块', '方法/函数', '关键代码', '无需通读全部代码', '不得逐行复述',
+        '理解相关现有实现', '最小必要范围原则', '无法验证时明确说明', '依据项目环境或可靠文档确认'
     )
     'system/rules/AI_RULES.md' = @(
         'ENTRY_RULES.md', 'INDEX.md', 'read_knowledge', 'search_knowledge', 'content_hash',
