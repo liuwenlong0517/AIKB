@@ -1,4 +1,4 @@
-# 清理 workspace 中已经超过保留期的本机审计文件与运行检查点；默认仅输出候选项，不删除任何内容。
+# 清理 workspace 中已经超过保留期的本机审计文件、运行检查点和 runtime 临时项；默认仅输出候选项，不删除任何内容。
 # 活动任务的 work.md 和其当前检查点始终保留，避免清理动作破坏可恢复的工作状态。
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
@@ -9,6 +9,10 @@ param(
     # 已归档任务及活动任务中非当前的历史检查点按文件最后写入时间计算保留期。
     [ValidateRange(1, 36500)]
     [int]$CheckpointRetentionDays = 180,
+
+    # runtime 只保存锁、临时文件和运行标记；独立保留期避免短期测试目录无限累积。
+    [ValidateRange(1, 36500)]
+    [int]$RuntimeRetentionDays = 30,
 
     # 默认定位本脚本所属控制仓的 workspace；测试可显式传入独立临时目录。
     [string]$WorkspacePath = $(Join-Path $PSScriptRoot '..\\..\\workspace'),
@@ -122,8 +126,10 @@ if (-not $workspace.PSIsContainer) {
 $workspaceRoot = [System.IO.DirectoryInfo]$workspace
 $auditCutoff = [datetime]::UtcNow.AddDays(-$AuditRetentionDays)
 $checkpointCutoff = [datetime]::UtcNow.AddDays(-$CheckpointRetentionDays)
+$runtimeCutoff = [datetime]::UtcNow.AddDays(-$RuntimeRetentionDays)
 $candidates = [System.Collections.Generic.List[object]]::new()
 $skipped = [System.Collections.Generic.List[object]]::new()
+$preserved = [System.Collections.Generic.List[object]]::new()
 
 # 审计会话标签注册表没有可靠时间戳，因此不按猜测规则清理；其余审计文件都可按最后写入时间安全判断。
 foreach ($name in @('events', 'diagnostic', 'fallback', 'reports')) {
@@ -134,6 +140,60 @@ foreach ($name in @('events', 'diagnostic', 'fallback', 'reports')) {
     foreach ($file in Get-NonReparseFiles -Directory ([System.IO.DirectoryInfo]$root)) {
         if ($file.LastWriteTimeUtc -lt $auditCutoff) {
             $candidates.Add((New-CleanupCandidate -Category "audit/$name" -Item $file -IsDirectory $false))
+        }
+    }
+}
+
+# runtime 下的 audit.lock 可能正被多个进程用于串行写审计，永远保留；其余直接子项只按整个子项的最后写入时间处理。
+$runtimeRoot = Get-Item -LiteralPath (Join-Path $workspaceRoot.FullName 'runtime') -Force -ErrorAction SilentlyContinue
+if ($runtimeRoot -and $runtimeRoot.PSIsContainer) {
+    if (($runtimeRoot.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $skipped.Add([pscustomobject]@{
+            Category = 'runtime'
+            Path = $runtimeRoot.FullName
+            Reason = 'runtime 根目录是 reparse point'
+        })
+        Write-Warning "跳过 runtime 根 reparse point：$($runtimeRoot.FullName)"
+    }
+    else {
+        $runtimeBoundary = [System.IO.DirectoryInfo]$runtimeRoot
+        foreach ($item in Get-ChildItem -LiteralPath $runtimeBoundary.FullName -Force) {
+            if ($item.Name -eq 'audit.lock') {
+                $preserved.Add([pscustomobject]@{
+                    Category = 'runtime-protected'
+                    Path = $item.FullName
+                    Reason = 'audit.lock 始终保留'
+                })
+                continue
+            }
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                $skipped.Add([pscustomobject]@{
+                    Category = 'runtime'
+                    Path = $item.FullName
+                    Reason = 'runtime 直接子项是 reparse point'
+                })
+                Write-Warning "跳过 runtime reparse point：$($item.FullName)"
+                continue
+            }
+            if ($item.LastWriteTimeUtc -ge $runtimeCutoff) {
+                continue
+            }
+            if ($item.PSIsContainer) {
+                $runtimeDirectory = [System.IO.DirectoryInfo]$item
+                if (Test-DirectoryCanBeRemoved -Directory $runtimeDirectory -Boundary $runtimeBoundary) {
+                    $candidates.Add((New-CleanupCandidate -Category 'runtime-directory' -Item $runtimeDirectory -IsDirectory $true))
+                }
+                else {
+                    $skipped.Add([pscustomobject]@{
+                        Category = 'runtime-directory'
+                        Path = $runtimeDirectory.FullName
+                        Reason = '目录越过 runtime 边界或包含 reparse point'
+                    })
+                }
+            }
+            else {
+                $candidates.Add((New-CleanupCandidate -Category 'runtime-file' -Item $item -IsDirectory $false))
+            }
         }
     }
 }
@@ -194,9 +254,12 @@ if ($Apply) {
     Workspace = $workspaceRoot.FullName
     AuditCutoffUtc = $auditCutoff.ToString('o')
     CheckpointCutoffUtc = $checkpointCutoff.ToString('o')
+    RuntimeCutoffUtc = $runtimeCutoff.ToString('o')
+    RuntimeRetentionDays = $RuntimeRetentionDays
     CandidateCount = $candidates.Count
     AppliedCount = $applied.Count
     Candidates = @($candidates)
     Applied = @($applied)
+    Preserved = @($preserved)
     Skipped = @($skipped)
 } | ConvertTo-Json -Depth 5

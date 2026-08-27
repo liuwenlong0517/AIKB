@@ -494,21 +494,22 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
     pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1
 
-默认是预览，不会删除文件。它列出按 UTC `LastWriteTime` 早于保留期的精确候选路径：审计的 `events`、`diagnostic`、`fallback`、`reports` 文件；`archive/` 中完整的过期工作项；以及 `active/` 中早于保留期、但不是当前 `checkpoint_id` 的历史检查点。活动任务的 `work.md` 和当前检查点永不删除。`audit/sessions.json` 没有可靠时间戳，也不会被脚本猜测性清理。
+默认是预览，不会删除文件。它列出按 UTC `LastWriteTime` 早于保留期的精确候选路径：审计的 `events`、`diagnostic`、`fallback`、`reports` 文件；`archive/` 中完整的过期工作项；`active/` 中早于保留期、但不是当前 `checkpoint_id` 的历史检查点；以及 `runtime/` 下过期的直接子项。活动任务的 `work.md` 和当前检查点永不删除，`runtime/audit.lock` 始终保留。`audit/sessions.json` 没有可靠时间戳，也不会被脚本猜测性清理。
 
 | 参数 | 类型/默认值 | 作用与限制 |
 |---|---|---|
 | `-AuditRetentionDays` | 整数 `1..36500`，默认 `90` | 审计文件保留天数。 |
 | `-CheckpointRetentionDays` | 整数 `1..36500`，默认 `180` | 归档任务与活动任务历史检查点的保留天数。 |
+| `-RuntimeRetentionDays` | 整数 `1..36500`，默认 `30` | `runtime/` 直接子项的保留天数；`audit.lock` 不受影响。 |
 | `-WorkspacePath` | 可选目录 | 默认控制仓的 `workspace/`；仅用于维护或隔离测试。 |
 | `-Apply` | 开关，默认关闭 | 允许删除预览中的候选项；仍支持 PowerShell 的 `-WhatIf` 和确认提示。 |
 
 先审查预览 JSON 的 `Candidates`，确认目标后再执行同一命令并附加 `-Apply`。例如：
 
-    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180
-    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180 -Apply
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180 -RuntimeRetentionDays 30
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180 -RuntimeRetentionDays 30 -Apply
 
-脚本会跳过 reparse point（符号链接或 junction）以及无法读取当前检查点 ID 的活动任务；这类情况通过 JSON 的 `Skipped` 返回，需人工核对。清理归档任务后，工作索引会在下次读取时因 Markdown 指纹变化自动重建。
+脚本会跳过 reparse point（符号链接或 junction）以及无法读取当前检查点 ID 的活动任务；这类情况通过 JSON 的 `Skipped` 返回，需人工核对。预览 JSON 的 `Preserved` 会列出受保护的 `audit.lock`。清理归档任务后，工作索引会在下次读取时因 Markdown 指纹变化自动重建。
 
 ## 5. 自动校验与性能命令
 
@@ -563,6 +564,12 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
     python -m unittest discover -s system/tools/aikb-mcp/tests -v
 
 这是 Python 标准库 unittest 的项目测试入口，没有 AIKB 自定义参数。`discover` 从指定目录发现测试，`-v` 打开详细输出；测试覆盖 Front Matter、索引/中文搜索、MCP 协议、工作状态、审计脱敏和审计报告。全部通过返回 `0`，任一失败返回非零。
+
+### 5.6 运行面清理回归：`validate-clear-workspace.ps1`
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tests/validate-clear-workspace.ps1
+
+无参数。脚本在隔离临时 workspace 中验证陈旧 runtime 文件和子目录会进入预览并可在 `-Apply` 后删除，近期 runtime 子目录和 `audit.lock` 始终保留；测试结束会清理自己创建的临时目录。通过返回 `0`，失败返回非零。
 
 ## 6. MCP 服务接口（不是 shell 命令）
 

@@ -9,6 +9,7 @@
 - [`validate-adapters.ps1`](validate-adapters.ps1)：在临时用户目录和 Process 级双仓变量中验证适配器安装、重复安装、无绝对仓库路径、MCP/hook 实际启动、中文 UTF-8 往返和精确卸载，不接触真实用户环境变量或 Agent 配置。
 - [`validate-setup.ps1`](validate-setup.ps1)：在临时用户目录中运行一键配置两次，验证独立脚本编排、根指令内容保留、一次性备份、诊断和幂等性。
 - [`validate-performance.ps1`](validate-performance.ps1)：重复测量热启动搜索和 SessionStart hook 的中位耗时，并以显式阈值防止双仓路径解析造成明显性能回退。
+- [`validate-clear-workspace.ps1`](validate-clear-workspace.ps1)：在隔离 workspace 中验证陈旧 runtime 项可清理、近期项和 `audit.lock` 始终保留。
 - `system/tools/aikb-mcp/tests/`：验证 Front Matter、SQLite 中文检索、关系读取、MCP 协议、工作状态、脱敏和上下文预算。
 
 在仓库根目录执行：
@@ -18,5 +19,6 @@ pwsh -NoProfile -File system/tests/validate-structure.ps1
 pwsh -NoProfile -File system/tests/validate-adapters.ps1
 pwsh -NoProfile -File system/tests/validate-setup.ps1
 pwsh -NoProfile -File system/tests/validate-performance.ps1
+pwsh -NoProfile -File system/tests/validate-clear-workspace.ps1
 python -m unittest discover -s system/tools/aikb-mcp/tests -v
 ```

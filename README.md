@@ -248,7 +248,7 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 `setup-aikb.ps1` 是首次使用的一键编排器。它不复制环境设置、根指令、适配器、索引或诊断逻辑，而是按顺序调用对应的独立脚本；因此每个步骤仍可单独运行、排障和重复执行。
 
-`clear-workspace.ps1` 用于按最后写入时间维护过期审计文件和运行检查点。它默认仅返回 JSON 预览，默认保留审计 90 天、检查点 180 天；只有带 `-Apply` 且通过 PowerShell 确认后才删除。它不会删除任何活动任务的 `work.md` 或当前检查点，也不会猜测性处理没有时间戳的审计会话标签注册表。
+`clear-workspace.ps1` 用于按最后写入时间维护过期审计文件、运行检查点和 `runtime/` 临时子项。它默认仅返回 JSON 预览，默认保留审计 90 天、检查点 180 天、runtime 30 天；只有带 `-Apply` 且通过 PowerShell 确认后才删除。它不会删除任何活动任务的 `work.md` 或当前检查点，并始终保留 `runtime/audit.lock`，也不会猜测性处理没有时间戳的审计会话标签注册表。
 
 `aikb-mcp/` 是轻量 MCP 与索引核心。
 
@@ -660,13 +660,13 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit diagnostic <�
 ### 预览或清理过期本机运行数据
 
 ```powershell
-# 仅列出将被清理的精确路径（默认审计 90 天、检查点 180 天）
+# 仅列出将被清理的精确路径（默认审计 90 天、检查点 180 天、runtime 30 天）
 pwsh -NoProfile -File system/tools/clear-workspace.ps1
 # 审查上述 JSON 后，显式执行；仍会显示 PowerShell 删除确认
 pwsh -NoProfile -File system/tools/clear-workspace.ps1 -Apply
 ```
 
-该脚本只处理审计的按日记录、诊断附件、fallback、报告文件，过期的归档工作项，以及活动任务中非当前的历史检查点。它始终保留活动任务 `work.md`、当前检查点和 `audit/sessions.json`；后者没有可靠时间戳，必须人工决定是否移除。
+该脚本只处理审计的按日记录、诊断附件、fallback、报告文件，过期的归档工作项，活动任务中非当前的历史检查点，以及超过 runtime 保留期的直接子项。它始终保留活动任务 `work.md`、当前检查点、`runtime/audit.lock` 和 `audit/sessions.json`；后者没有可靠时间戳，必须人工决定是否移除。
 
 ### 运行完整自动测试
 
