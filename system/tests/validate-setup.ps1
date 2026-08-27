@@ -61,6 +61,12 @@ try {
     if ((Get-Content -Raw -LiteralPath (Join-Path $claudeHome 'CLAUDE.md')) -notmatch 'preserve claude root') {
         throw '一键配置覆盖了 Claude 原有根指令'
     }
+    if ((Get-Content -Raw -LiteralPath (Join-Path $codexHome 'config.toml')) -notmatch 'serve --agent codex') {
+        throw '一键配置未生成 Codex 审计身份参数'
+    }
+    if ((Get-Content -Raw -LiteralPath $claudeConfig) -notmatch 'serve --agent claude-code') {
+        throw '一键配置未生成 Claude Code 审计身份参数'
+    }
     foreach ($path in @((Join-Path $codexHome 'AGENTS.md'), (Join-Path $claudeHome 'CLAUDE.md'))) {
         if ((Get-Content -Raw -LiteralPath $path) -match [regex]::Escape($legacyInstruction)) {
             throw "一键配置未移除旧的绝对路径根指令：$path"

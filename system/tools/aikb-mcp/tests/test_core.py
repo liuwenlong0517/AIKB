@@ -8,13 +8,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 if str(TOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOL_ROOT))
 
+from aikb.audit import AUDIT_FIELDS, AuditStore, audit_summary, combine_invocations, render_markdown, summarize_tool_action
 from aikb.config import Settings
 from aikb.frontmatter import parse_markdown, render_frontmatter
 from aikb.hooks import handle_hook
@@ -214,6 +217,104 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn(git_dir / "metadata.md", list(iter_content_files(self.fixture.settings.content_root)))
 
 
+class AuditTests(unittest.TestCase):
+    """验证文本审计的落盘、脱敏、聚合、并发与故障降级。"""
+
+    def setUp(self) -> None:
+        self.fixture = RepoFixture()
+        fixed = datetime(2026, 8, 27, 10, 32, 18, 413000, tzinfo=timezone.utc)
+        self.store = AuditStore(self.fixture.settings, clock=lambda: fixed)
+
+    def tearDown(self) -> None:
+        self.fixture.close()
+
+    def test_jsonl_round_trip_redaction_and_markdown(self) -> None:
+        invocation = self.store.start(
+            source="mcp", agent="codex", operation="search_knowledge",
+            action=summarize_tool_action("search_knowledge", {"query": "中文 api_key=secret-value", "limit": 5}),
+            client={"name": "Codex", "version": "1"}, connection_id="connection-1",
+        )
+        self.store.finish(
+            invocation, source="mcp", agent="codex", operation="search_knowledge", status="succeeded",
+            outcome_code="results_returned", result_summary={"count": 2}, connection_id="connection-1",
+        )
+        path = self.fixture.settings.workspace_root / "audit" / "events" / "2026" / "08" / "2026-08-27.jsonl"
+        raw = path.read_bytes()
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+        text = raw.decode("utf-8")
+        self.assertIn("中文", text)
+        self.assertIn("[REDACTED]", text)
+        self.assertNotIn("secret-value", text)
+        loaded = self.store.read_events()
+        self.assertTrue(all(set(event) - {"_fallback"} == set(AUDIT_FIELDS) for event in loaded["events"]))
+        schema = json.loads((TOOL_ROOT.parents[1] / "schemas" / "audit-event.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+        items = combine_invocations(loaded["events"])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["status"], "succeeded")
+        summary = audit_summary(items, damaged=loaded["damaged"], fallback_count=0)
+        markdown = render_markdown(items, summary, "2026-08-27")
+        self.assertIn("AIKB 审计报告", markdown)
+        self.assertIn("search_knowledge", markdown)
+        base = [
+            sys.executable, "-m", "aikb", "--repo-root", str(self.fixture.root),
+            "--workspace-root", str(self.fixture.settings.workspace_root), "audit",
+        ]
+        listed = subprocess.run(
+            [*base, "list", "--date", "2026-08-27", "--agent", "codex"], cwd=TOOL_ROOT,
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        self.assertEqual(json.loads(listed.stdout)["count"], 1)
+        shown = subprocess.run(
+            [*base, "show", invocation["invocation_id"]], cwd=TOOL_ROOT,
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        self.assertEqual(json.loads(shown.stdout)["status"], "succeeded")
+        report_path = self.fixture.settings.workspace_root / "audit" / "reports" / "2026-08-27.md"
+        subprocess.run(
+            [*base, "report", "--date", "2026-08-27", "--output", str(report_path)], cwd=TOOL_ROOT,
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        self.assertIn("search_knowledge", report_path.read_text(encoding="utf-8"))
+
+    def test_incomplete_corrupt_and_fallback_are_reported(self) -> None:
+        self.store.start(source="hook", agent="claude-code", operation="session-start")
+        event_path = self.fixture.settings.workspace_root / "audit" / "events" / "2026" / "08" / "2026-08-27.jsonl"
+        with event_path.open("a", encoding="utf-8") as stream:
+            stream.write("{broken json\n")
+        with mock.patch.object(self.store, "_lock", side_effect=TimeoutError("busy")):
+            result = self.store.write({
+                "record_type": "wrapper_failure", "source": "hook", "agent": "codex",
+                "operation": "stop", "status": "failed", "outcome_code": "lock_timeout",
+            })
+        self.assertTrue(result["written"])
+        self.assertTrue(result["fallback"])
+        loaded = self.store.read_events()
+        items = combine_invocations(loaded["events"])
+        self.assertTrue(any(item.get("status") == "incomplete" for item in items))
+        self.assertTrue(any(item.get("record_type") == "wrapper_failure" for item in items))
+        self.assertEqual(len(loaded["damaged"]), 1)
+
+    def test_concurrent_processes_produce_parseable_lines(self) -> None:
+        code = (
+            "import sys; from pathlib import Path; from aikb.audit import AuditStore; from aikb.config import Settings; "
+            "root=Path(sys.argv[1]); s=Settings.load(root, root/'workspace'); a=AuditStore(s); "
+            "[(lambda x: a.finish(x,source='mcp',agent='codex',operation='ping-test',status='succeeded',outcome_code='ok'))"
+            "(a.start(source='mcp',agent='codex',operation='ping-test')) for _ in range(10)]"
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(TOOL_ROOT)
+        processes = [
+            subprocess.Popen([sys.executable, "-c", code, str(self.fixture.root)], env=environment)
+            for _ in range(4)
+        ]
+        for process in processes:
+            self.assertEqual(process.wait(timeout=20), 0)
+        loaded = AuditStore(self.fixture.settings).read_events()
+        self.assertEqual(loaded["damaged"], [])
+        self.assertEqual(len(combine_invocations(loaded["events"])), 40)
+
+
 class WorkStateTests(unittest.TestCase):
     """验证检查点脱敏、恢复、关闭、多仓和尺寸安全边界。"""
 
@@ -272,10 +373,20 @@ class WorkStateTests(unittest.TestCase):
         self.store.checkpoint(
             {"project_path": str(self.fixture.root), "goal": "恢复测试", "agent": "future-agent", "session_id": "s1"}
         )
-        output = handle_hook("future-agent", "session-start", {"cwd": str(self.fixture.root)}, self.fixture.settings)
+        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root)}, self.fixture.settings)
         context = output["hookSpecificOutput"]["additionalContext"]
         self.assertIn("恢复测试", context)
         self.assertLessEqual(len(context), 1800)
+        handle_hook("future-agent", "stop", {"cwd": str(self.fixture.root), "stop_hook_active": True}, self.fixture.settings)
+        handle_hook("future-agent", "pre-compact", {"cwd": str(self.fixture.root)}, self.fixture.settings)
+        handle_hook("future-agent", "session-end", {"cwd": str(self.fixture.root)}, self.fixture.settings)
+        handle_hook("future-agent", "session-start", {}, self.fixture.settings)
+        items = combine_invocations(AuditStore(self.fixture.settings).read_events()["events"])
+        outcomes = {item.get("outcome_code") for item in items}
+        self.assertTrue({
+            "resume_context_injected", "recursion_skipped", "pre_compact_observed",
+            "session_end_observed", "invalid_project",
+        }.issubset(outcomes))
 
     def test_hook_cli_forces_utf8_with_legacy_environment(self) -> None:
         """确认旧代码页环境下 hook CLI 仍能无替换字符地往返中文。"""
@@ -379,7 +490,7 @@ class MCPTests(unittest.TestCase):
         """建立已完成知识索引的 MCP 测试服务。"""
         self.fixture = RepoFixture()
         rebuild_knowledge_index(self.fixture.settings)
-        self.server = MCPServer(self.fixture.settings)
+        self.server = MCPServer(self.fixture.settings, agent="codex")
 
     def tearDown(self) -> None:
         """释放 MCP 测试夹具。"""
@@ -388,7 +499,10 @@ class MCPTests(unittest.TestCase):
     def test_initialize_tools_and_call(self) -> None:
         """确认协议协商、工具列表和知识工具调用均返回有效响应。"""
         initialized = self.server.handle(
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}}
+            {
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "clientInfo": {"name": "Codex Test", "version": "1"}},
+            }
         )
         self.assertEqual(initialized["result"]["protocolVersion"], "2024-11-05")
         listed = self.server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
@@ -424,6 +538,19 @@ class MCPTests(unittest.TestCase):
         parent_payload = json.loads(parent["result"]["content"][0]["text"])
         self.assertIn("### 第一部分", parent_payload["content"])
         self.assertIn("### 第二部分", parent_payload["content"])
+        failed = self.server.handle({
+            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "params": {"name": "unknown_tool", "arguments": {"prompt": "must not be logged"}},
+        })
+        self.assertTrue(failed["result"]["isError"])
+        loaded = AuditStore(self.fixture.settings).read_events()
+        items = combine_invocations(loaded["events"])
+        initialized_item = next(item for item in items if item.get("record_type") == "connection_initialized")
+        self.assertEqual(initialized_item["agent"], "codex")
+        self.assertEqual(initialized_item["client"]["name"], "Codex Test")
+        failed_item = next(item for item in items if item.get("operation") == "unknown_tool")
+        self.assertEqual(failed_item["status"], "failed")
+        self.assertNotIn("must not be logged", json.dumps(loaded, ensure_ascii=False))
 
     def test_client_visible_budget(self) -> None:
         """确认服务说明和工具声明不会超过客户端上下文预算。"""

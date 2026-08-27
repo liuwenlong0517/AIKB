@@ -43,3 +43,5 @@
 同一会话按 `id + content_hash` 复用已加载规则和知识。只在用户要求刷新、上下文丢失、项目或领域变化、文件变化或准确性无法确认时最小化补读，不全库重载；上下文压缩后优先使用紧凑工作状态恢复。
 
 `AIKB_HOME` 控制仓保存稳定入口和 `system/` 控制面；`AIKB_KNOWLEDGE_HOME` 知识仓保存候选、正式知识、知识索引和目录；`workspace/` 保存本机状态与派生数据库。控制面不进入知识仓 `CATALOG.md`，工作状态不进入知识索引，正式知识只写入知识仓。拆仓后两仓分别提交，知识变更不得修改控制仓的转发入口。
+
+`workspace/audit/` 是与 Working State 分离的本机操作审计面。AIKB 核心可以自动记录 MCP tool 和 hook 的时间、Agent、动作安全摘要、结果与耗时，但不得记录聊天全文、prompt、隐藏推理、transcript、完整 MCP 返回值、完整 hook payload、知识正文、密钥或完整 traceback。JSONL 是审计事实源，Markdown 报告只是可重建视图；审计失败必须 fail-open，日志不得自动进入知识仓或被自动清理。

@@ -174,7 +174,7 @@ function Update-CodexMcp {
     $pattern = '(?ms)^' + [regex]::Escape($script:CodexMarkerStart) + '.*?^' + [regex]::Escape($script:CodexMarkerEnd) + '\r?\n?'
     # 配置仅保存环境变量引用，避免把当前机器的控制仓绝对路径写入用户文件。
     $clean = [regex]::Replace($existing, $pattern, '').TrimEnd()
-    $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve"
+    $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve --agent codex"
     $tomlCommand = $launcherCommand.Replace('\', '\\').Replace('"', '\"')
     $block = @"
 $script:CodexMarkerStart
@@ -221,7 +221,7 @@ function Update-ClaudeMcp {
             throw "Claude Code 已存在非 AIKB 安装器管理的 mcpServers.aikb：$Path"
         }
     }
-    $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve"
+    $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve --agent claude-code"
     $server = [pscustomobject]@{
         type = 'stdio'
         command = 'pwsh'

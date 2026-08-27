@@ -137,6 +137,7 @@ try {
     if ($codexToml -notmatch '\[mcp_servers\.aikb\]' -or $codexToml -notmatch 'AIKB_HOME' -or $codexToml -notmatch 'AIKB_KNOWLEDGE_HOME') {
         throw 'Codex MCP 配置缺失或未通过双根环境变量解析路径'
     }
+    if ($codexToml -notmatch 'serve --agent codex') { throw 'Codex MCP 未显式传递审计 Agent 身份' }
     & python -c "import sys,tomllib; tomllib.load(open(sys.argv[1], 'rb'))" (Join-Path $codexHome 'config.toml')
     if ($LASTEXITCODE -ne 0) { throw 'Codex MCP TOML 配置无法解析' }
     foreach ($path in @((Join-Path $codexHome 'hooks.json'), (Join-Path $claudeHome 'settings.json'), $claudeConfig)) {
@@ -159,6 +160,9 @@ try {
     $claudeObject = Get-Content -Raw -LiteralPath $claudeConfig | ConvertFrom-Json
     # 从生成配置实际启动 MCP，避免只验证文本而漏掉命令行或环境传递错误。
     $server = $claudeObject.mcpServers.aikb
+    if (($server.args -join ' ') -notmatch 'serve --agent claude-code') {
+        throw 'Claude Code MCP 未显式传递审计 Agent 身份'
+    }
     $initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"adapter-test","version":"1"}}}'
     $mcpResponse = Invoke-McpInitialize -Server $server -InitializeRequest $initialize
     if ($mcpResponse.result.serverInfo.name -ne 'aikb') {
@@ -180,6 +184,31 @@ try {
     if ($null -eq $hookResponse) {
         throw 'Claude Code 生成的 PowerShell hook 无法实际启动'
     }
+    $auditLines = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'workspace\audit\events') -Filter '*.jsonl' -Recurse -ErrorAction SilentlyContinue |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName }
+    $auditEvents = @($auditLines | ForEach-Object { $_ | ConvertFrom-Json })
+    if (-not ($auditEvents | Where-Object { $_.agent -eq 'claude-code' -and $_.operation -eq 'initialize' })) {
+        throw 'Claude Code MCP initialize 未记录适配器身份'
+    }
+    if (-not ($auditEvents | Where-Object { $_.agent -eq 'claude-code' -and $_.operation -eq 'session-start' -and $_.outcome_code -eq 'invalid_project' })) {
+        throw 'Claude Code hook 未记录 invalid_project 审计结果'
+    }
+
+    # 在独立 PowerShell 进程中隐藏 Python，验证 wrapper 仍 fail-open 并写入独立 fallback JSON。
+    $fallbackRoot = Join-Path $repoRoot 'workspace\audit\fallback'
+    $fallbackBefore = @(Get-ChildItem -LiteralPath $fallbackRoot -Filter '*.json' -Recurse -ErrorAction SilentlyContinue).Count
+    $pwshExecutable = (Get-Command pwsh -ErrorAction Stop).Source
+    $savedPath = $env:PATH
+    try {
+        $env:PATH = ''
+        '{}' | & $pwshExecutable -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Agent adapter-test -Event stop | Out-Null
+    }
+    finally {
+        $env:PATH = $savedPath
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'Python 缺失时 hook wrapper 未保持 fail-open' }
+    $fallbackAfter = @(Get-ChildItem -LiteralPath $fallbackRoot -Filter '*.json' -Recurse -ErrorAction SilentlyContinue).Count
+    if ($fallbackAfter -le $fallbackBefore) { throw 'Python 缺失时 hook wrapper 未写入 fallback 审计' }
 
     $codexSettings = Get-Content -Raw -LiteralPath (Join-Path $codexHome 'hooks.json') | ConvertFrom-Json
     $codexSessionHook = @($codexSettings.hooks.SessionStart)[-1].hooks[0]

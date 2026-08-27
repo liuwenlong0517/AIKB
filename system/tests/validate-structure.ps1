@@ -37,7 +37,7 @@ $requiredRootDirectories = @('system', 'workspace')
 # 这些白名单体现控制面与知识面、运行面之间的职责边界。
 $allowedSystemEntries = @('README.md', 'adapters', 'rules', 'schemas', 'templates', 'tests', 'tools')
 $allowedContentEntries = @('.aikb-knowledge.json', '.gitattributes', '.git', '.gitignore', 'CATALOG.md', 'INDEX.md', 'README.md', 'experience', 'knowledge', 'projects', 'workflows')
-$allowedWorkspaceEntries = @('.gitignore', 'README.md', 'active', 'archive', 'db', 'runtime')
+$allowedWorkspaceEntries = @('.gitignore', 'README.md', 'active', 'archive', 'audit', 'db', 'runtime')
 
 foreach ($name in $requiredRootFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $name) -PathType Leaf)) {
@@ -49,6 +49,15 @@ foreach ($name in $requiredRootDirectories) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $name) -PathType Container)) {
         Add-ValidationError "缺少根目录：$name"
     }
+}
+
+$rootIgnore = Get-Content -Raw -LiteralPath (Join-Path $repoRoot '.gitignore')
+$workspaceIgnore = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'workspace\.gitignore')
+if ($rootIgnore -notmatch '(?m)^workspace/audit/$') {
+    Add-ValidationError '根 .gitignore 未排除 workspace/audit/'
+}
+if ($workspaceIgnore -notmatch '(?m)^audit/$') {
+    Add-ValidationError 'workspace/.gitignore 未排除 audit/'
 }
 
 Get-ChildItem -LiteralPath $repoRoot -File -Force |

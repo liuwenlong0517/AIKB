@@ -7,6 +7,7 @@ import sys
 import traceback
 from typing import Any
 
+from .audit import AuditStore, audit_project_id, summarize_tool_action, summarize_tool_result
 from .config import Settings
 from .knowledge import KnowledgeService, compact_json
 from .workstate import WorkStateStore
@@ -125,9 +126,13 @@ TOOLS: list[dict[str, Any]] = [
 class MCPServer:
     """把 MCP 协议方法路由到知识服务和 Working State 存储。"""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, agent: str = "unknown"):
         """初始化共享路径设置下的知识和任务状态服务。"""
         self.settings = settings
+        self.agent = agent or "unknown"
+        self.connection_id = AuditStore.new_id()
+        self.client: dict[str, Any] = {}
+        self.audit = AuditStore(settings)
         self.knowledge = KnowledgeService(settings)
         self.work = WorkStateStore(settings)
 
@@ -139,7 +144,19 @@ class MCPServer:
             return None
         try:
             if method == "initialize":
-                requested = message.get("params", {}).get("protocolVersion")
+                params = message.get("params") or {}
+                requested = params.get("protocolVersion")
+                client_info = params.get("clientInfo") or {}
+                self.client = {
+                    "name": str(client_info.get("name") or "unknown")[:120],
+                    "version": str(client_info.get("version") or "")[:80] or None,
+                }
+                try:
+                    self.audit.connection_initialized(
+                        agent=self.agent, client=self.client, connection_id=self.connection_id
+                    )
+                except Exception:
+                    pass
                 protocol = requested if requested in {"2024-11-05", "2025-03-26", "2025-06-18"} else "2025-06-18"
                 result = {
                     "protocolVersion": protocol,
@@ -168,6 +185,16 @@ class MCPServer:
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """执行已声明的 MCP 工具，并将异常转换为客户端可读的工具错误。"""
+        session_id = str(arguments.get("session_id") or "") or None
+        project = audit_project_id(arguments.get("project_path"))
+        invocation: dict[str, Any] | None = None
+        try:
+            invocation = self.audit.start(
+                source="mcp", agent=self.agent, operation=name, action=summarize_tool_action(name, arguments),
+                client=self.client, connection_id=self.connection_id, session_id=session_id, project_id=project,
+            )
+        except Exception:
+            pass
         try:
             if name == "search_knowledge":
                 value = self.knowledge.search(
@@ -196,8 +223,27 @@ class MCPServer:
                 )
             else:
                 raise KeyError(f"未知工具：{name}")
+            if invocation:
+                outcome_code, result_summary = summarize_tool_result(name, value)
+                try:
+                    self.audit.finish(
+                        invocation, source="mcp", agent=self.agent, operation=name, status="succeeded",
+                        outcome_code=outcome_code, result_summary=result_summary, client=self.client,
+                        connection_id=self.connection_id, session_id=session_id, project_id=project,
+                    )
+                except Exception:
+                    pass
             return {"content": [{"type": "text", "text": compact_json(value)}], "isError": False}
         except Exception as exc:
+            if invocation:
+                try:
+                    self.audit.finish(
+                        invocation, source="mcp", agent=self.agent, operation=name, status="failed",
+                        outcome_code="tool_failed", error_type=type(exc).__name__, client=self.client,
+                        connection_id=self.connection_id, session_id=session_id, project_id=project,
+                    )
+                except Exception:
+                    pass
             return {"content": [{"type": "text", "text": compact_json({"error": str(exc)})}], "isError": True}
 
     @staticmethod
@@ -222,6 +268,6 @@ class MCPServer:
                 traceback.print_exc(file=sys.stderr)
 
 
-def run_server(settings: Settings | None = None) -> None:
+def run_server(settings: Settings | None = None, agent: str = "unknown") -> None:
     """加载默认设置并启动 MCP stdio 循环。"""
-    MCPServer(settings or Settings.load()).run()
+    MCPServer(settings or Settings.load(), agent=agent).run()

@@ -8,11 +8,12 @@ AIKB（AI Knowledge Base）是一套面向个人工程工作的长期知识与�
 
 ## 1. 项目解决什么问题
 
-AIKB 将容易混淆的三类信息分开管理：
+AIKB 将容易混淆的四类信息分开管理：
 
 1. **长期工程知识**：经过验证、可复用、具有明确适用范围的知识，保存在独立知识仓，由知识仓 Git 管理。
 2. **系统控制规则**：Agent 如何接入、检索、恢复任务和贡献知识，保存在控制仓 `system/`，由控制仓 Git 管理。
 3. **当前工作状态**：未完成任务的目标、进度、验证结果、阻塞和下一步，保存在 `workspace/`，仅存在当前机器，不进入 Git。
+4. **本机操作审计**：MCP tool 与 hook 的时间、Agent、动作安全摘要和结果，以按日 JSONL 保存在 `workspace/audit/`，不进入知识或 Git。
 
 这种分离避免了两个常见问题：一是把临时对话或未经验证的结论当成长期知识；二是为了跨 Session 续接任务而把整段聊天重新塞入上下文。
 
@@ -24,6 +25,7 @@ AIKB 当前提供：
 - 面向 Codex、Claude Code 的 stdio MCP 服务；
 - 本机 Working State、检查点和任务归档；
 - SessionStart、PreCompact、Stop、SessionEnd 生命周期挂接；
+- MCP/hook 文本审计、故障兜底和按需 Markdown 报告；
 - 可插拔 Agent 适配器，以及幂等安装、诊断和精确卸载；
 - 结构、元数据、适配器和 MCP 行为自动测试；
 - MCP 失效时沿 `INDEX.md` 和局部知识 README 逐级读取的降级路径。
@@ -46,7 +48,11 @@ SQLite 保存全文索引、标签、关系、内容哈希和本机工作状态�
 
 MCP、知识模型和工作状态模型不依赖 Codex 或 Claude Code。平台差异集中在 `system/adapters/<agent>/`。未来增加 Agent 时，优先新增适配器目录，不修改现有知识内容和核心协议。
 
-### 2.5 根 README 不参与默认 Agent 上下文
+### 2.5 审计不是知识或 Working State
+
+`workspace/audit/events/*.jsonl` 是本机操作审计事实源，Markdown 日报只是可重建视图。审计只保存白名单字段的脱敏摘要，不保存 prompt、transcript、隐藏推理、知识正文、完整 MCP 返回值或 hook payload；写入失败必须 fail-open，历史不会自动清理。
+
+### 2.6 根 README 不参与默认 Agent 上下文
 
 本 README 可以随项目增长而保持详实，不承担低 token 接入职责。Agent 正常工作时采用以下最小路径：
 
@@ -71,7 +77,7 @@ Agent 根指令
 ├─ INDEX.md / CATALOG.md          指向知识仓的稳定转发页
 ├─ README.md                      本文件，人类维护者手册
 ├─ system/                        规则、Schema、工具、适配器、模板、测试
-└─ workspace/                     本机检查点、归档和派生数据库，不进 Git
+└─ workspace/                     本机检查点、审计、归档和派生数据库，不进 Git
 
 %AIKB_KNOWLEDGE_HOME%\            独立知识仓 Git；默认 %AIKB_HOME%\content
 ├─ .aikb-knowledge.json           知识仓类型与兼容契约
@@ -87,7 +93,8 @@ Codex / Claude Code
   ├─ 根指令 -> 控制仓 ENTRY_RULES.md -> AI_RULES.md（双层 INDEX 仅按需降级）
   ├─ MCP stdio -> system/tools/aikb-mcp/
   │                 ├─ 知识仓 Markdown -> SQLite FTS/元数据/关系索引
-  │                 └─ workspace/*.md -> SQLite 工作状态索引
+  │                 ├─ workspace/*.md -> SQLite 工作状态索引
+  │                 └─ workspace/audit/events/*.jsonl -> 本机操作审计
   └─ hooks -> system/adapters/shared/aikb-hook.ps1
                   -> SessionStart 恢复提示 / Stop 检查点提醒
 ```
@@ -247,7 +254,8 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 #### Python 模块职责
 
-- `aikb/__main__.py`：命令行入口，提供 `serve`、`validate`、`rebuild`、`search`、`read`、`work-get` 和 `hook` 子命令。
+- `aikb/__main__.py`：命令行入口，提供 `serve`、`validate`、`rebuild`、`search`、`read`、`work-get`、`hook` 和 `audit` 子命令。
+- `aikb/audit.py`：实现按日 JSONL、跨进程追加、fallback、事件聚合、过滤和 Markdown 报告。
 - `aikb/config.py`：分别解析控制仓、知识仓和本机 `workspace/`，验证知识仓契约并创建运行目录。
 - `aikb/frontmatter.py`：读取和渲染受控 YAML 风格 Front Matter；不依赖 PyYAML。
 - `aikb/indexer.py`：扫描正式知识、验证元数据、构建 FTS/元数据/标签/关系表并原子替换数据库。
@@ -335,6 +343,9 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 - `active/`：尚未完成的任务和历史检查点；
 - `archive/`：已完成、放弃或被替代的任务；
+- `audit/events/`：按日 JSONL 审计事实源；
+- `audit/fallback/`：主写入或 hook wrapper 启动失败时的独立 JSON；
+- `audit/reports/`：显式生成、可重建的 Markdown 报告；
 - `db/aikb-knowledge.db`：知识派生索引；
 - `db/aikb-work.db`：工作状态派生索引；
 - `runtime/`：锁、临时文件和运行标记。
@@ -622,6 +633,16 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 search "关键词"
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 read "aikb:稳定知识-id"
 ```
 
+### 查看本机操作审计
+
+```powershell
+pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit list --since 24h
+pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit summary --since 7d
+pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit report --date 2026-08-27
+```
+
+`audit report` 默认向终端输出 Markdown；只有显式指定 `--output` 时才写报告文件。审计没有自动保留期或清理行为。
+
 ### 运行完整自动测试
 
 ```powershell
@@ -683,7 +704,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 
 ### hooks 故障是否会阻断 Agent
 
-公共 hook 包装器采用 fail-open：Python 不存在或处理异常时返回成功，不阻断普通会话。Stop 的检查点提醒是唯一可能暂缓结束的行为，并且同一工作状态只阻止一次。
+公共 hook 包装器采用 fail-open：Python 不存在或处理异常时返回成功，不阻断普通会话，并在仍能定位控制仓时写入独立 fallback JSON。Stop 的检查点提醒是唯一可能暂缓结束的行为，并且同一工作状态只阻止一次。`AIKB_HOME` 完全无效时无法定位审计目录，这一到达前故障只能由 Agent 自身日志或 doctor 诊断发现。
 
 ### 可以删除 `workspace/db` 吗
 
@@ -726,7 +747,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 
 两边都不应该提交：
 
-- `workspace/active/`、`workspace/archive/`、`workspace/db/` 或 `workspace/runtime/`；
+- `workspace/active/`、`workspace/archive/`、`workspace/audit/`、`workspace/db/` 或 `workspace/runtime/`；
 - Agent 用户配置和 `.aikb-backup`；
 - Python 缓存、虚拟环境、密钥或原始 Session 数据。
 

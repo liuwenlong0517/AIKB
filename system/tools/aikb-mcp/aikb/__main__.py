@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
+from .audit import AuditStore, audit_summary, combine_invocations, filter_events, render_markdown, write_report
 from .config import Settings
 from .hooks import handle_hook
 from .indexer import metadata_report, rebuild_knowledge_index
@@ -36,7 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--knowledge-root", type=Path)
     parser.add_argument("--workspace-root", type=Path)
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("serve")
+    serve = sub.add_parser("serve")
+    serve.add_argument("--agent", default="unknown")
     sub.add_parser("validate")
     sub.add_parser("rebuild")
     search = sub.add_parser("search")
@@ -52,6 +55,24 @@ def build_parser() -> argparse.ArgumentParser:
     hook = sub.add_parser("hook")
     hook.add_argument("--agent", required=True)
     hook.add_argument("--event", required=True)
+    audit = sub.add_parser("audit")
+    audit_sub = audit.add_subparsers(dest="audit_command", required=True)
+    audit_list = audit_sub.add_parser("list")
+    audit_list.add_argument("--since")
+    audit_list.add_argument("--date")
+    audit_list.add_argument("--agent")
+    audit_list.add_argument("--source", choices=["mcp", "hook"])
+    audit_list.add_argument("--status", choices=["succeeded", "failed", "noop", "blocked", "incomplete"])
+    audit_show = audit_sub.add_parser("show")
+    audit_show.add_argument("event_id")
+    audit_summary_parser = audit_sub.add_parser("summary")
+    audit_summary_parser.add_argument("--since")
+    audit_summary_parser.add_argument("--date")
+    audit_summary_parser.add_argument("--agent")
+    audit_summary_parser.add_argument("--source", choices=["mcp", "hook"])
+    audit_report = audit_sub.add_parser("report")
+    audit_report.add_argument("--date")
+    audit_report.add_argument("--output", type=Path)
     return parser
 
 
@@ -66,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     command = args.command or "serve"
     if command == "serve":
-        run_server(settings)
+        run_server(settings, agent=args.agent if args.command else "unknown")
     elif command == "validate":
         report = metadata_report(settings)
         _json(report)
@@ -85,6 +106,41 @@ def main(argv: list[str] | None = None) -> int:
         raw = sys.stdin.read().lstrip("\ufeff").strip()
         payload = json.loads(raw) if raw else {}
         print(json.dumps(handle_hook(args.agent, args.event, payload, settings), ensure_ascii=False, separators=(",", ":")))
+    elif command == "audit":
+        store = AuditStore(settings)
+        loaded = store.read_events()
+        selected_date = getattr(args, "date", None)
+        if args.audit_command == "report" and not selected_date:
+            selected_date = datetime.now().astimezone().date().isoformat()
+        combined = combine_invocations(loaded["events"])
+        items = filter_events(
+            combined, since=getattr(args, "since", None), on_date=selected_date,
+            agent=getattr(args, "agent", None), source=getattr(args, "source", None),
+        )
+        requested_status = getattr(args, "status", None)
+        if requested_status:
+            items = [item for item in items if item.get("status") == requested_status]
+        fallback_count = sum(1 for item in items if item.get("_fallback"))
+        if args.audit_command == "list":
+            _json({"count": len(items), "items": items, "damaged": loaded["damaged"]})
+        elif args.audit_command == "show":
+            match = next((item for item in items if args.event_id in {
+                item.get("event_id"), item.get("finish_event_id"), item.get("invocation_id")
+            }), None)
+            _json(match or {"error": f"未找到审计事件：{args.event_id}"})
+            return 0 if match else 1
+        else:
+            summary = audit_summary(items, damaged=loaded["damaged"], fallback_count=fallback_count)
+            if args.audit_command == "summary":
+                _json(summary)
+            else:
+                title_date = selected_date
+                markdown = render_markdown(items, summary, title_date)
+                if args.output:
+                    write_report(args.output, markdown)
+                    _json({"output": str(args.output.expanduser().resolve()), "count": len(items)})
+                else:
+                    print(markdown, end="")
     return 0
 
 
