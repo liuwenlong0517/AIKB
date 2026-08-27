@@ -50,7 +50,7 @@ MCP、知识模型和工作状态模型不依赖 Codex 或 Claude Code。平台�
 
 ### 2.5 审计不是知识或 Working State
 
-`workspace/audit/events/*.jsonl` 是本机操作审计事实源，Excel 日报是主可重建视图，Markdown 仅保留兼容入口。默认 `safe` 审计只保存白名单字段的脱敏摘要；用户显式开启 `diagnostic` 或 `full-local` 后，受预算和脱敏保护的 MCP/hook 输入输出会写入独立诊断目录。任何级别都不保存聊天全文、隐藏推理、transcript、二进制附件、未脱敏密钥或完整 traceback；写入失败必须 fail-open，历史不会自动清理。
+`workspace/audit/events/*.jsonl` 是本机操作审计事实源，Excel 日报是主可重建视图，Markdown 仅保留兼容入口。默认 `safe` 审计只保存白名单字段的脱敏摘要；用户显式开启 `diagnostic` 或 `full-local` 后，受预算和脱敏保护的 MCP/hook 输入输出会写入独立诊断目录。任何级别都不保存聊天全文、隐藏推理、transcript、二进制附件、未脱敏密钥或完整 traceback；写入失败必须 fail-open，历史不会自动清理。需要维护时由 `system/tools/clear-workspace.ps1` 明确预览并确认执行，绝不在 Agent 生命周期中自动触发。
 
 ### 2.6 根 README 不参与默认 Agent 上下文
 
@@ -247,6 +247,8 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 `set-aikb-home.ps1` 是双仓位置初始化脚本。它从脚本位置定位控制仓，通过 `-KnowledgePath` 接受任意知识仓位置；未指定时使用控制仓下的 `content/`。脚本验证两个仓库契约后幂等写入当前用户的 `AIKB_HOME` 与 `AIKB_KNOWLEDGE_HOME`。`-Target Process` 只服务于自动测试和临时诊断。
 
 `setup-aikb.ps1` 是首次使用的一键编排器。它不复制环境设置、根指令、适配器、索引或诊断逻辑，而是按顺序调用对应的独立脚本；因此每个步骤仍可单独运行、排障和重复执行。
+
+`clear-workspace.ps1` 用于按最后写入时间维护过期审计文件和运行检查点。它默认仅返回 JSON 预览，默认保留审计 90 天、检查点 180 天；只有带 `-Apply` 且通过 PowerShell 确认后才删除。它不会删除任何活动任务的 `work.md` 或当前检查点，也不会猜测性处理没有时间戳的审计会话标签注册表。
 
 `aikb-mcp/` 是轻量 MCP 与索引核心。
 
@@ -654,6 +656,17 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit diagnostic <�
 `audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，并输出 JSON 格式的文件路径与记录数；工作簿包含“概览”“调用明细”“损坏记录”三个工作表，其中调用明细默认显示可读会话名称、中文动作说明和中文结果说明，原始会话 ID 与技术摘要置于靠后列。Markdown 方案暂时保留为 `audit report-md`，该命令会给出弃用提示。
 
 审计捕获级别由当前进程环境变量 `AIKB_AUDIT_CAPTURE_LEVEL` 控制：默认 `safe` 只写安全摘要；`diagnostic` 额外写入经脱敏、限长的 MCP/hook 输入输出；`full-local` 提高诊断记录预算，仍会脱敏常见密钥、忽略隐藏推理和二进制附件。诊断数据位于 `workspace/audit/diagnostic/`，通过调用 ID 与主审计记录关联，可用 `audit diagnostic <调用ID>` 查询。示例：`$env:AIKB_AUDIT_CAPTURE_LEVEL = 'diagnostic'`。所有审计数据均不进 Git，且没有自动保留期或清理行为。
+
+### 预览或清理过期本机运行数据
+
+```powershell
+# 仅列出将被清理的精确路径（默认审计 90 天、检查点 180 天）
+pwsh -NoProfile -File system/tools/clear-workspace.ps1
+# 审查上述 JSON 后，显式执行；仍会显示 PowerShell 删除确认
+pwsh -NoProfile -File system/tools/clear-workspace.ps1 -Apply
+```
+
+该脚本只处理审计的按日记录、诊断附件、fallback、报告文件，过期的归档工作项，以及活动任务中非当前的历史检查点。它始终保留活动任务 `work.md`、当前检查点和 `audit/sessions.json`；后者没有可靠时间戳，必须人工决定是否移除。
 
 ### 运行完整自动测试
 

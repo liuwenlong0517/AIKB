@@ -11,4 +11,4 @@
 - `db/aikb-work.db`：从工作状态 Markdown 派生的任务索引。
 - `runtime/`：本机锁、临时文件和适配器运行标记。
 
-除本说明和 `.gitignore` 外，本目录内容均不得进入控制仓或知识仓。正式知识只能写入知识仓；工作检查点不能自动提升为正式知识，也不得保存完整聊天记录、隐藏推理、密钥、原始日志或完整 diff。`audit/` 是独立的操作审计面，不属于 Working State：它不得保存 prompt、transcript、完整 MCP 返回值、完整 hook payload、知识正文或完整 traceback，也不得自动进入正式知识。审计历史不自动清理。
+除本说明和 `.gitignore` 外，本目录内容均不得进入控制仓或知识仓。正式知识只能写入知识仓；工作检查点不能自动提升为正式知识，也不得保存完整聊天记录、隐藏推理、密钥、原始日志或完整 diff。`audit/` 是独立的操作审计面，不属于 Working State：它不得保存 prompt、transcript、完整 MCP 返回值、完整 hook payload、知识正文或完整 traceback，也不得自动进入正式知识。审计历史不会自动清理；需要维护时使用 `system/tools/clear-workspace.ps1` 先预览精确候选项，再显式 `-Apply` 并确认删除。

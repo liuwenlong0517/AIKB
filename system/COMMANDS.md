@@ -483,6 +483,26 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 参数与 `audit report` 相同，但 `--output` 必须是 `.md`，默认 `workspace/audit/reports/YYYY-MM-DD.md`。该入口暂时保留兼容已有自动化，stderr 会输出弃用警告；成功 stdout 仍为输出路径和记录数 JSON。建议新流程使用 `audit report` 的 Excel 输出。
 
+### 4.10 `clear-workspace.ps1`：预览或清理过期本机运行数据
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1
+
+默认是预览，不会删除文件。它列出按 UTC `LastWriteTime` 早于保留期的精确候选路径：审计的 `events`、`diagnostic`、`fallback`、`reports` 文件；`archive/` 中完整的过期工作项；以及 `active/` 中早于保留期、但不是当前 `checkpoint_id` 的历史检查点。活动任务的 `work.md` 和当前检查点永不删除。`audit/sessions.json` 没有可靠时间戳，也不会被脚本猜测性清理。
+
+| 参数 | 类型/默认值 | 作用与限制 |
+|---|---|---|
+| `-AuditRetentionDays` | 整数 `1..36500`，默认 `90` | 审计文件保留天数。 |
+| `-CheckpointRetentionDays` | 整数 `1..36500`，默认 `180` | 归档任务与活动任务历史检查点的保留天数。 |
+| `-WorkspacePath` | 可选目录 | 默认控制仓的 `workspace/`；仅用于维护或隔离测试。 |
+| `-Apply` | 开关，默认关闭 | 允许删除预览中的候选项；仍支持 PowerShell 的 `-WhatIf` 和确认提示。 |
+
+先审查预览 JSON 的 `Candidates`，确认目标后再执行同一命令并附加 `-Apply`。例如：
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180 -Apply
+
+脚本会跳过 reparse point（符号链接或 junction）以及无法读取当前检查点 ID 的活动任务；这类情况通过 JSON 的 `Skipped` 返回，需人工核对。清理归档任务后，工作索引会在下次读取时因 Markdown 指纹变化自动重建。
+
 ## 5. 自动校验与性能命令
 
 ### 5.1 结构校验：`validate-structure.ps1`
