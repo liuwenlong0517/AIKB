@@ -203,7 +203,11 @@ class WorkStateStore:
         return snapshots
 
     def checkpoint(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """追加一个脱敏且有大小上限的检查点，同时刷新工作索引。"""
+        """追加一个脱敏且有大小上限的检查点，同时刷新工作索引。
+
+        显式传入的工作 ID 可以创建新活动任务或继续已有活动任务，但归档任务的
+        ID 不可重新占用，这样全局主键不会把历史任务和新活动任务混成一条索引记录。
+        """
         raw_project_path = str(payload.get("project_path") or "").strip()
         if not raw_project_path:
             raise ValueError("project_path 不能为空")
@@ -217,6 +221,11 @@ class WorkStateStore:
         role = _safe_slug(str(payload.get("role") or "implement"), "implement")
         requested_work_id = str(payload.get("work_id") or "").strip()
         work_id = _safe_slug(requested_work_id, "") if requested_work_id else ""
+        if requested_work_id and work_id:
+            archived_paths = self._find_archived_work_paths(work_id)
+            if archived_paths:
+                locations = ", ".join(str(path.parent) for path in archived_paths)
+                raise FileExistsError(f"显式 work_id 已存在于归档，拒绝复用：{work_id}（{locations}）")
         requested_dir = self._safe_work_dir(self.settings.workspace_root / "active" / p_id / work_id) if work_id else None
         previous = self._load_work(requested_dir / "work.md") if requested_dir and (requested_dir / "work.md").exists() else None
         goal = _normalize_value(payload.get("goal") or (previous or {}).get("goal"))
@@ -343,7 +352,11 @@ class WorkStateStore:
         return {"work_id": work_id, "status": status, "last_checkpoint": checkpoint["checkpoint_id"], "archive_path": str(destination)}
 
     def rebuild_index(self) -> dict[str, Any]:
-        """扫描活动与归档状态，以临时 SQLite 原子替换工作索引。"""
+        """扫描活动与归档状态，以临时 SQLite 原子替换工作索引。
+
+        活动目录先于归档目录扫描，且重复主键使用 ``INSERT OR IGNORE``；
+        这是故障恢复时的确定性兜底，保证旧归档不会覆盖仍在活动中的任务。
+        """
         self.settings.ensure_runtime_dirs()
         handle, temp_name = tempfile.mkstemp(prefix="aikb-work-", suffix=".db", dir=self.settings.work_db.parent)
         os.close(handle)
@@ -370,7 +383,7 @@ class WorkStateStore:
                     for path in sorted((self.settings.workspace_root / root_name).rglob("work.md")):
                         data = self._load_work(path)
                         connection.execute(
-                            "INSERT OR REPLACE INTO work_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "INSERT OR IGNORE INTO work_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (
                                 data.get("work_id"), data.get("project_id"), data.get("project_path"), data.get("status"),
                                 data.get("agent"), data.get("session_id"), data.get("role"), data.get("updated_at"),
@@ -382,7 +395,7 @@ class WorkStateStore:
                                 self._as_text(data.get("blockers")), str(path),
                             ),
                         )
-                        count += 1
+                count = connection.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
                 fingerprint = self._work_fingerprint()
                 connection.executemany(
                     "INSERT INTO index_metadata VALUES (?, ?)",
@@ -440,6 +453,22 @@ class WorkStateStore:
                 value = ""
             result[field] = value
         return result
+
+    def _find_archived_work_paths(self, work_id: str) -> list[Path]:
+        """查找归档中声明了指定工作 ID 的状态文件。
+
+        不能只按目录名判断，因为历史数据可能来自旧布局；索引真正使用的是
+        ``work.md`` 的 Front Matter 中的 ``work_id``，因此这里与重建索引采用同一
+        事实源。返回完整路径仅用于拒绝复用时给出可定位的错误信息。
+        """
+        archive_root = (self.settings.workspace_root / "archive").resolve()
+        if not archive_root.exists():
+            return []
+        matches: list[Path] = []
+        for path in sorted(archive_root.rglob("work.md")):
+            if self._load_work(path).get("work_id") == work_id:
+                matches.append(path.resolve())
+        return matches
 
     def _render_work(self, metadata: dict[str, Any], fields: dict[str, str | list[str]]) -> str:
         """按固定章节顺序生成完整工作状态文档。"""

@@ -610,7 +610,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
     {"name":"checkpoint_work_state","arguments":{"project_path":"E:\\CodeSpace\\AIKB","goal":"整理控制层命令手册","status":"active","agent":"codex","session_id":"session-20260827","role":"implement","changed_files":["system/COMMANDS.md"],"verification":["validate-structure.ps1"]}}
 
-结果含 `work_id`、`project_id`、`checkpoint_id`、状态、work.md 路径和是否应用脱敏。异常包括缺少项目路径/新任务 goal、非法 status、仓库列表超过 8 项、单检查点超过 64 KiB 或路径越过 workspace 边界。
+结果含 `work_id`、`project_id`、`checkpoint_id`、状态、work.md 路径和是否应用脱敏。异常包括缺少项目路径/新任务 goal、非法 status、仓库列表超过 8 项、单检查点超过 64 KiB、路径越过 workspace 边界或显式 `work_id` 已存在于归档。
 
 ### 6.5 `close_work_state`
 

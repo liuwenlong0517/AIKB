@@ -443,6 +443,59 @@ class WorkStateTests(unittest.TestCase):
         self.assertEqual(final_checkpoint.metadata["status"], "completed")
         self.assertEqual(self.store.get(project_path=str(self.fixture.root))["count"], 0)
 
+    def test_explicit_work_id_cannot_reuse_archived_task(self) -> None:
+        """确认显式工作 ID 一旦归档就不能重新创建活动任务。"""
+        created = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "归档 ID 防重用", "agent": "codex", "session_id": "s1"}
+        )
+        closed = self.store.close(created["work_id"], status="completed", agent="codex", session_id="close")
+
+        with self.assertRaisesRegex(FileExistsError, "已存在于归档"):
+            self.store.checkpoint(
+                {
+                    "project_path": str(self.fixture.root),
+                    "work_id": created["work_id"],
+                    "goal": "错误重用归档 ID",
+                    "agent": "codex",
+                    "session_id": "s2",
+                }
+            )
+
+        self.assertEqual(len(list((self.fixture.settings.workspace_root / "active").rglob("work.md"))), 0)
+        self.assertTrue((Path(closed["archive_path"]) / "work.md").exists())
+
+    def test_rebuild_index_keeps_active_copy_when_ids_collide(self) -> None:
+        """确认异常重复数据重建索引时活动副本优先于归档副本。"""
+        created = self.store.checkpoint(
+            {
+                "project_path": str(self.fixture.root),
+                "work_id": "collision-work",
+                "goal": "索引冲突优先级",
+                "agent": "codex",
+                "session_id": "s1",
+            }
+        )
+        active_path = Path(created["path"])
+        archive_path = (
+            self.fixture.settings.workspace_root
+            / "archive"
+            / str(datetime.now().year)
+            / "duplicate"
+            / created["work_id"]
+            / "work.md"
+        )
+        archive_path.parent.mkdir(parents=True)
+        archive_path.write_text(
+            active_path.read_text(encoding="utf-8").replace('status: "active"', 'status: "completed"'),
+            encoding="utf-8",
+        )
+
+        rebuilt = self.store.rebuild_index()
+        state = self.store.get(work_id=created["work_id"])
+        self.assertEqual(rebuilt["items"], 1)
+        self.assertEqual(state["count"], 1)
+        self.assertEqual(state["items"][0]["path"], str(active_path))
+
     def test_session_start_only_injects_unique_item(self) -> None:
         """确认 SessionStart 只为唯一活动任务注入恢复胶囊。"""
         self.store.checkpoint(
