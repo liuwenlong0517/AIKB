@@ -11,7 +11,7 @@ from pathlib import Path
 from .audit import AuditStore, audit_summary, combine_invocations, filter_events, render_markdown, write_excel_report, write_report
 from .config import Settings
 from .hooks import handle_hook
-from .indexer import metadata_report, rebuild_knowledge_index
+from .indexer import metadata_report, rebuild_knowledge_index, review_report
 from .knowledge import KnowledgeService
 from .server import run_server
 from .workstate import WorkStateStore
@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve")
     serve.add_argument("--agent", default="unknown")
     sub.add_parser("validate")
+    sub.add_parser("review")
     sub.add_parser("rebuild")
     search = sub.add_parser("search")
     search.add_argument("query")
@@ -95,6 +96,10 @@ def main(argv: list[str] | None = None) -> int:
         run_server(settings, agent=args.agent if args.command else "unknown")
     elif command == "validate":
         report = metadata_report(settings)
+        _json(report)
+        return 0 if report["valid"] else 1
+    elif command == "review":
+        report = review_report(settings)
         _json(report)
         return 0 if report["valid"] else 1
     elif command == "rebuild":

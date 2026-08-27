@@ -7,6 +7,7 @@ from typing import Any
 
 from .audit import AuditStore, audit_project_id
 from .config import Settings
+from .indexer import review_report
 from .workstate import WorkStateStore
 
 
@@ -55,22 +56,51 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
         except Exception:
             pass
 
+    def knowledge_review_reminder() -> str:
+        """把审查队列压缩为 SessionStart 提醒；校验或读取失败时保持 hook fail-open。"""
+        try:
+            report = review_report(resolved_settings)
+        except Exception:
+            return ""
+        if not report["valid"]:
+            return "AIKB 知识审查提醒：知识元数据校验未通过，请运行 `aikb validate` 后再写入或晋升。"
+        candidates = report["candidates"]
+        review_items = report["review_items"]
+        messages: list[str] = []
+        if candidates:
+            messages.append(
+                f"有 {len(candidates)} 个 candidate 条目待查重或晋升；查重需显式搜索 status=verified 和 status=candidate。"
+            )
+        if review_items:
+            messages.append(
+                f"有 {len(review_items)} 个正式条目记录 review_when 条件；请按条件人工复核，系统不自动判断自然语言条件是否满足。"
+            )
+        return "AIKB 知识审查提醒：" + "".join(messages) if messages else ""
+
     try:
         if not project_path:
             finish("noop", "invalid_project")
             return {}
         store = WorkStateStore(resolved_settings)
         state = store.get(project_path=project_path, limit=2)
+        reminder = knowledge_review_reminder() if normalized_event == "session-start" else ""
         if not state["unique"]:
             outcome = "no_active_work" if state["count"] == 0 else "multiple_active_work"
-            finish("noop", outcome, {"candidate_count": state["count"]})
+            finish("noop", outcome, {"candidate_count": state["count"], "knowledge_review_reminder": bool(reminder)})
+            if state["count"] == 0 and reminder:
+                return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": reminder[:1800]}}
             return {}
         item = state["items"][0]
         if normalized_event == "session-start":
-            context = (
+            base_context = (
                 "AIKB 发现一个本机活动任务。仅当用户当前请求是在继续该任务时使用；继续前核对 Git 分支、revision 和工作区。\n"
                 + item["resume_capsule"]
-            )[:1800]
+            )
+            if reminder:
+                # 给审查提醒保留固定空间，避免超长恢复胶囊把候选/复核提示截掉。
+                context = base_context[: max(0, 1799 - len(reminder))] + "\n" + reminder
+            else:
+                context = base_context[:1800]
             finish("succeeded", "resume_context_injected", {"work_id": item.get("work_id")})
             return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
         if normalized_event == "stop":

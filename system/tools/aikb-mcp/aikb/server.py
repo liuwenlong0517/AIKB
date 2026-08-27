@@ -9,12 +9,14 @@ from typing import Any
 
 from .audit import AuditStore, audit_project_id, summarize_tool_action, summarize_tool_result
 from .config import Settings
+from .indexer import review_report
 from .knowledge import KnowledgeService, compact_json
 from .workstate import WorkStateStore
 
 
 SERVER_INSTRUCTIONS = (
     "AIKB 是本机工程知识与任务状态服务。未知知识位置时调用 search_knowledge；已知稳定 ID 后调用 read_knowledge。"
+    "search_knowledge 默认只返回 verified；查重必须显式覆盖 verified 和 candidate，或调用 review_knowledge 查看审查队列。"
     "继续历史任务时调用 get_work_state。只有形成有意义的工程状态时才写 checkpoint，禁止保存聊天全文、隐藏推理、密钥、原始日志和完整 diff。"
     "正式知识 Markdown 只读；MCP 不可用时按 INDEX.md 和局部 README 降级。"
 )
@@ -23,7 +25,7 @@ SERVER_INSTRUCTIONS = (
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_knowledge",
-        "description": "按关键词和元数据发现 AIKB 知识；默认返回少量定位片段，不返回整篇文档。",
+        "description": "按关键词和元数据发现 AIKB 知识；默认只查 verified，查重时须显式再查 candidate；返回少量定位片段。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -37,6 +39,12 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["query"],
             "additionalProperties": False,
         },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "review_knowledge",
+        "description": "列出 candidate 晋升队列和带 review_when 的正式条目；只读，不自动修改知识。",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     },
     {
@@ -209,6 +217,8 @@ class MCPServer:
                     status=str(arguments.get("status") or "verified"), tags=arguments.get("tags"),
                     limit=int(arguments.get("limit", 5)), excerpt_chars=int(arguments.get("excerpt_chars", 700)),
                 )
+            elif name == "review_knowledge":
+                value = review_report(self.settings)
             elif name == "read_knowledge":
                 value = self.knowledge.read(
                     str(arguments.get("id_or_path") or ""), section=arguments.get("section"),

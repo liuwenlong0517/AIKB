@@ -250,8 +250,9 @@ stdin payload 常用字段：`cwd` 或 `project_path`（项目路径）、`sessi
 结果：
 
 - 唯一活动任务 + `session-start`：返回 `hookSpecificOutput.additionalContext` 恢复胶囊；
-- 无活动任务：返回 `{}`；
+- 无活动任务：通常返回 `{}`；若是 `session-start` 且知识审查队列非空，则返回仅含知识审查提醒的 `hookSpecificOutput.additionalContext`；
 - 多个活动任务：返回 `{}`，不注入恢复胶囊，并记录 `multiple_active_work`；这不表示没有活动任务；
+- `session-start` 会汇总提醒 `candidate` 晋升队列和带 `review_when` 的正式条目；`review_when` 是自然语言条件，系统不会自动判定是否到期；
 - `stop` 且检查点后 Git 状态变化：返回 `decision=block`，要求先写检查点；
 - `stop_hook_active=true` 或 Git 未变化：返回 `{}`；
 - `pre-compact`/`session-end`：正常记录事件并返回 `{}`；
@@ -324,6 +325,12 @@ PowerShell 启动器自身只有一个参数：`AikbArguments`，类型为字符
 
 异常情况：知识仓路径或文件无法读取、Front Matter 解析发生不可恢复错误时可能直接抛出异常；不要把 `valid=false` 当作命令成功。
 
+### 4.3.1 `review`：查看知识审查队列
+
+    python -m aikb review
+
+无命令专属参数。结果为 JSON：列出所有 `candidate` 条目及其晋升前查重信息，并列出记录了 `review_when` 的正式条目。该命令只读 Markdown，不自动晋升、修改状态或判断自然语言复核条件是否已满足；校验错误会随报告返回并使命令以非零退出。
+
 ### 4.4 `rebuild`：重建全部派生索引
 
     python -m aikb rebuild
@@ -348,7 +355,7 @@ PowerShell 启动器自身只有一个参数：`AikbArguments`，类型为字符
     python -m aikb search 'Windows 编码' --limit 10
     pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-mcp/scripts/aikb.ps1 search '双仓' --limit 3
 
-结果 JSON 含 `query`、`count`、`results`、`index`。每个候选包含稳定 ID、标题、类型、状态、逻辑路径、章节、tags、分数、匹配来源、摘要、截断标记和内容哈希。索引缺失、过期或损坏时会在搜索前自动重建。
+结果 JSON 含 `query`、`count`、`results`、`index`。CLI 搜索默认只返回 `verified`；查重候选时要通过 MCP `search_knowledge` 显式指定 `status=candidate`，或使用 `aikb review`。每个候选包含稳定 ID、标题、类型、状态、逻辑路径、章节、tags、分数、匹配来源、摘要、截断标记和内容哈希。索引缺失、过期或损坏时会在搜索前自动重建。
 
 异常情况：空 query 抛出 `query 不能为空`；知识验证/索引失败时非零退出。没有匹配项是正常成功结果（`count=0`），不是异常。
 
@@ -565,11 +572,19 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 场景：不知道知识位置时发现候选，不返回整篇文档。
 
-参数：`query`（必填字符串）、`type`（可选字符串类型过滤）、`status`（可选字符串，默认 `verified`）、`tags`（可选字符串数组）、`limit`（整数 `1..20`，默认 `5`）、`excerpt_chars`（整数 `120..1600`，默认 `700`）。
+参数：`query`（必填字符串）、`type`（可选字符串类型过滤）、`status`（可选字符串，默认 `verified`）、`tags`（可选字符串数组）、`limit`（整数 `1..20`，默认 `5`）、`excerpt_chars`（整数 `120..1600`，默认 `700`）。默认只查正式 `verified`；知识查重必须至少再以 `status=candidate` 查一次，不能把默认空结果当作候选不存在。
 
     {"name":"search_knowledge","arguments":{"query":"Windows 编码","status":"verified","tags":["windows"],"limit":5,"excerpt_chars":700}}
 
 结果与 CLI `search` 类似，包含索引状态和候选摘要。空 query、知识验证或索引失败会以 MCP `isError=true` 文本错误返回；无匹配是正常空结果。
+
+### 6.2.1 `review_knowledge`
+
+场景：查看候选晋升队列和正式知识的人工复核条件；只读，不改变知识状态。
+
+参数：无。结果包含 `valid`、`candidates`、`review_items` 和 `errors`；`candidates` 用于先查重再决定是否晋升，`review_items` 用于人工按 `review_when` 复核。`review_when` 保留原始自然语言，系统不自动判断条件是否满足。
+
+    {"name":"review_knowledge","arguments":{}}
 
 ### 6.2 `read_knowledge`
 

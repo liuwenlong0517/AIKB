@@ -377,3 +377,34 @@ def metadata_report(settings: Settings) -> dict[str, Any]:
         "errors": errors,
         "ids": [item.document.metadata.get("id") for item in documents],
     }
+
+
+def review_report(settings: Settings) -> dict[str, Any]:
+    """生成候选晋升和正式知识复核条件报告；只读 Markdown，不自动改变状态。"""
+    documents, errors = load_documents(settings)
+    candidates: list[dict[str, Any]] = []
+    review_items: list[dict[str, Any]] = []
+    for item in documents:
+        metadata = item.document.metadata
+        common = {
+            "id": metadata.get("id"),
+            "title": item.document.title,
+            "type": metadata.get("type"),
+            "status": metadata.get("status"),
+            "path": item.relative_path,
+            "content_hash": item.content_hash,
+        }
+        if metadata.get("status") == "candidate":
+            candidates.append({**common, "review_when": metadata.get("review_when", "")})
+        elif metadata.get("review_when"):
+            review_items.append({
+                **common,
+                "last_verified": metadata.get("last_verified"),
+                "review_when": metadata.get("review_when"),
+            })
+    return {
+        "valid": not errors,
+        "candidates": candidates,
+        "review_items": review_items,
+        "errors": errors,
+    }

@@ -23,7 +23,7 @@ from aikb.audit import AUDIT_FIELDS, AuditStore, _redact_text, audit_summary, co
 from aikb.config import Settings
 from aikb.frontmatter import parse_markdown, render_frontmatter
 from aikb.hooks import handle_hook
-from aikb.indexer import content_fingerprint, iter_content_files, metadata_report, rebuild_knowledge_index
+from aikb.indexer import content_fingerprint, iter_content_files, metadata_report, rebuild_knowledge_index, review_report
 from aikb.knowledge import KnowledgeService
 from aikb.server import MCPServer, SERVER_INSTRUCTIONS, TOOLS
 from aikb.workstate import WorkStateStore
@@ -149,9 +149,20 @@ class KnowledgeTests(unittest.TestCase):
         self.assertLessEqual(len(result["results"][0]["excerpt"]), 700)
         short = service.search("缓存")
         self.assertEqual(short["results"][0]["id"], "aikb:knowledge:engineering:cache")
+        self.assertEqual(service.search("候选条目")["count"], 0)
+        self.assertEqual(service.search("候选条目", status="candidate")["count"], 1)
         read = service.read("aikb:knowledge:engineering:cache", section="验证", max_chars=500)
         self.assertIn("测试通过", read["content"])
         self.assertEqual(read["relations"][0]["target"], "aikb:knowledge:engineering:index")
+
+    def test_review_report_lists_candidates_and_review_conditions(self) -> None:
+        """确认审查报告同时暴露候选晋升队列和正式条目的复核条件。"""
+        report = review_report(self.fixture.settings)
+        self.assertTrue(report["valid"], report["errors"])
+        self.assertEqual(len(report["candidates"]), 1)
+        self.assertEqual(report["candidates"][0]["id"], "aikb:experience:inbox:candidate")
+        self.assertEqual(len(report["review_items"]), 2)
+        self.assertTrue(all(item["review_when"] for item in report["review_items"]))
 
     def test_missing_front_matter_is_reported_instead_of_skipped(self) -> None:
         """确认分类目录中的无 Front Matter Markdown 会使元数据校验失败。"""
@@ -554,6 +565,16 @@ class WorkStateTests(unittest.TestCase):
             "session_end_observed", "invalid_project",
         }.issubset(outcomes))
 
+    def test_session_start_reminds_about_knowledge_review_without_work(self) -> None:
+        """确认没有活动任务时 SessionStart 仍提醒候选和 review_when 审查。"""
+        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root)}, self.fixture.settings)
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("知识审查提醒", context)
+        self.assertIn("candidate", context)
+        self.assertIn("review_when", context)
+        self.assertIn("status=verified", context)
+        self.assertIn("status=candidate", context)
+
     def test_session_start_does_not_inject_when_multiple_items_exist(self) -> None:
         """确认多个活动任务时不注入任一恢复胶囊，并留下可审计结果。"""
         for goal, session_id in (("多候选任务一", "s1"), ("多候选任务二", "s2")):
@@ -693,7 +714,7 @@ class MCPTests(unittest.TestCase):
         )
         self.assertEqual(initialized["result"]["protocolVersion"], "2024-11-05")
         listed = self.server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        self.assertEqual(len(listed["result"]["tools"]), 5)
+        self.assertEqual(len(listed["result"]["tools"]), 6)
         called = self.server.handle(
             {
                 "jsonrpc": "2.0",
@@ -706,10 +727,19 @@ class MCPTests(unittest.TestCase):
         payload = json.loads(called["result"]["content"][0]["text"])
         self.assertGreater(payload["count"], 0)
 
+        reviewed = self.server.handle({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "review_knowledge", "arguments": {}},
+        })
+        self.assertFalse(reviewed["result"]["isError"])
+        review_payload = json.loads(reviewed["result"]["content"][0]["text"])
+        self.assertEqual(len(review_payload["candidates"]), 1)
+        self.assertEqual(len(review_payload["review_items"]), 2)
+
         parent = self.server.handle(
             {
                 "jsonrpc": "2.0",
-                "id": 4,
+                "id": 5,
                 "method": "tools/call",
                 "params": {
                     "name": "read_knowledge",
@@ -726,7 +756,7 @@ class MCPTests(unittest.TestCase):
         self.assertIn("### 第一部分", parent_payload["content"])
         self.assertIn("### 第二部分", parent_payload["content"])
         failed = self.server.handle({
-            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
             "params": {"name": "unknown_tool", "arguments": {"prompt": "must not be logged"}},
         })
         self.assertTrue(failed["result"]["isError"])
@@ -744,7 +774,7 @@ class MCPTests(unittest.TestCase):
         self.assertLessEqual(len(SERVER_INSTRUCTIONS), 512)
         self.assertLessEqual(len(json.dumps(TOOLS, ensure_ascii=False, separators=(",", ":"))), 4000)
         self.assertEqual([tool["name"] for tool in TOOLS], [
-            "search_knowledge", "read_knowledge", "get_work_state", "checkpoint_work_state", "close_work_state"
+            "search_knowledge", "review_knowledge", "read_knowledge", "get_work_state", "checkpoint_work_state", "close_work_state"
         ])
         work_tool = next(tool for tool in TOOLS if tool["name"] == "get_work_state")
         self.assertIn("跨项目", work_tool["description"])

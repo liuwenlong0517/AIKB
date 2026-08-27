@@ -121,6 +121,8 @@ def summarize_tool_action(name: str, arguments: dict[str, Any]) -> dict[str, Any
             "tags": _sanitize(arguments.get("tags") or []),
             "limit": _sanitize(arguments.get("limit", 5)),
         }
+    if name == "review_knowledge":
+        return {}
     if name == "read_knowledge":
         identifier = str(arguments.get("id_or_path") or "")
         if identifier and not identifier.startswith("aikb:") and Path(identifier).is_absolute():
@@ -154,6 +156,8 @@ def describe_action(operation: str, action: dict[str, Any] | None) -> str:
             filters.append("标签 " + "、".join(str(tag) for tag in action["tags"]))
         suffix = f"；过滤：{'，'.join(filters)}" if filters else ""
         return f"检索知识：关键词“{action.get('query_preview') or '（空）'}”；最多返回 {action.get('limit', 5)} 条{suffix}"
+    if operation == "review_knowledge":
+        return "读取知识审查队列"
     if operation == "read_knowledge":
         section = action.get("section") or "全文"
         return f"读取知识“{action.get('id_or_path') or '未知对象'}”的“{section}”；字符预算 {action.get('max_chars', 4000)}"
@@ -176,6 +180,7 @@ def describe_result(operation: str, status: str, outcome_code: str | None, resul
         return f"执行失败：{outcome_code or '未知错误'}"
     messages = {
         "results_returned": f"检索完成，返回 {result.get('count', 0)} 条结果",
+        "knowledge_reviewed": f"知识审查队列：{result.get('candidate_count', 0)} 个候选，{result.get('review_count', 0)} 个复核条件",
         "knowledge_read": "已读取知识" + ("（内容已截断）" if result.get("truncated") else ""),
         "work_state_returned": f"找到 {result.get('count', 0)} 个活动任务" + ("（唯一候选）" if result.get("unique") else ""),
         "checkpoint_created": "检查点已创建",
@@ -200,6 +205,11 @@ def summarize_tool_result(name: str, value: Any) -> tuple[str, dict[str, Any]]:
         return "completed", {}
     if name == "search_knowledge":
         return "results_returned", {"count": int(value.get("count") or 0)}
+    if name == "review_knowledge":
+        return "knowledge_reviewed", {
+            "candidate_count": len(value.get("candidates") or []),
+            "review_count": len(value.get("review_items") or []),
+        }
     if name == "read_knowledge":
         return "knowledge_read", {"found": not bool(value.get("error")), "truncated": bool(value.get("truncated"))}
     if name == "get_work_state":

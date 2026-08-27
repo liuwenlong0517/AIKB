@@ -35,7 +35,7 @@
 
 所有候选和正式知识都位于 `AIKB_KNOWLEDGE_HOME`；对外仍使用 `content/...` 逻辑路径。不得写入控制仓根目录、`system/` 或 `workspace/`。除非任务正在维护 AIKB 控制面，否则不得修改控制仓。
 
-现有目录无法准确容纳已满足准入标准的知识时，可以创建职责清晰、名称稳定且不会引起大范围迁移的新分类。目录名使用英文小写短横线形式并包含说明范围和条目索引的 `README.md`；不得预建没有真实条目的空分类。边界有争议时先进入 Inbox。
+现有目录无法准确容纳已满足准入标准的知识时，可以创建职责清晰、名称稳定且不会引起大范围迁移的新分类。目录名使用英文小写短横线形式并包含说明范围和条目索引的 `README.md`；新分类不得引入新 `type`，只能沿用 schema 允许的 7 种类型及其现有目录语义，例如 `knowledge/databases/` 仍使用 `type: knowledge`。不得预建没有真实条目的空分类，边界有争议时先进入 Inbox。
 
 ## 4. 条目与元数据
 
@@ -65,7 +65,7 @@ Front Matter 必须符合 `system/schemas/knowledge-entry.schema.json`：
 
 每次正式写入依次完成：
 
-1. 用 MCP、局部 README、关键词和 `CATALOG.md` 查重，决定修订或新建。
+1. 用 MCP、局部 README、关键词和 `CATALOG.md` 查重；`search_knowledge` 默认只查 `verified`，因此至少分别以 `status: verified` 和 `status: candidate` 搜索（必要时再查 `deprecated`），不能只依赖默认结果。
 2. 用当前权威证据验证结论，确定适用范围；不满足条件则转入 Inbox。
 3. 选择归档位置和模板，填写稳定元数据、正文、来源及关系。
 4. 更新必要的局部 README 和 `CATALOG.md`，仅在稳定入口变化时更新 `INDEX.md`。
