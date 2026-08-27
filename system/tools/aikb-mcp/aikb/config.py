@@ -79,10 +79,12 @@ class Settings:
         root = (repo_root or discover_repo_root()).resolve()
         knowledge = discover_knowledge_root(root, knowledge_root, use_environment=root_from_environment)
         workspace = (workspace_root or root / "workspace").resolve()
+        expected_workspace = (root / "workspace").resolve()
         try:
-            workspace.relative_to(root)
+            # 所有运行数据都必须落在受 .gitignore 保护的 workspace/ 中，不能只限制在控制仓内。
+            workspace.relative_to(expected_workspace)
         except ValueError as exc:
-            raise RuntimeError("workspace 必须位于 AIKB 仓库内") from exc
+            raise RuntimeError("workspace 必须位于 AIKB 控制仓的 workspace/ 目录内") from exc
         for protected in (root / "system", workspace):
             try:
                 knowledge.relative_to(protected.resolve())

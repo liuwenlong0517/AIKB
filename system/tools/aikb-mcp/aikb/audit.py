@@ -26,7 +26,7 @@ AUDIT_FIELDS = (
 )
 FINISHED_STATUS = {"succeeded", "failed", "noop", "blocked"}
 SECRET_PATTERN = re.compile(
-    r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|passwd|secret|private[_-]?key)\s*[:=]\s*([^\s,;]+)"
+    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|passwd|secret|private[_-]?key)\b\s*[:=]\s*(?:bearer\s+)?(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[^,;\r\n]*)"
 )
 TOKEN_VALUE_PATTERN = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,})\b")
 
@@ -79,10 +79,14 @@ def audit_project_id(project_path: str | None) -> str | None:
 def summarize_tool_action(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """只从白名单字段构造 MCP 动作摘要，避免落盘正文或任意参数。"""
     if name == "search_knowledge":
-        return _sanitize({
-            "query": arguments.get("query"), "type": arguments.get("type"), "status": arguments.get("status"),
-            "tags": arguments.get("tags"), "limit": arguments.get("limit", 5),
-        })
+        # 查询文本和标签均可能来自用户输入；审计只需要证明发生了检索及其过滤形态，不能保存原文。
+        return {
+            "query_chars": len(str(arguments.get("query") or "")),
+            "has_type_filter": bool(arguments.get("type")),
+            "has_status_filter": bool(arguments.get("status")),
+            "tag_count": len(arguments.get("tags") or []),
+            "limit": _sanitize(arguments.get("limit", 5)),
+        }
     if name == "read_knowledge":
         identifier = str(arguments.get("id_or_path") or "")
         if identifier and not identifier.startswith("aikb:") and Path(identifier).is_absolute():

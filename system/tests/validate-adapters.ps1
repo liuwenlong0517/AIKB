@@ -194,6 +194,22 @@ try {
         throw 'Claude Code hook 未记录 invalid_project 审计结果'
     }
 
+    # 过期的控制仓变量同样必须 fail-open；该路径在 Python 启动前就会触发 PowerShell 的路径解析。
+    $previousInvalidRootAikbHome = $env:AIKB_HOME
+    $previousInvalidRootKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
+    $invalidRootExitCode = $null
+    try {
+        $env:AIKB_HOME = Join-Path $resolvedTestRoot 'missing-control-root'
+        $env:AIKB_KNOWLEDGE_HOME = Join-Path $resolvedTestRoot 'missing-knowledge-root'
+        '{}' | & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Agent adapter-test -Event stop | Out-Null
+        $invalidRootExitCode = $LASTEXITCODE
+    }
+    finally {
+        $env:AIKB_HOME = $previousInvalidRootAikbHome
+        $env:AIKB_KNOWLEDGE_HOME = $previousInvalidRootKnowledgeHome
+    }
+    if ($invalidRootExitCode -ne 0) { throw '无效 AIKB_HOME 时 hook wrapper 未保持 fail-open' }
+
     # 在独立 PowerShell 进程中隐藏 Python，验证 wrapper 仍 fail-open 并写入独立 fallback JSON。
     $fallbackRoot = Join-Path $repoRoot 'workspace\audit\fallback'
     $fallbackBefore = @(Get-ChildItem -LiteralPath $fallbackRoot -Filter '*.json' -Recurse -ErrorAction SilentlyContinue).Count

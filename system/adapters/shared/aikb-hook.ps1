@@ -8,7 +8,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = if ($env:AIKB_HOME) { (Resolve-Path -LiteralPath $env:AIKB_HOME).Path } else { $null }
+# 显式抑制失效变量的路径解析错误；后续统一按空根目录走 fail-open 分支。
+$repoRoot = $null
+if ($env:AIKB_HOME) {
+    $resolvedRepoRoot = Resolve-Path -LiteralPath $env:AIKB_HOME -ErrorAction SilentlyContinue
+    if ($resolvedRepoRoot) {
+        $repoRoot = $resolvedRepoRoot.Path
+    }
+}
 if (-not $repoRoot -or -not (Test-Path -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md') -PathType Leaf)) {
     # Hook 必须 fail-open；环境变量缺失或失效时交给普通 Agent 会话继续。
     exit 0

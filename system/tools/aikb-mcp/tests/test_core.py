@@ -17,7 +17,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 if str(TOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOL_ROOT))
 
-from aikb.audit import AUDIT_FIELDS, AuditStore, audit_summary, combine_invocations, render_markdown, summarize_tool_action
+from aikb.audit import AUDIT_FIELDS, AuditStore, _redact_text, audit_summary, combine_invocations, render_markdown, summarize_tool_action
 from aikb.config import Settings
 from aikb.frontmatter import parse_markdown, render_frontmatter
 from aikb.hooks import handle_hook
@@ -229,10 +229,17 @@ class AuditTests(unittest.TestCase):
         self.fixture.close()
 
     def test_jsonl_round_trip_redaction_and_markdown(self) -> None:
+        query = "中文 Authorization: Bearer plain-text-secret-value"
+        action = summarize_tool_action(
+            "search_knowledge",
+            {"query": query, "type": "knowledge", "status": "verified", "tags": ["内部", "秘密"], "limit": 5},
+        )
+        self.assertEqual(action, {
+            "query_chars": len(query), "has_type_filter": True, "has_status_filter": True, "tag_count": 2, "limit": 5,
+        })
         invocation = self.store.start(
             source="mcp", agent="codex", operation="search_knowledge",
-            action=summarize_tool_action("search_knowledge", {"query": "中文 api_key=secret-value", "limit": 5}),
-            client={"name": "Codex", "version": "1"}, connection_id="connection-1",
+            action=action, client={"name": "Codex 中文", "version": "1"}, connection_id="connection-1",
         )
         self.store.finish(
             invocation, source="mcp", agent="codex", operation="search_knowledge", status="succeeded",
@@ -243,8 +250,8 @@ class AuditTests(unittest.TestCase):
         self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
         text = raw.decode("utf-8")
         self.assertIn("中文", text)
-        self.assertIn("[REDACTED]", text)
-        self.assertNotIn("secret-value", text)
+        self.assertNotIn(query, text)
+        self.assertNotIn("plain-text-secret-value", text)
         loaded = self.store.read_events()
         self.assertTrue(all(set(event) - {"_fallback"} == set(AUDIT_FIELDS) for event in loaded["events"]))
         schema = json.loads((TOOL_ROOT.parents[1] / "schemas" / "audit-event.schema.json").read_text(encoding="utf-8"))
@@ -276,6 +283,17 @@ class AuditTests(unittest.TestCase):
             capture_output=True, text=True, encoding="utf-8", check=True,
         )
         self.assertIn("search_knowledge", report_path.read_text(encoding="utf-8"))
+
+    def test_redaction_covers_bearer_and_multiword_secret_values(self) -> None:
+        """确认常见认证头和包含空格的秘密不会在审计文本中残留后半段。"""
+        for source in (
+            "Authorization: Bearer plain-text-secret-value",
+            "password=secret with spaces",
+            "access_token: 'quoted secret value'",
+        ):
+            redacted = _redact_text(source)
+            self.assertIn("[REDACTED]", redacted)
+            self.assertNotIn("secret", redacted.lower().replace("[redacted]", ""))
 
     def test_incomplete_corrupt_and_fallback_are_reported(self) -> None:
         self.store.start(source="hook", agent="claude-code", operation="session-start")
@@ -445,6 +463,15 @@ class WorkStateTests(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             self.store.close("../outside", status="completed", agent="codex", session_id="s1")
+
+    def test_workspace_root_must_stay_under_the_ignored_runtime_directory(self) -> None:
+        """确认显式 workspace 参数不能把审计和索引写入控制仓的可跟踪目录。"""
+        with self.assertRaisesRegex(RuntimeError, "workspace/"):
+            Settings.load(
+                repo_root=self.fixture.root,
+                workspace_root=self.fixture.root / "tracked-area",
+                knowledge_root=self.fixture.settings.knowledge_root,
+            )
 
     def test_aikb_maintenance_tracks_control_and_independent_knowledge_repositories(self) -> None:
         """确认维护控制仓时会跟踪独立知识仓，并检测任一仓库变化。"""
