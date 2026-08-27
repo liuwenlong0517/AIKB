@@ -139,6 +139,23 @@ foreach ($file in $contentFiles) {
     }
 }
 
+foreach ($file in $contentFiles | Where-Object { $_.Name -ne 'README.md' }) {
+    $localReadmePath = Join-Path $file.DirectoryName 'README.md'
+    if (-not (Test-Path -LiteralPath $localReadmePath -PathType Leaf)) {
+        $relativePath = [IO.Path]::GetRelativePath($knowledgeRoot, $file.FullName).Replace('\', '/')
+        Add-ValidationError "知识文件所在目录缺少局部 README.md：$relativePath"
+        continue
+    }
+    $localReadmeText = Get-Content -Raw -LiteralPath $localReadmePath
+    $fileNamePattern = [regex]::Escape($file.Name)
+    # 只接受指向该文件名的 Markdown 链接，避免 README 仅在普通文字中提到文件而不能导航。
+    if ($localReadmeText -notmatch "\]\((?:[^)]*/)?$fileNamePattern(?:#[^)]*)?\)") {
+        $relativePath = [IO.Path]::GetRelativePath($knowledgeRoot, $file.FullName).Replace('\', '/')
+        $relativeReadme = [IO.Path]::GetRelativePath($knowledgeRoot, $localReadmePath).Replace('\', '/')
+        Add-ValidationError "局部 README.md 未登记知识文件：$relativeReadme -> $relativePath"
+    }
+}
+
 if ($catalogText -match '\[[^\]]+\]\(system/') {
     Add-ValidationError 'CATALOG.md 不应登记 system/ 下的规则、模板或测试文件'
 }

@@ -70,6 +70,7 @@ Front Matter 必须符合 `system/schemas/knowledge-entry.schema.json`：
 3. 选择归档位置和模板，填写稳定元数据、正文、来源及关系。
 4. 更新必要的局部 README 和 `CATALOG.md`，仅在稳定入口变化时更新 `INDEX.md`。
 5. 在控制仓运行 `pwsh -NoProfile -File system/tests/validate-structure.ps1 -KnowledgePath $env:AIKB_KNOWLEDGE_HOME`；失败时修正，不发布未通过校验的正式知识。
-6. 向用户报告写入位置、验证依据、适用边界和校验结果。
+6. 在知识仓审查并提交本次知识变更；维护 AIKB 控制面时，控制仓与知识仓分别提交。
+7. 向用户报告写入位置、验证依据、适用边界、提交和校验结果。
 
 发现既有条目过期或被推翻时，更新并记录验证依据；具有历史决策价值的旧结论标记为已废弃并关联替代条目，否则删除。定期清理 Inbox、过期和重复知识。

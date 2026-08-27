@@ -11,7 +11,7 @@ from .workstate import WorkStateStore
 
 
 def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
-    """处理一个 hook 事件；仅在存在唯一活动任务时返回恢复或阻断信息。"""
+    """处理一个 hook 事件；仅唯一活动任务注入恢复信息，多候选只记录而不注入。"""
     resolved_settings = settings or Settings.load()
     audit = AuditStore(resolved_settings)
     project_path = str(payload.get("cwd") or payload.get("project_path") or "").strip()

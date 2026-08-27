@@ -12,7 +12,7 @@
     "applicable_versions": {"type": ["string", "array"]},
     "last_verified": {"type": ["string", "null"]},
     "review_when": {"type": ["string", "array"]},
-    "supersedes": {"type": "array", "items": {"type": "string"}},
+    "supersedes": {"type": "array", "items": {"type": "string", "pattern": "^aikb:"}},
     "relations": {
       "type": "array",
       "items": {

@@ -57,11 +57,11 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "get_work_state",
-        "description": "查找本机活动任务并返回紧凑恢复胶囊；不读取聊天记录。",
+        "description": "查找本机活动任务并返回紧凑恢复胶囊；不读取聊天记录。省略 project_path 时返回全部项目（跨项目）活动任务，必须自行核对项目。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "project_path": {"type": "string"},
+                "project_path": {"type": "string", "description": "可选项目路径；省略时查询全部项目，结果可能跨项目。"},
                 "work_id": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
             },

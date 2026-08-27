@@ -153,6 +153,44 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("测试通过", read["content"])
         self.assertEqual(read["relations"][0]["target"], "aikb:knowledge:engineering:index")
 
+    def test_missing_front_matter_is_reported_instead_of_skipped(self) -> None:
+        """确认分类目录中的无 Front Matter Markdown 会使元数据校验失败。"""
+        workflow_dir = self.fixture.settings.content_root / "workflows"
+        workflow_dir.mkdir()
+        (workflow_dir / "missing-front-matter.md").write_text("# 未登记条目\n", encoding="utf-8")
+
+        report = metadata_report(self.fixture.settings)
+        self.assertFalse(report["valid"])
+        self.assertTrue(any("知识文件缺少 Front Matter" in error for error in report["errors"]))
+
+    def test_type_must_match_content_directory(self) -> None:
+        """确认知识类型与实际目录不一致时不能通过元数据校验。"""
+        path = self.fixture.settings.content_root / "knowledge" / "engineering" / "misclassified.md"
+        path.write_text(
+            entry("aikb:knowledge:engineering:misclassified", "错误归类", "类型与目录不一致。").replace(
+                'type: "knowledge"', 'type: "solution"', 1
+            ),
+            encoding="utf-8",
+        )
+
+        report = metadata_report(self.fixture.settings)
+        self.assertFalse(report["valid"])
+        self.assertTrue(any("type=solution" in error for error in report["errors"]))
+
+    def test_supersedes_target_must_exist(self) -> None:
+        """确认 supersedes 目标不存在时会报告悬空替代关系。"""
+        path = self.fixture.settings.content_root / "knowledge" / "engineering" / "dangling-supersedes.md"
+        path.write_text(
+            entry("aikb:knowledge:engineering:dangling-supersedes", "悬空替代", "替代目标不存在。").replace(
+                "supersedes: []", 'supersedes: ["aikb:knowledge:engineering:missing"]', 1
+            ),
+            encoding="utf-8",
+        )
+
+        report = metadata_report(self.fixture.settings)
+        self.assertFalse(report["valid"])
+        self.assertTrue(any("替代关系目标不存在" in error for error in report["errors"]))
+
     def test_read_parent_section_includes_descendants(self) -> None:
         """确认读取父章节包含子章节，而读取子章节不会越界到兄弟章节。"""
         service = KnowledgeService(self.fixture.settings)
@@ -516,6 +554,18 @@ class WorkStateTests(unittest.TestCase):
             "session_end_observed", "invalid_project",
         }.issubset(outcomes))
 
+    def test_session_start_does_not_inject_when_multiple_items_exist(self) -> None:
+        """确认多个活动任务时不注入任一恢复胶囊，并留下可审计结果。"""
+        for goal, session_id in (("多候选任务一", "s1"), ("多候选任务二", "s2")):
+            self.store.checkpoint(
+                {"project_path": str(self.fixture.root), "goal": goal, "agent": "future-agent", "session_id": session_id}
+            )
+
+        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root)}, self.fixture.settings)
+        self.assertEqual(output, {})
+        items = combine_invocations(AuditStore(self.fixture.settings).read_events()["events"])
+        self.assertTrue(any(item.get("outcome_code") == "multiple_active_work" for item in items))
+
     def test_hook_cli_forces_utf8_with_legacy_environment(self) -> None:
         """确认旧代码页环境下 hook CLI 仍能无替换字符地往返中文。"""
         project = self.fixture.root / "中文项目"
@@ -696,6 +746,9 @@ class MCPTests(unittest.TestCase):
         self.assertEqual([tool["name"] for tool in TOOLS], [
             "search_knowledge", "read_knowledge", "get_work_state", "checkpoint_work_state", "close_work_state"
         ])
+        work_tool = next(tool for tool in TOOLS if tool["name"] == "get_work_state")
+        self.assertIn("跨项目", work_tool["description"])
+        self.assertIn("自行核对项目", work_tool["description"])
 
 
 if __name__ == "__main__":

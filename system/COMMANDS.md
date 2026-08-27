@@ -251,7 +251,7 @@ stdin payload 常用字段：`cwd` 或 `project_path`（项目路径）、`sessi
 
 - 唯一活动任务 + `session-start`：返回 `hookSpecificOutput.additionalContext` 恢复胶囊；
 - 无活动任务：返回 `{}`；
-- 多个活动任务：返回 `{}`，并记录 `multiple_active_work`；
+- 多个活动任务：返回 `{}`，不注入恢复胶囊，并记录 `multiple_active_work`；这不表示没有活动任务；
 - `stop` 且检查点后 Git 状态变化：返回 `decision=block`，要求先写检查点；
 - `stop_hook_active=true` 或 Git 未变化：返回 `{}`；
 - `pre-compact`/`session-end`：正常记录事件并返回 `{}`；
@@ -585,7 +585,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 场景：恢复本机未完成任务；只返回紧凑胶囊，不读取聊天记录。
 
-参数：`project_path`（可选）、`work_id`（可选）、`limit`（整数 `1..20`，默认 `5`）。
+参数：`project_path`（可选）、`work_id`（可选）、`limit`（整数 `1..20`，默认 `5`）。省略 `project_path` 时会跨项目返回全部活动任务，调用方必须自行核对项目；不要把跨项目的唯一结果当作当前项目确认。
 
     {"name":"get_work_state","arguments":{"project_path":"E:\\CodeSpace\\AIKB","limit":5}}
 

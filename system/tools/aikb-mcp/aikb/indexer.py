@@ -30,6 +30,16 @@ REQUIRED_FIELDS = {
 }
 FORMAL_REQUIRED_FIELDS = {"applicable_versions", "last_verified", "review_when"}
 CONTENT_DIRECTORIES = ("knowledge", "experience", "workflows", "projects")
+# 类型与目录共同表达条目的语义边界；仅靠 Front Matter 的 type 无法防止误归类。
+TYPE_DIRECTORY_PREFIXES = {
+    "knowledge": ("knowledge/",),
+    "solution": ("experience/solutions/",),
+    "pitfall": ("experience/pitfalls/",),
+    "decision": ("experience/decisions/",),
+    "workflow": ("workflows/",),
+    "project-memory": ("projects/",),
+    "candidate": ("experience/inbox/",),
+}
 
 
 @dataclass(frozen=True)
@@ -115,7 +125,7 @@ def _list_of_strings(value: Any) -> bool:
 
 
 def validate_document(document: MarkdownDocument, content_root: Path) -> list[str]:
-    """校验单篇知识的元数据、关系格式和正式条目字段，返回全部错误。"""
+    """校验单篇知识的元数据、目录归类、关系格式和正式条目字段，返回全部错误。"""
     metadata = document.metadata
     relative = document.path.relative_to(content_root).as_posix()
     errors: list[str] = []
@@ -127,8 +137,14 @@ def validate_document(document: MarkdownDocument, content_root: Path) -> list[st
     entry_id = metadata.get("id")
     if not isinstance(entry_id, str) or not re.fullmatch(r"aikb:[a-z0-9][a-z0-9:-]*", entry_id):
         errors.append(f"{relative}: id 必须是稳定的 aikb: 小写标识")
-    if metadata.get("type") not in ALLOWED_TYPES:
+    entry_type = metadata.get("type")
+    if entry_type not in ALLOWED_TYPES:
         errors.append(f"{relative}: type 不受支持：{metadata.get('type')}")
+    else:
+        expected_prefixes = TYPE_DIRECTORY_PREFIXES[entry_type]
+        if not any(relative.startswith(prefix) for prefix in expected_prefixes):
+            expected = "、".join(expected_prefixes)
+            errors.append(f"{relative}: type={entry_type} 必须位于 {expected} 下")
     status = metadata.get("status")
     if status not in ALLOWED_STATUS:
         errors.append(f"{relative}: status 不受支持：{status}")
@@ -150,6 +166,13 @@ def validate_document(document: MarkdownDocument, content_root: Path) -> list[st
             target = relation.get("target")
             if not isinstance(target, str) or not target.startswith("aikb:"):
                 errors.append(f"{relative}: relation target 必须是 aikb: 标识")
+    supersedes = metadata.get("supersedes", [])
+    if not isinstance(supersedes, list):
+        errors.append(f"{relative}: supersedes 必须是字符串列表")
+    else:
+        for target in supersedes:
+            if not isinstance(target, str) or not target.startswith("aikb:"):
+                errors.append(f"{relative}: supersedes target 必须是 aikb: 标识")
     last_verified = metadata.get("last_verified")
     if status != "candidate" and (not isinstance(last_verified, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", last_verified)):
         errors.append(f"{relative}: 正式条目的 last_verified 必须是 YYYY-MM-DD")
@@ -157,7 +180,7 @@ def validate_document(document: MarkdownDocument, content_root: Path) -> list[st
 
 
 def load_documents(settings: Settings) -> tuple[list[IndexedDocument], list[str]]:
-    """加载并校验全部知识文档，同时检查稳定 ID 与关系目标是否重复或缺失。"""
+    """加载并校验全部知识文档，同时检查 Front Matter、归类、ID 和关系目标。"""
     documents: list[IndexedDocument] = []
     errors: list[str] = []
     ids: dict[str, str] = {}
@@ -168,6 +191,9 @@ def load_documents(settings: Settings) -> tuple[list[IndexedDocument], list[str]
             errors.append(str(exc))
             continue
         if parsed is None:
+            # 扫描器已经排除了 README；分类目录中的其余 Markdown 必须是可索引条目。
+            relative = "content/" + path.relative_to(settings.content_root).as_posix()
+            errors.append(f"知识文件缺少 Front Matter：{relative}")
             continue
         errors.extend(validate_document(parsed, settings.content_root))
         # 数据库继续暴露稳定的 content/... 逻辑路径，不泄漏知识仓物理位置。
@@ -189,11 +215,15 @@ def load_documents(settings: Settings) -> tuple[list[IndexedDocument], list[str]
         )
     known_ids = set(ids)
     for item in documents:
-        if item.document.metadata.get("status") == "candidate":
-            continue
-        for relation in item.document.metadata.get("relations", []):
-            if isinstance(relation, dict) and relation.get("target") not in known_ids:
-                errors.append(f"{item.relative_path}: 关系目标不存在：{relation.get('target')}")
+        if item.document.metadata.get("status") != "candidate":
+            for relation in item.document.metadata.get("relations", []):
+                if isinstance(relation, dict) and relation.get("target") not in known_ids:
+                    errors.append(f"{item.relative_path}: 关系目标不存在：{relation.get('target')}")
+        supersedes = item.document.metadata.get("supersedes", [])
+        if isinstance(supersedes, list):
+            for target in supersedes:
+                if isinstance(target, str) and target not in known_ids:
+                    errors.append(f"{item.relative_path}: 替代关系目标不存在：{target}")
     return documents, errors
 
 

@@ -11,4 +11,6 @@
 - [通用知识模板](knowledge-entry.md)：新增通用知识条目时使用。
 - [决策记录模板](decision-record.md)：记录工程决策时使用。
 - [故障排查模板](troubleshooting.md)：记录故障排查和解决过程时使用。
+- [工程陷阱模板](pitfall.md)：记录已验证的触发条件、风险和规避方式时使用。
+- [工作流模板](workflow.md)：记录已验证、可重复执行的工程流程时使用。
 - [项目记忆模板](project-memory.md)：记录项目级事实和解决方案时使用。

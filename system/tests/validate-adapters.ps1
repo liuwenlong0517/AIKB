@@ -180,7 +180,8 @@ try {
     if ($claudeSessionHook.command -match '^pwsh\s' -or $claudeSessionHook.command -notmatch '\$env:AIKB_HOME') {
         throw 'Claude Code hook 未使用原生 PowerShell 环境变量命令'
     }
-    $hookResponse = '{}' | & pwsh -NoProfile -ExecutionPolicy Bypass -Command $claudeSessionHook.command | ConvertFrom-Json
+    $validHookPayload = @{ cwd = $resolvedTestRoot; session_id = 'adapter-test' } | ConvertTo-Json -Compress
+    $hookResponse = $validHookPayload | & pwsh -NoProfile -ExecutionPolicy Bypass -Command $claudeSessionHook.command | ConvertFrom-Json
     if ($null -eq $hookResponse) {
         throw 'Claude Code 生成的 PowerShell hook 无法实际启动'
     }
@@ -190,8 +191,8 @@ try {
     if (-not ($auditEvents | Where-Object { $_.agent -eq 'claude-code' -and $_.operation -eq 'initialize' })) {
         throw 'Claude Code MCP initialize 未记录适配器身份'
     }
-    if (-not ($auditEvents | Where-Object { $_.agent -eq 'claude-code' -and $_.operation -eq 'session-start' -and $_.outcome_code -eq 'invalid_project' })) {
-        throw 'Claude Code hook 未记录 invalid_project 审计结果'
+    if (-not ($auditEvents | Where-Object { $_.agent -eq 'claude-code' -and $_.operation -eq 'session-start' -and $_.outcome_code -eq 'no_active_work' })) {
+        throw 'Claude Code hook 未记录有效临时项目的 no_active_work 审计结果'
     }
 
     # 过期的控制仓变量同样必须 fail-open；该路径在 Python 启动前就会触发 PowerShell 的路径解析。
@@ -201,7 +202,7 @@ try {
     try {
         $env:AIKB_HOME = Join-Path $resolvedTestRoot 'missing-control-root'
         $env:AIKB_KNOWLEDGE_HOME = Join-Path $resolvedTestRoot 'missing-knowledge-root'
-        '{}' | & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Agent adapter-test -Event stop | Out-Null
+        $validHookPayload | & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Agent adapter-test -Event stop | Out-Null
         $invalidRootExitCode = $LASTEXITCODE
     }
     finally {
@@ -217,7 +218,7 @@ try {
     $savedPath = $env:PATH
     try {
         $env:PATH = ''
-        '{}' | & $pwshExecutable -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Agent adapter-test -Event stop | Out-Null
+        $validHookPayload | & $pwshExecutable -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'system\adapters\shared\aikb-hook.ps1') -Agent adapter-test -Event stop | Out-Null
     }
     finally {
         $env:PATH = $savedPath
