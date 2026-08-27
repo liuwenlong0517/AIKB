@@ -1,6 +1,10 @@
 # 在系统临时目录中验证一键配置编排、原有指令保留、幂等性和环境恢复。
 # 测试只使用 Process 级环境变量，不应改变真实用户配置。
 $ErrorActionPreference = 'Stop'
+# 显式固定输出编码为 UTF-8，避免重定向/非控制台环境下 GBK 字节被按 UTF-8 解码成乱码。
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $tempBase = [IO.Path]::GetTempPath()
