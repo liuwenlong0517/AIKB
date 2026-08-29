@@ -530,10 +530,12 @@ def _event_datetime(event: dict[str, Any]) -> datetime | None:
 
 def filter_events(
     events: list[dict[str, Any]], *, since: str | None = None, on_date: str | None = None,
-    agent: str | None = None, source: str | None = None, status: str | None = None,
+    agent: str | None = None, source: str | None = None, status: str | list[str] | tuple[str, ...] | None = None,
+    operation: str | None = None,
 ) -> list[dict[str, Any]]:
     threshold = parse_since(since)
     selected_date = date.fromisoformat(on_date) if on_date else None
+    statuses = {str(item) for item in status} if isinstance(status, (list, tuple)) else ({status} if status else set())
     result: list[dict[str, Any]] = []
     for event in events:
         timestamp = _event_datetime(event)
@@ -545,7 +547,9 @@ def filter_events(
             continue
         if source and event.get("source") != source:
             continue
-        if status and event.get("status") != status:
+        if statuses and event.get("status") not in statuses:
+            continue
+        if operation and event.get("operation") != operation:
             continue
         result.append(event)
     return result
@@ -564,6 +568,7 @@ def combine_invocations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if record_type == "invocation_started":
             item.update({key: value for key, value in event.items() if not str(key).startswith("_")})
             item["started_at"] = event.get("timestamp")
+            item["_fallback"] = bool(item.get("_fallback")) or bool(event.get("_fallback"))
         else:
             for key in (
                 "schema_version", "source", "agent", "client", "connection_id", "session_id", "session_label", "project_id", "operation", "capture_level",
@@ -586,9 +591,15 @@ def combine_invocations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item["result_text"] = item.get("result_text") or describe_result(
             str(item.get("operation") or ""), str(item.get("status") or ""), item.get("outcome_code"), item.get("result_summary"),
         )
-        item["session_label"] = item.get("session_label") or f"{item.get('agent') or 'unknown'} · 历史记录（未提供会话标签）"
+        if not item.get("session_label"):
+            item["session_label"] = f"{item.get('agent') or 'unknown'} · 历史记录（未提供会话标签）"
+            # CLI 报告继续使用兼容标签；Web 安全模型据此恢复为 null，避免把派生标签
+            # 当成事实源提供的真实会话信息。
+            item["_session_label_synthesized"] = True
         item["capture_level"] = item.get("capture_level") or "safe"
-    combined.sort(key=lambda item: str(item.get("started_at") or item.get("timestamp") or ""))
+    # 先按标识升序，再按时间升序，保证同刻历史记录不依赖文件遍历顺序。
+    combined.sort(key=lambda item: _audit_sort_key(item)[1:])
+    combined.sort(key=lambda item: _audit_sort_key(item)[0])
     return combined
 
 
@@ -604,6 +615,223 @@ def audit_summary(items: list[dict[str, Any]], *, damaged: list[str], fallback_c
         "fallback_records": fallback_count, "damaged_count": len(damaged), "damaged": damaged,
         "last_activity": max((str(item.get("finished_at") or item.get("timestamp") or item.get("started_at") or "") for item in items), default=None),
     }
+
+
+# Web 审计查询的输出预算是协议边界，不等同于本机报告或诊断命令的完整能力。
+# 特别是 ``action``/``result_summary`` 可能包含调用参数或返回值，即使写入时已经
+# 脱敏，也不应因为 Web 查询而重新扩大暴露面。
+WEB_AUDIT_MAX_PAGE_SIZE = 100
+WEB_AUDIT_MAX_PAGE = 10_000
+WEB_AUDIT_SAFE_FIELDS = (
+    "schema_version", "record_type", "event_id", "invocation_id", "timestamp", "started_at", "finished_at",
+    "source", "agent", "session_id", "session_label", "project_id", "operation", "status", "outcome_code",
+    "action_text", "result_text", "capture_level", "duration_ms", "error_type", "fallback",
+)
+WEB_AUDIT_WINDOWS_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/](?![\\/])|\\\\)[^\s\"'<>|]+")
+# 覆盖常见根目录与未知的两级以上 Unix 绝对路径；冒号边界排除
+# ``https://`` 等 URL，裸的 ``content/...`` 逻辑路径没有开头斜杠。
+WEB_AUDIT_UNIX_PATH_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_:/])/(?:"
+    r"(?:Users|home|private|tmp|var|etc|opt|srv|root|usr|mnt|workspace|bin|dev|proc|sys|run|lib|sbin|boot|media)"
+    r"(?:/[^\s\"'<>|]*)*"
+    r"|(?:[^\s\"'<>|/]+(?:/[^\s\"'<>|/]+)*)+)"
+)
+
+
+def _redact_web_text(value: str) -> str:
+    """移除旧日志字段中可能残留的 Windows/Unix 绝对路径，再交给通用脱敏器。"""
+    value = WEB_AUDIT_WINDOWS_PATH_PATTERN.sub("[PATH]", value)
+    return WEB_AUDIT_UNIX_PATH_PATTERN.sub("[PATH]", value)
+
+
+def _audit_sort_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    """生成稳定审计排序键：活动时间优先，标识用于同刻记录的确定性打散。"""
+    activity = str(item.get("finished_at") or item.get("timestamp") or item.get("started_at") or "")
+    invocation = str(item.get("invocation_id") or "")
+    event = str(item.get("event_id") or item.get("finish_event_id") or "")
+    return activity, invocation, event
+
+
+def _web_identifier(value: Any, limit: int = 160) -> str | None:
+    """把审计标识压缩为有限字符串；空值保持 ``None``，不替缺失会话造值。"""
+    if value is None:
+        return None
+    text = _redact_web_text(_redact_text(str(value), limit)).strip()
+    return text or None
+
+
+def _web_error_type(value: Any) -> str | None:
+    """只保留异常类型名，不把旧日志里的异常消息、路径或 traceback 投影给 Web。"""
+    text = _web_identifier(value, 120)
+    if not text:
+        return None
+    # 新旧日志都可能把 ``Type: message`` 写进 error_type；类型名足够用于筛选和审计。
+    candidate = text.split(":", 1)[0].strip().split("\n", 1)[0].strip()
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", candidate):
+        return candidate.rsplit(".", 1)[-1]
+    return "error"
+
+
+def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
+    """将已合并审计项转换成 Web 安全读模型。
+
+    该投影只复制稳定的时间、状态和中文说明字段，不复制原始 ``action``、
+    ``result_summary``、``client`` 或内部 ``_fallback`` 等字段。调用方可以看到
+    ``fallback`` 和 ``capture_level`` 这类安全状态，但永远不能由此取得 diagnostic
+    附件；未知字段也会被忽略，以免 v1/v2 或未来 schema 扩展意外越过边界。
+    """
+    if not isinstance(item, dict):
+        return {}
+    result: dict[str, Any] = {
+        "schema_version": item.get("schema_version") if item.get("schema_version") in {1, 2} else None,
+        "record_type": _web_identifier(item.get("record_type"), 80),
+        "event_id": _web_identifier(item.get("event_id"), 120),
+        "invocation_id": _web_identifier(item.get("invocation_id"), 120),
+        "timestamp": _web_identifier(item.get("timestamp"), 80),
+        "started_at": _web_identifier(item.get("started_at"), 80),
+        "finished_at": _web_identifier(item.get("finished_at"), 80),
+        "source": _web_identifier(item.get("source"), 40),
+        "agent": _web_identifier(item.get("agent"), 120),
+        # session_id 若事实源提供则原样关联；缺失保持 null，session_label 也只使用已有值。
+        "session_id": _web_identifier(item.get("session_id"), 160),
+        "session_label": None if item.get("_session_label_synthesized") else _web_identifier(item.get("session_label"), 240),
+        "project_id": _web_identifier(item.get("project_id"), 120),
+        "operation": _web_identifier(item.get("operation"), 120),
+        "status": _web_identifier(item.get("status"), 40),
+        "outcome_code": _web_identifier(item.get("outcome_code"), 120),
+        "action_text": _web_identifier(item.get("action_text"), 1200),
+        "result_text": _web_identifier(item.get("result_text"), 1200),
+        "capture_level": item.get("capture_level") if item.get("capture_level") in {"safe", "diagnostic", "full-local"} else "safe",
+        "duration_ms": max(0, int(item["duration_ms"])) if isinstance(item.get("duration_ms"), (int, float)) else None,
+        "error_type": _web_error_type(item.get("error_type")),
+        "fallback": bool(item.get("_fallback") or item.get("fallback")),
+    }
+    # 返回固定字段集合，避免把安全投影当成通用字典而意外追加原始内容。
+    return {key: result[key] for key in WEB_AUDIT_SAFE_FIELDS if key in result}
+
+
+def _web_filters(
+    items: list[dict[str, Any]], *, session_label: str | None = None, project_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """应用不属于核心 ``filter_events`` 的两个展示筛选，不读取或解析诊断附件。"""
+    if session_label:
+        items = [item for item in items if item.get("session_label") == session_label]
+    if project_id:
+        items = [item for item in items if item.get("project_id") == project_id]
+    return items
+
+
+def _validate_web_paging(page: int, page_size: int) -> tuple[int, int]:
+    """校验分页上下界，防止 API 通过超大 offset 或响应页突破本地预算。"""
+    if isinstance(page, bool) or isinstance(page_size, bool):
+        raise ValueError("分页参数必须是整数")
+    if not isinstance(page, int) or not isinstance(page_size, int):
+        raise ValueError("分页参数必须是整数")
+    if page < 1 or page > WEB_AUDIT_MAX_PAGE:
+        raise ValueError(f"page 必须在 1 至 {WEB_AUDIT_MAX_PAGE} 之间")
+    if page_size < 1 or page_size > WEB_AUDIT_MAX_PAGE_SIZE:
+        raise ValueError(f"page_size 必须在 1 至 {WEB_AUDIT_MAX_PAGE_SIZE} 之间")
+    return page, page_size
+
+
+def _web_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """删除 ``audit_summary`` 中的损坏文件路径，仅保留计数、状态和时间摘要。"""
+    allowed = (
+        "count", "statuses", "agents", "sources", "operations", "average_duration_ms",
+        "fallback_records", "damaged_count", "last_activity",
+    )
+    result = {key: summary.get(key) for key in allowed}
+    # 计数键来自本地日志，统一转成字符串和非负整数，避免异常对象被 JSON 序列化。
+    for key in ("statuses", "agents", "sources", "operations"):
+        values = result.get(key)
+        if isinstance(values, dict):
+            result[key] = {
+                _web_identifier(name, 120) or "unknown": max(0, int(count))
+                for name, count in values.items()
+                if isinstance(count, (int, float))
+            }
+        else:
+            result[key] = {}
+    for key in ("count", "fallback_records", "damaged_count"):
+        result[key] = max(0, int(result[key] or 0))
+    result["has_damaged"] = result["damaged_count"] > 0
+    return result
+
+
+def web_audit_query(
+    store: AuditStore, *, since: str | None = None, on_date: str | None = None, agent: str | None = None,
+    source: str | None = None, status: str | list[str] | tuple[str, ...] | None = None, operation: str | None = None,
+    session_label: str | None = None, project_id: str | None = None, page: int = 1, page_size: int = 50,
+) -> dict[str, Any]:
+    """查询审计 Web 安全模型，统一复用事实源读取、筛选、调用合并和汇总逻辑。
+
+    ``store`` 只要求实现 ``read_events``，因此后端可注入隔离存储或测试替身。返回
+    的损坏信息只有数量/布尔标志，fallback 只以计数和单项布尔状态表达，绝不返回路径。
+    """
+    page, page_size = _validate_web_paging(page, page_size)
+    loaded = store.read_events()
+    events = loaded.get("events", []) if isinstance(loaded, dict) else []
+    damaged = loaded.get("damaged", []) if isinstance(loaded, dict) else []
+    combined = combine_invocations(events if isinstance(events, list) else [])
+    selected = filter_events(
+        combined, since=since, on_date=on_date, agent=agent, source=source, status=status, operation=operation,
+    )
+    selected = _web_filters(selected, session_label=session_label, project_id=project_id)
+    # 审计页面默认展示最新活动；排序发生在分页前，避免第一页落在最旧历史。
+    # 最新活动在前；同一时间使用 invocation_id/event_id 升序稳定打散。
+    selected.sort(key=lambda item: _audit_sort_key(item)[1:])
+    selected.sort(key=lambda item: _audit_sort_key(item)[0], reverse=True)
+    summary = _web_summary(audit_summary(
+        selected,
+        damaged=damaged if isinstance(damaged, list) else [],
+        # read_events 的 fallback_count 是全局原始记录数；重新按筛选后的合并调用计算，
+        # 防止“只看 mcp/某 Agent”时把其他来源的 fallback 误计入当前 Web 汇总。
+        fallback_count=sum(1 for item in selected if item.get("_fallback")),
+    ))
+    total = len(selected)
+    start = (page - 1) * page_size
+    items = [web_audit_item(item) for item in selected[start:start + page_size]]
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return {
+        "items": items,
+        "summary": summary,
+        "pagination": {
+            "page": page, "page_size": page_size, "total": total, "total_pages": total_pages,
+            "has_next": start + len(items) < total, "has_previous": page > 1 and total > 0,
+        },
+    }
+
+
+def web_audit_summary(
+    store: AuditStore, *, since: str | None = None, on_date: str | None = None, agent: str | None = None,
+    source: str | None = None, status: str | list[str] | tuple[str, ...] | None = None, operation: str | None = None,
+    session_label: str | None = None, project_id: str | None = None,
+) -> dict[str, Any]:
+    """返回 Web 审计安全汇总；与列表使用完全相同的筛选和兼容逻辑。"""
+    return web_audit_query(
+        store, since=since, on_date=on_date, agent=agent, source=source, status=status, operation=operation,
+        session_label=session_label, project_id=project_id, page=1, page_size=WEB_AUDIT_MAX_PAGE_SIZE,
+    )["summary"]
+
+
+def web_audit_detail(store: AuditStore, identifier: str) -> dict[str, Any] | None:
+    """按 event_id 或 invocation_id 读取单项安全详情；不存在时返回 ``None``。
+
+    详情仍只经过 ``web_audit_item``，因此不会因为单项接口而暴露原始 payload、
+    diagnostic 附件、traceback、物理路径或完整异常。标识匹配不替缺失 session 信息。
+    """
+    safe_identifier = _web_identifier(identifier, 160)
+    if not safe_identifier:
+        return None
+    loaded = store.read_events()
+    events = loaded.get("events", []) if isinstance(loaded, dict) else []
+    for item in combine_invocations(events if isinstance(events, list) else []):
+        if safe_identifier in {
+            str(item.get("event_id") or ""), str(item.get("finish_event_id") or ""),
+            str(item.get("invocation_id") or ""),
+        }:
+            return web_audit_item(item)
+    return None
 
 
 def render_markdown(items: list[dict[str, Any]], summary: dict[str, Any], title_date: str) -> str:

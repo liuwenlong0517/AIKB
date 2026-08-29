@@ -6,6 +6,8 @@ import { DocumentPage } from '../pages/DocumentPage';
 import { KnowledgePage } from '../pages/KnowledgePage';
 import { SearchPage } from '../pages/SearchPage';
 import { SystemPage } from '../pages/SystemPage';
+import { RuntimePage } from '../pages/RuntimePage';
+import { AuditPage } from '../pages/AuditPage';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
@@ -23,6 +25,11 @@ export function App() {
             <Route path="/knowledge/view" element={<DocumentPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/system" element={<SystemPage />} />
+            <Route path="/runtime" element={<RuntimePage />} />
+            <Route path="/runtime/:workId" element={<RuntimePage />} />
+            <Route path="/runtime/:workId/checkpoints/:checkpointId" element={<RuntimePage />} />
+            <Route path="/audit" element={<AuditPage />} />
+            <Route path="/audit/:invocationId" element={<AuditPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

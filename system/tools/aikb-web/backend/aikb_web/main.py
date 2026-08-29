@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from aikb_web.api.v1.common import error_body, valid_request_id
 from aikb_web.api.v1.knowledge import router as knowledge_router
+from aikb_web.api.v1.runtime import router as runtime_router
+from aikb_web.api.v1.audit import router as audit_router
 from aikb_web.api.v1.system import router as system_router
 from aikb_web.core.gateway import GatewayError, KnowledgeNotFound, KnowledgeGateway, CoreKnowledgeGateway
 
@@ -68,6 +70,46 @@ class UnavailableGateway:
         self._raise()
         return {}
 
+    def web_active_work_states(self, **kwargs: Any) -> dict[str, Any]:
+        """在核心未就绪时保持运行状态接口的统一 503 行为。"""
+        self._raise()
+        return {}
+
+    def web_work_state(self, work_id: str) -> dict[str, Any]:
+        """在核心未就绪时拒绝读取任务详情。"""
+        self._raise()
+        return {}
+
+    def web_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]:
+        """在核心未就绪时拒绝读取检查点列表。"""
+        self._raise()
+        return {}
+
+    def web_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]:
+        """在核心未就绪时拒绝读取检查点详情。"""
+        self._raise()
+        return {}
+
+    def web_repository_summary(self) -> dict[str, Any]:
+        """在核心未就绪时拒绝读取双仓摘要。"""
+        self._raise()
+        return {}
+
+    def web_audit_query(self, **kwargs: Any) -> dict[str, Any]:
+        """在核心未就绪时拒绝查询审计事实源。"""
+        self._raise()
+        return {}
+
+    def web_audit_summary(self, **kwargs: Any) -> dict[str, Any]:
+        """在核心未就绪时拒绝生成审计汇总。"""
+        self._raise()
+        return {}
+
+    def web_audit_detail(self, identifier: str) -> dict[str, Any] | None:
+        """在核心未就绪时拒绝读取审计详情。"""
+        self._raise()
+        return None
+
 
 def _json_error(request: Request, status_code: int, code: str, message: str, details: Any | None = None) -> JSONResponse:
     """生成统一错误 JSON；details 只接收已脱敏的字段级信息。"""
@@ -110,13 +152,15 @@ def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
         for item in exc.errors():
             location = [str(part) for part in item.get("loc", []) if part != "query"]
             details.append({"field": ".".join(location), "message": str(item.get("msg", "invalid input"))})
-        return _json_error(request, 422, "validation_error", "请求参数无效", details)
+        return _json_error(request, 422, "invalid_request", "请求参数无效", details)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         """把框架 HTTP 异常映射为固定错误码，避免透传任意 detail。"""
         if exc.status_code == 404:
             return _json_error(request, 404, "not_found", "资源不存在")
+        if exc.status_code == 405:
+            return _json_error(request, 405, "method_not_allowed", "只允许只读查询")
         return _json_error(request, exc.status_code, "http_error", "请求无法处理")
 
     @app.exception_handler(ValueError)
@@ -127,6 +171,11 @@ def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
     @app.exception_handler(KnowledgeNotFound)
     async def knowledge_not_found(request: Request, exc: KnowledgeNotFound) -> JSONResponse:
         """统一隐藏不存在和非 verified 知识的区别。"""
+        return _json_error(request, 404, "not_found", "资源不存在")
+
+    @app.exception_handler(KeyError)
+    async def key_error(request: Request, exc: KeyError) -> JSONResponse:
+        """把共享核心的未知工作项、检查点或审计调用统一映射为 404。"""
         return _json_error(request, 404, "not_found", "资源不存在")
 
     @app.exception_handler(GatewayError)
@@ -155,8 +204,10 @@ def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
 
     app.include_router(system_router, prefix="/api/v1")
     app.include_router(knowledge_router, prefix="/api/v1")
+    app.include_router(runtime_router, prefix="/api/v1")
+    app.include_router(audit_router, prefix="/api/v1")
 
-    @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    @app.api_route("/api/{path:path}", methods=["GET"])
     def unknown_api(path: str) -> None:
         """阻止未知 API 落入单页应用回退，保持结构化 404 契约。"""
         raise HTTPException(status_code=404)

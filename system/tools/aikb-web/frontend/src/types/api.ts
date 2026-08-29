@@ -2,6 +2,8 @@
 export interface ApiMeta {
   request_id?: string;
   api_version?: string;
+  degraded?: boolean;
+  warnings?: string[];
   [key: string]: unknown;
 }
 
@@ -75,3 +77,131 @@ export interface CapabilityData {
 
 export interface SystemData { info: SystemInfoData; capabilities: CapabilityData }
 export interface SearchFilters { type?: string; tag?: string }
+
+/** 运行状态只读投影中的稳定状态枚举；关闭状态不会出现在阶段 2 活动列表。 */
+export type WorkingStateStatus = 'planned' | 'active' | 'blocked';
+
+export interface Pagination {
+  page: number;
+  page_size: number;
+  total: number | null;
+  has_next: boolean;
+  has_previous?: boolean;
+  total_pages?: number;
+}
+
+export interface RuntimeRepositorySummary {
+  role: string;
+  available?: boolean;
+  branch?: string | null;
+  revision?: string | null;
+  dirty?: boolean;
+}
+
+export interface WorkingStateSummary {
+  work_id: string;
+  project_id?: string | null;
+  status: WorkingStateStatus;
+  agent?: string | null;
+  session_id?: string | null;
+  role?: string | null;
+  updated_at?: string | null;
+  checkpoint_id?: string | null;
+  goal?: string | null;
+  current_state?: string | null;
+  next_steps?: string | string[] | null;
+  blockers?: string | null;
+  branch?: string | null;
+  base_revision?: string | null;
+  workspace_dirty?: boolean | null;
+  repositories?: RuntimeRepositorySummary[];
+}
+
+export interface WorkingStateDetail extends WorkingStateSummary {
+  sections?: Record<string, string | string[] | null>;
+  detail_status?: string | null;
+  sensitivity?: string | null;
+  checkpoint_count?: number;
+  latest_checkpoint?: string | null;
+  resume_capsule?: string | null;
+}
+
+export interface CheckpointSummary {
+  checkpoint_id: string;
+  based_on?: string | null;
+  status?: WorkingStateStatus | string | null;
+  agent?: string | null;
+  session_id?: string | null;
+  role?: string | null;
+  updated_at?: string | null;
+  workspace_dirty?: boolean | null;
+  repositories?: RuntimeRepositorySummary[];
+  truncated?: boolean;
+  detail_status?: string | null;
+}
+
+export interface CheckpointDetail extends CheckpointSummary {
+  sections?: Record<string, string | string[] | null>;
+  goal?: string | null;
+  current_state?: string | null;
+  next_steps?: string | string[] | null;
+  blockers?: string | null;
+  verification?: string | string[] | null;
+  changed_files?: string[] | null;
+}
+
+export interface RuntimeListData {
+  items: WorkingStateSummary[];
+  pagination: Pagination;
+  count?: number;
+  index?: { status?: string; rebuilt?: boolean; available?: boolean };
+}
+
+export interface CheckpointListData {
+  items: CheckpointSummary[];
+  pagination: Pagination;
+  count?: number;
+  index?: { status?: string; rebuilt?: boolean; available?: boolean };
+}
+
+export type AuditStatus = 'started' | 'succeeded' | 'failed' | 'noop' | 'blocked' | 'incomplete';
+export type AuditSource = 'mcp' | 'hook';
+
+export interface AuditSummaryData {
+  count: number;
+  statuses: Partial<Record<AuditStatus, number>>;
+  agents: Record<string, number>;
+  sources: Partial<Record<AuditSource, number>>;
+  operations: Record<string, number>;
+  average_duration_ms?: number | null;
+  fallback_records?: number;
+  damaged_count?: number;
+  last_activity?: string | null;
+}
+
+export interface AuditEvent {
+  invocation_id?: string | null;
+  event_id?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  source?: AuditSource | string | null;
+  agent?: string | null;
+  session_label?: string | null;
+  session_id?: string | null;
+  project_id?: string | null;
+  operation?: string | null;
+  action_text?: string | null;
+  status: AuditStatus;
+  outcome_code?: string | null;
+  result_text?: string | null;
+  capture_level?: 'safe' | 'diagnostic' | 'full-local' | string | null;
+  duration_ms?: number | null;
+  error_type?: string | null;
+  fallback?: boolean;
+}
+
+export interface AuditListData {
+  items: AuditEvent[];
+  pagination: Pagination;
+  summary?: { has_damaged?: boolean; damaged_count?: number };
+}

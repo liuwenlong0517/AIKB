@@ -7,6 +7,8 @@ const navigation = [
   { key: '/', label: <Link to="/">总览</Link> },
   { key: '/knowledge', label: <Link to="/knowledge">知识库</Link> },
   { key: '/search', label: <Link to="/search">搜索</Link> },
+  { key: '/runtime', label: <Link to="/runtime">运行状态</Link> },
+  { key: '/audit', label: <Link to="/audit">审计日志</Link> },
   { key: '/system', label: <Link to="/system">系统状态</Link> },
 ];
 
@@ -20,6 +22,10 @@ export function AppLayout() {
     ? '/knowledge'
     : location.pathname.startsWith('/search')
       ? '/search'
+      : location.pathname.startsWith('/runtime')
+        ? '/runtime'
+        : location.pathname.startsWith('/audit')
+          ? '/audit'
       : location.pathname.startsWith('/system')
         ? '/system'
         : '/';

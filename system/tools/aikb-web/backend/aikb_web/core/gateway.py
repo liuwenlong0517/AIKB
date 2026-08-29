@@ -35,6 +35,24 @@ class KnowledgeGateway(Protocol):
 
     def read(self, identifier: str, **kwargs: Any) -> dict[str, Any]: ...
 
+    # 以下方法是阶段 2 的只读观察面。实现由共享核心提供，Web 层不接触
+    # Markdown、JSONL 或 SQLite 的事实源。
+    def web_active_work_states(self, **kwargs: Any) -> dict[str, Any]: ...
+
+    def web_work_state(self, work_id: str) -> dict[str, Any]: ...
+
+    def web_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]: ...
+
+    def web_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]: ...
+
+    def web_repository_summary(self) -> dict[str, Any]: ...
+
+    def web_audit_query(self, **kwargs: Any) -> dict[str, Any]: ...
+
+    def web_audit_summary(self, **kwargs: Any) -> dict[str, Any]: ...
+
+    def web_audit_detail(self, identifier: str) -> dict[str, Any] | None: ...
+
 
 @dataclass
 class CoreModules:
@@ -42,6 +60,11 @@ class CoreModules:
 
     settings_cls: Any
     knowledge_service_cls: Any
+    workstate_cls: Any | None = None
+    audit_store_cls: Any | None = None
+    web_audit_query_fn: Any | None = None
+    web_audit_summary_fn: Any | None = None
+    web_audit_detail_fn: Any | None = None
 
 
 def _load_core_modules() -> CoreModules:
@@ -64,7 +87,23 @@ def _load_core_modules() -> CoreModules:
             raise GatewayError("共享知识服务初始化失败") from second_error
     except Exception as error:
         raise GatewayError("共享知识服务初始化失败") from error
-    return CoreModules(config.Settings, knowledge.KnowledgeService)
+    # 审计和运行状态是共享核心的可选扩展。缺少扩展时保留知识接口可用，
+    # 对应观察接口由网关统一报告 503，而不是在 HTTP 层实现第二套读取逻辑。
+    try:
+        workstate = importlib.import_module("aikb.workstate")
+        audit = importlib.import_module("aikb.audit")
+    except Exception:
+        workstate = None
+        audit = None
+    return CoreModules(
+        config.Settings,
+        knowledge.KnowledgeService,
+        getattr(workstate, "WorkStateStore", None),
+        getattr(audit, "AuditStore", None),
+        getattr(audit, "web_audit_query", None),
+        getattr(audit, "web_audit_summary", None),
+        getattr(audit, "web_audit_detail", None),
+    )
 
 
 def _verified_documents(documents: Any) -> list[dict[str, Any]]:
@@ -87,11 +126,21 @@ def _verified_documents(documents: Any) -> list[dict[str, Any]]:
 class CoreKnowledgeGateway:
     """把共享 ``KnowledgeService`` 映射成 Web 只读查询契约。"""
 
-    def __init__(self, service: Any, settings: Any, modules: CoreModules | None = None):
+    def __init__(
+        self,
+        service: Any,
+        settings: Any,
+        modules: CoreModules | None = None,
+        *,
+        workstate_store: Any | None = None,
+        audit_store: Any | None = None,
+    ):
         """绑定共享服务和设置；服务可由测试注入，避免真实索引成为测试前置条件。"""
         self.service = service
         self.settings = settings
         self.modules = modules
+        self._workstate_store = workstate_store
+        self._audit_store = audit_store
 
     @classmethod
     def create_default(cls) -> "CoreKnowledgeGateway":
@@ -195,3 +244,145 @@ class CoreKnowledgeGateway:
         if "path" in public and (not isinstance(public["path"], str) or not public["path"].replace("\\", "/").startswith("content/")):
             public.pop("path", None)
         return public
+
+    def _workstate(self) -> Any:
+        """按需创建共享 Working State 读服务；初始化失败统一隐藏底层详情。"""
+        if self._workstate_store is not None:
+            return self._workstate_store
+        store_cls = getattr(self.modules, "workstate_cls", None)
+        if not callable(store_cls):
+            raise GatewayError("运行状态服务不可用")
+        try:
+            self._workstate_store = store_cls(self.settings)
+        except Exception as error:
+            raise GatewayError("运行状态服务初始化失败") from error
+        return self._workstate_store
+
+    def _audit(self) -> Any:
+        """按需创建共享审计读服务；审计写入能力不会从 Web 暴露。"""
+        if self._audit_store is not None:
+            return self._audit_store
+        store_cls = getattr(self.modules, "audit_store_cls", None)
+        if not callable(store_cls):
+            raise GatewayError("审计服务不可用")
+        try:
+            self._audit_store = store_cls(self.settings)
+        except Exception as error:
+            raise GatewayError("审计服务初始化失败") from error
+        return self._audit_store
+
+    def web_active_work_states(self, **kwargs: Any) -> dict[str, Any]:
+        """委托共享 Working State 安全列表投影，不在 Web 层查询索引。"""
+        method = getattr(self._workstate(), "web_active_work_states", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少列表能力")
+        try:
+            result = method(**kwargs)
+            if not isinstance(result, dict):
+                raise GatewayError("运行状态服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("运行状态读取失败") from error
+
+    def web_work_state(self, work_id: str) -> dict[str, Any]:
+        """委托共享 Working State 安全详情投影。"""
+        method = getattr(self._workstate(), "web_work_state", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少详情能力")
+        try:
+            result = method(work_id)
+            if not isinstance(result, dict):
+                raise GatewayError("运行状态服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("运行状态读取失败") from error
+
+    def web_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]:
+        """委托共享检查点安全列表投影。"""
+        method = getattr(self._workstate(), "web_checkpoints", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少检查点能力")
+        try:
+            result = method(work_id, **kwargs)
+            if not isinstance(result, dict):
+                raise GatewayError("检查点服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("检查点读取失败") from error
+
+    def web_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]:
+        """委托共享检查点安全详情投影。"""
+        method = getattr(self._workstate(), "web_checkpoint", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少检查点详情能力")
+        try:
+            result = method(work_id, checkpoint_id)
+            if not isinstance(result, dict):
+                raise GatewayError("检查点服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("检查点读取失败") from error
+
+    def web_repository_summary(self) -> dict[str, Any]:
+        """委托共享双仓语义摘要，避免 Web 层重新读取 Git 原始输出。"""
+        method = getattr(self._workstate(), "web_repository_summary", None)
+        if not callable(method):
+            raise GatewayError("仓库状态服务缺少摘要能力")
+        try:
+            result = method()
+            if not isinstance(result, dict):
+                raise GatewayError("仓库状态服务返回无效结果")
+            return result
+        except Exception as error:
+            raise GatewayError("仓库状态读取失败") from error
+
+    def web_audit_query(self, **kwargs: Any) -> dict[str, Any]:
+        """调用共享审计 Web 查询函数，确保 fallback/损坏记录只按安全投影返回。"""
+        function = getattr(self.modules, "web_audit_query_fn", None)
+        if not callable(function):
+            raise GatewayError("审计服务缺少查询能力")
+        try:
+            result = function(self._audit(), **kwargs)
+            if not isinstance(result, dict):
+                raise GatewayError("审计服务返回无效结果")
+            return result
+        except ValueError:
+            raise
+        except Exception as error:
+            raise GatewayError("审计读取失败") from error
+
+    def web_audit_summary(self, **kwargs: Any) -> dict[str, Any]:
+        """调用共享审计安全汇总函数。"""
+        function = getattr(self.modules, "web_audit_summary_fn", None)
+        if not callable(function):
+            raise GatewayError("审计服务缺少汇总能力")
+        try:
+            result = function(self._audit(), **kwargs)
+            if not isinstance(result, dict):
+                raise GatewayError("审计服务返回无效结果")
+            return result
+        except ValueError:
+            raise
+        except Exception as error:
+            raise GatewayError("审计读取失败") from error
+
+    def web_audit_detail(self, identifier: str) -> dict[str, Any] | None:
+        """调用共享审计安全详情函数；未知调用由路由映射为 404。"""
+        function = getattr(self.modules, "web_audit_detail_fn", None)
+        if not callable(function):
+            raise GatewayError("审计服务缺少详情能力")
+        try:
+            result = function(self._audit(), identifier)
+            if result is not None and not isinstance(result, dict):
+                raise GatewayError("审计服务返回无效结果")
+            return result
+        except Exception as error:
+            raise GatewayError("审计读取失败") from error

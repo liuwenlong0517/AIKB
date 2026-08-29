@@ -646,7 +646,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 ## 7. AIKB WebUI 命令
 
-第一阶段 WebUI 仅在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读和基础系统状态。服务固定绑定 `127.0.0.1`，不提供知识修改、Shell 执行、规则治理、检查点或审计查询。
+WebUI 当前在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读、活动 Working State、检查点、脱敏审计查询和系统状态。服务固定绑定 `127.0.0.1`，不提供知识修改、Shell 执行、规则治理、归档任务搜索或原始诊断下载；macOS 仅保留扩展位置，尚未实现或验证。
 
 ### 7.1 构建：`build-aikb-web.ps1`
 
@@ -667,7 +667,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 ### 7.3 验证：`validate-aikb-web.ps1`
 
-场景：运行共享知识核心、Web 后端、前端和 AIKB 结构的完整第一阶段回归。
+场景：运行共享知识核心、Web 后端、前端和 AIKB 结构的完整只读 WebUI 回归。
 
     pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/validate-aikb-web.ps1
 
