@@ -100,10 +100,13 @@ Get-ChildItem -LiteralPath (Join-Path $repoRoot 'workspace') -Force |
     Where-Object { $_.Name -notin $allowedWorkspaceEntries } |
     ForEach-Object { Add-ValidationError "workspace/ 存在未定义入口：$($_.Name)" }
 
+$generatedDirectoryPattern = '[\\/](?:\.git|node_modules|dist|\.vite|\.venv|__pycache__)[\\/]'
 $markdownFiles = @(
-    # 同时检查控制仓和知识仓，但跳过各自 Git 元数据目录。
+    # 控制仓允许包含可重建的前端依赖和构建产物；它们不是 AIKB 文档事实源，
+    # 不能把第三方包 README 的内部链接纳入本仓结构校验。
     Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Filter '*.md' |
-        Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
+        Where-Object { $_.FullName -notmatch $generatedDirectoryPattern }
+    # 知识仓只跳过自身 Git 元数据，正式知识目录仍保持完整检查。
     Get-ChildItem -LiteralPath $knowledgeRoot -Recurse -File -Filter '*.md' |
         Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
 ) | Sort-Object -Property FullName -Unique

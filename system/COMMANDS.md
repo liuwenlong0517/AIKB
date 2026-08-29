@@ -644,7 +644,45 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 结果含工作 ID、最终状态、最后检查点和归档路径。work ID 格式无效、匹配不到唯一活动任务、归档目标已存在或归档路径越界时返回错误；该操作不是幂等删除，重复关闭同一工作项不会当作成功。
 
-## 7. 维护者快速选择
+## 7. AIKB WebUI 命令
+
+第一阶段 WebUI 仅在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读和基础系统状态。服务固定绑定 `127.0.0.1`，不提供知识修改、Shell 执行、规则治理、检查点或审计查询。
+
+### 7.1 构建：`build-aikb-web.ps1`
+
+场景：安装锁定的前端依赖、生成 `frontend/dist/` 并检查后端 Python 语法。
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/build-aikb-web.ps1
+
+无参数。脚本运行 `npm ci`、`npm run build` 和 `python -m compileall`；不会设置环境变量、修改知识或启动后台服务。Node/npm、Python 或构建失败时返回非零。
+
+### 7.2 启动：`start-aikb-web.ps1`
+
+场景：使用 FastAPI 同时提供 `/api/v1` 和已经构建的前端静态资源。
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/start-aikb-web.ps1
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/start-aikb-web.ps1 -Port 8765
+
+参数：`-Port` 为 `1..65535`，默认 `8000`；`-Reload` 只用于本地开发自动重载。监听地址固定为 `127.0.0.1`，不能通过参数扩大。启动前必须存在 `frontend/dist/index.html`，当前进程必须已经获得 `AIKB_HOME` 和 `AIKB_KNOWLEDGE_HOME`。停止方法是在运行终端按 `Ctrl+C`；脚本不注册 Windows 服务，不持久后台运行，因此无需重启系统。
+
+### 7.3 验证：`validate-aikb-web.ps1`
+
+场景：运行共享知识核心、Web 后端、前端和 AIKB 结构的完整第一阶段回归。
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/validate-aikb-web.ps1
+
+无参数。脚本依次运行 Python `unittest`、TypeScript 类型检查、ESLint、Vitest、前端生产构建和 `validate-structure.ps1`。验证会更新 `frontend/dist/` 和本机缓存；正式知识保持只读。失败步骤返回非零并终止后续验证。
+
+### 7.4 前端开发服务器
+
+先在一个终端运行后端启动脚本，再在另一个终端执行：
+
+    Set-Location system/tools/aikb-web/frontend
+    npm run dev
+
+Vite 默认监听本机 `5173` 端口，并把 `/api` 转发到 `http://127.0.0.1:8000`。停止方法为 `Ctrl+C`；配置修改无需持久设置或重启 Agent。
+
+## 8. 维护者快速选择
 
 | 目标 | 首选命令 |
 |---|---|
@@ -660,6 +698,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 | 查审计事件 | `aikb.ps1 audit list/show/summary` |
 | 查看已启用的诊断输入输出 | `aikb.ps1 audit diagnostic <调用ID>` |
 | 生成人类审计报告 | `aikb.ps1 audit report` |
+| 构建、启动或验证知识 WebUI | `build-aikb-web.ps1`、`start-aikb-web.ps1`、`validate-aikb-web.ps1` |
 | 结构/适配器/配置/性能验收 | `validate-structure.ps1`、`validate-adapters.ps1`、`validate-setup.ps1`、`validate-performance.ps1` |
 
 执行修改类命令前，先确认目标路径和 Git 状态；`workspace/` 数据和审计报告是本机派生运行数据，不应作为知识事实或 Git 提交内容。

@@ -155,6 +155,60 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("测试通过", read["content"])
         self.assertEqual(read["relations"][0]["target"], "aikb:knowledge:engineering:index")
 
+    def test_web_read_models_filter_verified_documents_and_tags(self) -> None:
+        """验证 Web 目录、标签与总览只暴露 verified，并只返回 content 逻辑路径。"""
+        service = KnowledgeService(self.fixture.settings)
+
+        documents = service.list_documents(path_prefix="content/knowledge", sort="path")
+        self.assertEqual(documents["count"], 2)
+        self.assertEqual(documents["total"], 2)
+        self.assertTrue(all(item["status"] == "verified" for item in documents["documents"]))
+        self.assertTrue(all(item["path"].startswith("content/") for item in documents["documents"]))
+        self.assertTrue(all(str(self.fixture.settings.content_root) not in item["path"] for item in documents["documents"]))
+        self.assertEqual(documents["documents"][0]["path"], "content/knowledge/engineering/cache.md")
+
+        tags = service.list_tags()
+        self.assertEqual(tags["total"], 2)
+        self.assertNotIn("candidate", {item["tag"] for item in tags["tags"]})
+        self.assertEqual({item["tag"] for item in tags["tags"]}, {"sqlite", "缓存"})
+
+        overview = service.overview(recent_limit=1)
+        self.assertEqual(overview["document_count"], 2)
+        self.assertEqual(overview["by_type"], {"knowledge": 2})
+        self.assertEqual(len(overview["recent_documents"]), 1)
+        self.assertEqual(overview["directory_tree"]["path"], "content")
+        self.assertEqual(overview["directory_tree"]["document_count"], 2)
+        self.assertNotIn(str(self.fixture.settings.content_root), json.dumps(overview, ensure_ascii=False))
+
+    def test_web_read_model_parameter_boundaries(self) -> None:
+        """确认分页值有界、排序枚举和路径过滤器不会越过逻辑路径边界。"""
+        service = KnowledgeService(self.fixture.settings)
+        clamped = service.list_documents(limit=0, offset=-10)
+        self.assertEqual(clamped["limit"], 1)
+        self.assertEqual(clamped["offset"], 0)
+        with self.assertRaises(ValueError):
+            service.list_documents(sort="unknown")
+        with self.assertRaises(ValueError):
+            service.list_documents(path_prefix=str(self.fixture.settings.content_root))
+        with self.assertRaises(ValueError):
+            service.list_tags(limit=True)
+
+    def test_web_document_reader_keeps_full_body_without_expanding_mcp_budget(self) -> None:
+        """确认 Web 可读取长正文，同时 MCP read 仍保持 12000 字符上限。"""
+        path = self.fixture.settings.content_root / "knowledge" / "engineering" / "long-document.md"
+        long_text = "跨平台知识内容。" * 2_000
+        path.write_text(entry("aikb:knowledge:engineering:long-document", "长文档", long_text), encoding="utf-8")
+        service = KnowledgeService(self.fixture.settings)
+
+        mcp_result = service.read("aikb:knowledge:engineering:long-document", max_chars=500_000)
+        web_result = service.read_document("aikb:knowledge:engineering:long-document")
+
+        self.assertTrue(mcp_result["truncated"])
+        self.assertLessEqual(len(mcp_result["content"]), 12_000)
+        self.assertFalse(web_result["truncated"])
+        self.assertIn(long_text, web_result["content"])
+        self.assertIn("\n\n## 解决方案\n", web_result["content"])
+
     def test_review_report_lists_candidates_and_review_conditions(self) -> None:
         """确认审查报告同时暴露候选晋升队列和正式条目的复核条件。"""
         report = review_report(self.fixture.settings)

@@ -1,0 +1,32 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { AppLayout } from '../components/AppLayout';
+import { DashboardPage } from '../pages/DashboardPage';
+import { DocumentPage } from '../pages/DocumentPage';
+import { KnowledgePage } from '../pages/KnowledgePage';
+import { SearchPage } from '../pages/SearchPage';
+import { SystemPage } from '../pages/SystemPage';
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
+});
+
+/** 应用路由边界。所有页面共用同一个查询缓存，避免切换只读页面时重复请求。 */
+export function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/knowledge" element={<KnowledgePage />} />
+            <Route path="/knowledge/view" element={<DocumentPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/system" element={<SystemPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+}

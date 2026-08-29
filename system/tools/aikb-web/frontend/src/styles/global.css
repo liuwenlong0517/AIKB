@@ -1,0 +1,53 @@
+:root {
+  font-family: Inter, "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: #172033;
+  background: #f4f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
+.app-shell { height: 100vh; min-height: 100vh; overflow: hidden; }
+.app-sider { flex: 0 0 200px !important; height: 100vh; min-width: 200px !important; max-width: 200px !important; overflow: hidden; background: #111c31 !important; }
+.app-sider .ant-menu { max-height: calc(100vh - 96px); overflow-y: auto; }
+.app-main { min-width: 0; height: 100vh; overflow: hidden; }
+.brand-mark { margin: 22px 24px 4px; color: #fff; font-size: 24px; font-weight: 700; letter-spacing: 1px; }
+.brand-mark span { color: #55c2ff; }
+.sider-caption { display: block; margin: 0 24px 18px; color: #9baac2 !important; font-size: 12px; }
+.app-header { display: flex; flex: 0 0 64px; align-items: center; justify-content: space-between; height: 64px; padding: 0 28px; background: #fff; border-bottom: 1px solid #edf0f5; }
+.header-context { margin-left: 14px; }
+.app-scroll-container { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
+.app-content { max-width: 1600px; width: 100%; padding: 28px; margin: 0 auto; }
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+.page-header .ant-typography { margin-top: 0; margin-bottom: 5px; }
+.page-header .ant-typography-secondary { margin-bottom: 0; }
+.state-panel { display: flex; align-items: center; justify-content: center; min-height: 260px; width: 100%; }
+.state-panel .ant-alert { width: min(100%, 720px); }
+.section-gap { margin-top: 16px; }
+.alert-stack { display: grid; gap: 10px; margin-top: 16px; }
+.tree-card { min-height: 560px; }
+.tree-card .ant-card-body { max-height: 670px; overflow: auto; }
+.knowledge-intro { min-height: 560px; }
+.knowledge-intro .ant-empty { margin-top: 120px; }
+.search-controls { margin-bottom: 16px; }
+.filter-row { margin-top: 16px; }
+.search-empty { min-height: 300px; padding-top: 80px; }
+.metadata-label { margin-top: 20px; margin-bottom: 8px !important; }
+.related-item { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+.markdown-body { color: #293448; line-height: 1.8; overflow-wrap: anywhere; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #14213d; line-height: 1.35; margin: 1.5em 0 0.7em; }
+.markdown-body h1:first-child { margin-top: 0; }
+.markdown-body pre { padding: 16px; overflow-x: auto; border-radius: 8px; background: #172033; color: #e8effa; }
+.markdown-body code { padding: 2px 5px; border-radius: 4px; background: #f0f3f8; font-size: 0.9em; }
+.markdown-body pre code { padding: 0; background: transparent; }
+.markdown-body blockquote { margin-left: 0; padding: 4px 16px; border-left: 3px solid #69b1ff; background: #f5f9ff; color: #5d6b82; }
+.markdown-body img { max-width: 100%; }
+@media (max-width: 768px) {
+  .app-content { padding: 18px 14px; }
+  .app-header { padding: 0 16px; }
+  .page-header { flex-direction: column; gap: 8px; }
+  .tree-card, .knowledge-intro { min-height: 0; }
+  .knowledge-intro .ant-empty { margin-top: 40px; }
+}
