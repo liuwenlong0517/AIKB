@@ -9,13 +9,14 @@ const navigation = [
   { key: '/search', label: <Link to="/search">搜索</Link> },
   { key: '/runtime', label: <Link to="/runtime">运行状态</Link> },
   { key: '/audit', label: <Link to="/audit">审计日志</Link> },
+  { key: '/tasks', label: <Link to="/tasks">任务中心</Link> },
   { key: '/system', label: <Link to="/system">系统状态</Link> },
 ];
 
 /** 回顶组件必须监听右侧内容区；在测试或首屏挂载尚未完成时才回退到窗口。 */
 const getScrollContainer = () => document.getElementById('app-scroll-container') ?? window;
 
-/** 桌面管理布局。导航只列出第一阶段实际实现的只读页面，避免制造不存在的控制入口。 */
+/** 桌面管理布局。导航只列出已实现的读取页面与受控任务中心。 */
 export function AppLayout() {
   const location = useLocation();
   const selected = location.pathname.startsWith('/knowledge')
@@ -26,6 +27,8 @@ export function AppLayout() {
         ? '/runtime'
         : location.pathname.startsWith('/audit')
           ? '/audit'
+          : location.pathname.startsWith('/tasks')
+            ? '/tasks'
       : location.pathname.startsWith('/system')
         ? '/system'
         : '/';
@@ -41,7 +44,7 @@ export function AppLayout() {
         <Header className="app-header">
           <div>
             <Typography.Text strong>AIKB 知识管理</Typography.Text>
-            <Typography.Text type="secondary" className="header-context">只读浏览模式</Typography.Text>
+            <Typography.Text type="secondary" className="header-context">本地受控管理模式</Typography.Text>
           </div>
           <Tag color="green">本地</Tag>
         </Header>
@@ -51,6 +54,7 @@ export function AppLayout() {
       </Layout>
       {/* 回到右侧内容区顶部，避免把不会滚动的侧栏或整个窗口当作目标。 */}
       <FloatButton.BackTop
+        aria-label="回到页首"
         target={getScrollContainer}
         visibilityHeight={300}
         tooltip="回到页首"

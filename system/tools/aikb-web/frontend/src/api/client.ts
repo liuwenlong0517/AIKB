@@ -16,6 +16,10 @@ import type {
   CheckpointListData,
   RuntimeListData,
   WorkingStateDetail,
+  ActionPreviewData,
+  ActionsData,
+  TaskData,
+  TasksData,
 } from '../types/api';
 
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
@@ -42,6 +46,31 @@ export class ApiClient {
   /** 发起只读 GET 请求并规范查询参数。 */
   async get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
     return (await this.getEnvelope<T>(path, params)).data;
+  }
+
+  /** 发起受控变更请求；统一带 JSON 和本地 Web 请求标记，调用方不能传入命令类字段。 */
+  async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
+    return (await this.postEnvelope<T>(path, body)).data;
+  }
+
+  /** 返回 POST 的完整包络，便于任务中心保留 request id 和服务端降级信息。 */
+  async postEnvelope<T>(path: string, body: Record<string, unknown>): Promise<ApiResponse<T>> {
+    const url = new URL(`${this.baseUrl}${path}`, window.location.origin);
+    try {
+      const response = await fetch(url.pathname + url.search, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AIKB-Request': '1',
+        },
+        body: JSON.stringify(body),
+      });
+      return await this.parseEnvelope<T>(response);
+    } catch (error) {
+      if (error instanceof ApiClientError) throw error;
+      throw new ApiClientError('无法连接 AIKB Web 后端，请确认服务已启动。');
+    }
   }
 
   /**
@@ -119,6 +148,15 @@ export const api = {
     detail: (invocationId: string) =>
       apiClient.getEnvelope<AuditEvent>(`/audit/events/${encodeURIComponent(invocationId)}`),
   },
+  /** 阶段 3 任务中心 API；写请求的参数由服务端预览返回值组成。 */
+  actions: () => apiClient.getEnvelope<ActionsData>('/actions'),
+  previewAction: (actionId: string) =>
+    apiClient.postEnvelope<ActionPreviewData>(`/actions/${encodeURIComponent(actionId)}/preview`, { parameters: {} }),
+  tasks: () => apiClient.getEnvelope<TasksData>('/tasks'),
+  task: (taskId: string) => apiClient.getEnvelope<TaskData>(`/tasks/${encodeURIComponent(taskId)}`),
+  createTask: (body: { action_id: string; parameters: Record<string, unknown>; preview_digest: string; confirmation_token: string }) =>
+    apiClient.postEnvelope<TaskData>('/tasks', body),
+  cancelTask: (taskId: string) => apiClient.postEnvelope<TaskData>(`/tasks/${encodeURIComponent(taskId)}/cancel`, {}),
 };
 
 /** 共享核心的详情读模型包含 item 包装；在 API 客户端边界统一摊平，页面不感知后端适配层形状。 */

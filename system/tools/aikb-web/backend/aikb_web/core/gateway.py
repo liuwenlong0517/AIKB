@@ -11,7 +11,7 @@ import importlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 
 class GatewayError(RuntimeError):
@@ -52,6 +52,8 @@ class KnowledgeGateway(Protocol):
     def web_audit_summary(self, **kwargs: Any) -> dict[str, Any]: ...
 
     def web_audit_detail(self, identifier: str) -> dict[str, Any] | None: ...
+
+    def web_audit_write(self, record: Mapping[str, Any]) -> Any: ...
 
 
 @dataclass
@@ -386,3 +388,14 @@ class CoreKnowledgeGateway:
             return result
         except Exception as error:
             raise GatewayError("审计读取失败") from error
+
+    def web_audit_write(self, record: Mapping[str, Any]) -> Any:
+        """写入编排任务的最小审计关联；写入层负责 schema v3 脱敏和 fallback。"""
+        store = self._audit()
+        method = getattr(store, "write", None)
+        if not callable(method):
+            raise GatewayError("审计服务缺少写入能力")
+        try:
+            return method(dict(record))
+        except Exception as error:
+            raise GatewayError("审计写入失败") from error

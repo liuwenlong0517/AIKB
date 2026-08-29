@@ -1,11 +1,11 @@
 # AIKB WebUI API 契约
 
-本文档是阶段 2 的只读接口契约。它固定 Windows 本地 WebUI 的公共边界，供后端、前端与验收共同使用。阶段 1 已实现的接口保持兼容；“运行状态”和“审计”接口已在阶段 2 实现。
+本文档是阶段 1～3 的 Windows 本地 WebUI 接口契约，供后端、前端与验收共同使用。知识、运行状态和审计读取接口保持只读；阶段 3 只通过显式受控动作接口执行三项注册的本地只读检查。规则/知识写入、安装、索引重建和任意 Shell 仍不属于公共能力。
 
 ## 1. 传输与共同包络
 
 - 基础路径为 /api/v1；服务只绑定 127.0.0.1。
-- 阶段 2 公共 API 只接受 GET 和 OPTIONS。任何写方法都返回结构化 405，不得触发事实源写入、Git 操作、脚本执行或显式索引重建动作；只读查询仍可按既有策略维护 `workspace/db/` 派生索引。
+- 知识、运行状态、审计和系统查询只接受 GET 和 OPTIONS。动作预览、任务创建/取消是阶段 3 明确列出的受保护 POST；其他写方法仍返回结构化 405，不得触发未注册动作、规则/知识写入、Git 写操作或索引重建。
 - 成功响应固定为 { "data": <T>, "meta": <Meta> }；失败响应固定为 { "error": <Error>, "meta": <Meta> }。
 - meta.request_id 为服务生成或校验后的短 ASCII 请求标识，并通过 X-Request-ID 响应头返回；客户端提供的非法值会被忽略并重新生成。
 - JSON 使用 UTF-8。时间使用带时区的 ISO-8601 字符串；分页排序必须稳定，未另行说明时按更新时间或开始时间倒序。
@@ -94,7 +94,7 @@ status 枚举为 ok、degraded。该接口报告 Web 进程与共享核心初始
 
 ### GET /system/capabilities
 
-read_only 固定为 true。能力项使用 {id, supported, reason?}，阶段 2 至少声明：knowledge.read、knowledge.search、runtime.work_state.read、runtime.checkpoint.read、audit.read；写入、脚本、Git 和网络访问能力必须为 supported: false，并说明 read_only 或 not_available_in_phase_2。
+knowledge_read_only 固定为 true；能力项使用 {id, supported, reason?}。除知识/运行状态/审计读取能力外，阶段 3 可声明 `controlled.actions` 和 `task.center`；它们只表示三项注册的 Windows 受控动作，不表示任意脚本或 Shell 能力。`knowledge.write`、`rules.write`、`shell.execute`、`git.write` 和网络访问必须为 supported: false。macOS 能力保持 `supported: false` 并给出平台未实现原因。
 
 ### GET /knowledge/overview、GET /knowledge/tree、GET /knowledge/tags
 
@@ -199,7 +199,39 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 
 审计读取失败时，若仍能得到完整安全摘要，返回 200 并设置 meta.degraded=true、警告 audit_partial；JSONL 全部不可读时返回 503 service_unavailable。单条损坏记录不应使其他记录消失。
 
-## 6. 分页、空集和降级统一规则
+## 6. 阶段 3 受控动作与任务接口
+
+阶段 3 当前只注册以下三个 Windows 本地只读动作：`validate.structure`（结构校验）、`repository.status.control`（控制仓状态）和 `repository.status.knowledge`（知识仓状态）。动作注册表由版本控制下的服务端代码静态构造，前端只能提交动作 ID 和严格校验的参数对象；当前三个动作参数必须为空对象。动作列表的 `supported` 只在当前平台、执行器和前置文件均可用时为 true，macOS 始终为 false。
+
+所有变更类请求还必须满足 `Content-Type: application/json`、`X-AIKB-Request: 1`、本机同源 Host/Origin 校验和服务端签发的确认令牌。预览令牌绑定动作、规范化参数、风险和 `preview_digest`，有效期 5 分钟、只能消费一次，重启后失效。
+
+### GET /actions
+
+返回动作能力、安全参数 Schema、风险等级、读取影响范围、超时和并发组。不返回命令数组、脚本路径、工作目录、环境变量或进程信息。
+
+### POST /actions/{action_id}/preview
+
+请求体为 `{ "parameters": {} }`。服务端只校验和规范化参数，不执行动作；返回语义步骤、风险、副作用、超时、`preview_digest`、确认要求、令牌和令牌剩余有效秒数。未知动作、非空未允许参数或平台/前置条件不可用时返回稳定错误。
+
+### POST /tasks
+
+请求体为 `action_id`、规范化 `parameters`、`preview_digest` 和 `confirmation_token`。成功返回服务端生成的 `task_id` 和任务安全投影，并异步进入 `queued`。客户端不能指定任务 ID、命令、路径、环境或进程参数。
+
+### GET /tasks、GET /tasks/{task_id}
+
+返回任务列表或单项详情。公共字段包括任务 ID、动作 ID、空参数摘要、风险、影响范围、状态、时间、进度、限长 UTF-8 输出、输出裁剪标记、安全结构化结果和关联审计 ID。任务事实源为 `workspace/runtime/web/tasks/<YYYY>/<MM>/<task_id>/events.jsonl`，`snapshot.json` 是可重建投影；响应不公开物理目录、命令行、PID、句柄、环境、令牌或原始异常。
+
+状态为 `queued`、`running`、`cancelling`、`succeeded`、`failed`、`cancelled`、`timed_out`、`interrupted`；终态不可逆，服务重启时遗留非终态任务收敛为 `interrupted`。
+
+### POST /tasks/{task_id}/cancel
+
+幂等请求取消。排队任务直接进入 `cancelled`，运行中任务先进入 `cancelling`，Windows Job Object 收敛后再进入终态；终态重复取消只返回当前安全投影，不重复制造目标任务的结束审计。
+
+### GET /tasks/{task_id}/events
+
+返回 `text/event-stream`。允许事件类型为 `snapshot`、`status`、`progress`、`output`、`result`、`heartbeat`；事件 ID 在任务内单调递增。客户端通过 `Last-Event-ID` 回放，游标失效时收到带 `replay_reset=true` 的最新安全快照；心跳最长 15 秒，终态结果发出后关闭。输出受单块 8 KiB、单行 4 KiB、单任务 2 MiB 预算约束，超限只公开 `truncated` 标志并保留最终安全结果。
+
+## 7. 分页、空集和降级统一规则
 
 - page 从 1 开始；阶段 2 新增的运行状态 page_size 上限为 50，审计上限为 100。超限返回 400 invalid_request，不得静默扩大或无限制读取；阶段 1 搜索继续使用 `limit<=20`。
 - total 是当前筛选下可信计数；无法计算时返回 null，并在 meta.degraded=true，不得用当前页长度伪造总数。
@@ -207,6 +239,6 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 - 可重建索引不可用时，能从 Markdown/JSONL 事实源安全读取的接口可以局部降级；无法保证结果完整性的搜索、分页或详情接口必须 503。
 - 所有降级都要给机器可读的 warnings 枚举（如 index_unavailable、audit_partial、damaged_records、session_id_unavailable），不把底层异常文本放入响应。
 
-## 7. 明确禁止公开的内容
+## 8. 明确禁止公开的内容
 
 任何接口、错误包络、日志转发或浏览器源代码都不得公开：Windows 绝对路径、盘符、UNC 路径、workspace/数据库物理路径、完整 Git 输出、SQL、环境变量值、密钥/token/cookie、完整请求 payload、完整 MCP 返回值、知识正文（搜索/审计场景）、诊断正文、聊天全文、transcript、隐藏推理、二进制附件和完整 traceback。需要定位问题时只返回 request_id，由本机服务日志关联。

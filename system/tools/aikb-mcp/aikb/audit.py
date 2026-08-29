@@ -20,13 +20,17 @@ from xml.sax.saxutils import escape as xml_escape
 from .config import Settings
 
 
-AUDIT_SCHEMA_VERSION = 2
+AUDIT_SCHEMA_VERSION = 3
 AUDIT_FIELDS = (
     "schema_version", "record_type", "event_id", "invocation_id", "timestamp", "source", "agent",
     "client", "connection_id", "session_id", "session_label", "project_id", "operation", "action", "action_text",
     "status", "outcome_code", "result_summary", "result_text", "capture_level", "duration_ms", "error_type",
+    "task_id", "action_id", "target_task_id",
 )
-FINISHED_STATUS = {"succeeded", "failed", "noop", "blocked"}
+FINISHED_STATUS = {"succeeded", "failed", "noop", "blocked", "cancelled", "timed_out", "interrupted"}
+AUDIT_STATUSES = {"started", *FINISHED_STATUS}
+# 审计事件的来源是公开契约的一部分；未知来源不能原样落盘，否则会生成 schema 无法接受的事件。
+AUDIT_SOURCES = {"mcp", "hook", "web"}
 SECRET_PATTERN = re.compile(
     r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|passwd|secret|private[_-]?key)\b\s*[:=]\s*(?:bearer\s+)?(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[^,;\r\n]*)"
 )
@@ -337,12 +341,19 @@ class AuditStore:
             ("invocation_id", 120), ("connection_id", 120), ("session_id", 160), ("session_label", 240), ("project_id", 120),
             ("operation", 120), ("status", 40), ("outcome_code", 120), ("error_type", 120),
             ("action_text", 1200), ("result_text", 1200),
+            ("task_id", 120), ("action_id", 120), ("target_task_id", 120),
         ):
             if normalized.get(field) is not None:
                 normalized[field] = _redact_text(str(normalized[field]), limit)
         normalized["action"] = _sanitize(normalized.get("action"))
         normalized["result_summary"] = _sanitize(normalized.get("result_summary"))
         normalized["client"] = _sanitize(normalized.get("client"))
+        source = str(normalized.get("source") or "").strip().lower()
+        # 写入层保持现有“审计失败不阻断调用方”的容错语义；非法来源降级到
+        # 固定且符合 schema 的 web 桶，并丢弃原始值，避免误写非法 source。
+        normalized["source"] = source if source in AUDIT_SOURCES else "web"
+        if normalized.get("status") not in AUDIT_STATUSES:
+            normalized["status"] = "failed"
         normalized["capture_level"] = normalized.get("capture_level") if normalized.get("capture_level") in {"safe", "diagnostic", "full-local"} else "safe"
         return {field: normalized.get(field) for field in AUDIT_FIELDS}
 
@@ -394,7 +405,9 @@ class AuditStore:
         value = _sanitize_diagnostic(payload, limit=limit, collection_limit=50 if level == "diagnostic" else 500)
         record = {
             "schema_version": 1, "record_type": "diagnostic", "event_id": self.new_id(), "invocation_id": invocation_id,
-            "timestamp": timestamp, "source": source, "agent": _redact_text(agent, 120), "operation": operation,
+            "timestamp": timestamp,
+            "source": str(source or "").strip().lower() if str(source or "").strip().lower() in AUDIT_SOURCES else "web",
+            "agent": _redact_text(agent, 120), "operation": operation,
             "phase": phase, "session_id": _redact_text(session_id, 160) if session_id else None,
             "session_label": _redact_text(session_label, 240) if session_label else None,
             "capture_level": level, "payload": value,
@@ -429,6 +442,7 @@ class AuditStore:
         self, *, source: str, agent: str, operation: str, action: dict[str, Any] | None = None,
         client: dict[str, Any] | None = None, connection_id: str | None = None,
         session_id: str | None = None, project_id: str | None = None, session_label: str | None = None,
+        task_id: str | None = None, action_id: str | None = None, target_task_id: str | None = None,
     ) -> dict[str, Any]:
         session_label = session_label or self.resolve_session_label(
             agent=agent, source=source, session_id=session_id, connection_id=connection_id, project_id=project_id,
@@ -440,7 +454,7 @@ class AuditStore:
             "agent": agent or "unknown", "client": client, "connection_id": connection_id,
             "session_id": session_id, "session_label": session_label, "project_id": project_id, "operation": operation, "action": action,
             "action_text": describe_action(operation, action), "capture_level": self.settings.audit_capture_level,
-            "status": "started",
+            "status": "started", "task_id": task_id, "action_id": action_id, "target_task_id": target_task_id,
         })
         return {"invocation_id": invocation_id, "started": started, "write": result}
 
@@ -449,6 +463,7 @@ class AuditStore:
         outcome_code: str, result_summary: dict[str, Any] | None = None, error_type: str | None = None,
         client: dict[str, Any] | None = None, connection_id: str | None = None,
         session_id: str | None = None, project_id: str | None = None, session_label: str | None = None,
+        task_id: str | None = None, action_id: str | None = None, target_task_id: str | None = None,
     ) -> dict[str, Any]:
         safe_status = status if status in FINISHED_STATUS else "failed"
         duration = max(0, round((time.perf_counter() - float(invocation["started"])) * 1000))
@@ -459,6 +474,7 @@ class AuditStore:
             "status": safe_status, "outcome_code": outcome_code, "result_summary": result_summary,
             "result_text": describe_result(operation, safe_status, outcome_code, result_summary),
             "capture_level": self.settings.audit_capture_level, "duration_ms": duration, "error_type": error_type,
+            "task_id": task_id, "action_id": action_id, "target_task_id": target_task_id,
         })
 
     def connection_initialized(self, *, agent: str, client: dict[str, Any], connection_id: str) -> dict[str, Any]:
@@ -572,6 +588,7 @@ def combine_invocations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             for key in (
                 "schema_version", "source", "agent", "client", "connection_id", "session_id", "session_label", "project_id", "operation", "capture_level",
+                "task_id", "action_id", "target_task_id",
             ):
                 if key not in item or item.get(key) is None:
                     item[key] = event.get(key)
@@ -626,6 +643,7 @@ WEB_AUDIT_SAFE_FIELDS = (
     "schema_version", "record_type", "event_id", "invocation_id", "timestamp", "started_at", "finished_at",
     "source", "agent", "session_id", "session_label", "project_id", "operation", "status", "outcome_code",
     "action_text", "result_text", "capture_level", "duration_ms", "error_type", "fallback",
+    "task_id", "action_id", "target_task_id",
 )
 WEB_AUDIT_WINDOWS_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/](?![\\/])|\\\\)[^\s\"'<>|]+")
 # 覆盖常见根目录与未知的两级以上 Unix 绝对路径；冒号边界排除
@@ -683,7 +701,7 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(item, dict):
         return {}
     result: dict[str, Any] = {
-        "schema_version": item.get("schema_version") if item.get("schema_version") in {1, 2} else None,
+        "schema_version": item.get("schema_version") if item.get("schema_version") in {1, 2, 3} else None,
         "record_type": _web_identifier(item.get("record_type"), 80),
         "event_id": _web_identifier(item.get("event_id"), 120),
         "invocation_id": _web_identifier(item.get("invocation_id"), 120),
@@ -705,6 +723,9 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
         "duration_ms": max(0, int(item["duration_ms"])) if isinstance(item.get("duration_ms"), (int, float)) else None,
         "error_type": _web_error_type(item.get("error_type")),
         "fallback": bool(item.get("_fallback") or item.get("fallback")),
+        "task_id": _web_identifier(item.get("task_id"), 120),
+        "action_id": _web_identifier(item.get("action_id"), 120),
+        "target_task_id": _web_identifier(item.get("target_task_id"), 120),
     }
     # 返回固定字段集合，避免把安全投影当成通用字典而意外追加原始内容。
     return {key: result[key] for key in WEB_AUDIT_SAFE_FIELDS if key in result}

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from ..base import PlatformState
+from .commands import CommandError, CommandSpec, build_action_commands, build_child_environment
+from .executor import ExecutionError, ExecutionResult, WindowsExecutor
 
 
 def windows_state(architecture: str) -> PlatformState:
@@ -10,4 +12,7 @@ def windows_state(architecture: str) -> PlatformState:
     return PlatformState(platform="windows", architecture=architecture, supported=True)
 
 
-__all__ = ["windows_state"]
+__all__ = [
+    "CommandError", "CommandSpec", "ExecutionError", "ExecutionResult", "WindowsExecutor",
+    "build_action_commands", "build_child_environment", "windows_state",
+]

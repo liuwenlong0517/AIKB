@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.aikb/schemas/audit-event.schema.json",
-  "title": "AIKB audit event schema v2",
+  "title": "AIKB audit event schema v3",
   "type": "object",
   "required": ["schema_version", "record_type", "event_id", "timestamp", "source", "agent", "operation", "status"],
   "properties": {
-    "schema_version": {"enum": [1, 2]},
+    "schema_version": {"enum": [1, 2, 3]},
     "record_type": {
       "enum": ["invocation_started", "invocation_finished", "connection_initialized", "wrapper_failure"]
     },
     "event_id": {"type": "string", "minLength": 1, "maxLength": 120},
     "invocation_id": {"type": ["string", "null"], "maxLength": 120},
     "timestamp": {"type": "string", "format": "date-time"},
-    "source": {"enum": ["mcp", "hook"]},
+    "source": {"enum": ["mcp", "hook", "web"]},
     "agent": {"type": "string", "minLength": 1, "maxLength": 120},
     "client": {"type": ["object", "null"]},
     "connection_id": {"type": ["string", "null"], "maxLength": 120},
@@ -22,13 +22,16 @@
     "operation": {"type": "string", "minLength": 1, "maxLength": 120},
     "action": {"type": ["object", "null"]},
     "action_text": {"type": ["string", "null"], "maxLength": 1200},
-    "status": {"enum": ["started", "succeeded", "failed", "noop", "blocked"]},
+    "status": {"enum": ["started", "succeeded", "failed", "noop", "blocked", "cancelled", "timed_out", "interrupted"]},
     "outcome_code": {"type": ["string", "null"], "maxLength": 120},
     "result_summary": {"type": ["object", "null"]},
     "result_text": {"type": ["string", "null"], "maxLength": 1200},
     "capture_level": {"enum": ["safe", "diagnostic", "full-local", null]},
     "duration_ms": {"type": ["integer", "null"], "minimum": 0},
-    "error_type": {"type": ["string", "null"], "maxLength": 120}
+    "error_type": {"type": ["string", "null"], "maxLength": 120},
+    "task_id": {"type": ["string", "null"], "maxLength": 120},
+    "action_id": {"type": ["string", "null"], "maxLength": 120},
+    "target_task_id": {"type": ["string", "null"], "maxLength": 120}
   },
   "additionalProperties": false
 }

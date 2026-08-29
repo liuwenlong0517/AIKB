@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import tempfile
+from urllib.parse import quote
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -366,6 +367,65 @@ def ensure_knowledge_index(settings: Settings) -> dict[str, Any]:
     result = rebuild_knowledge_index(settings)
     result["rebuilt"] = True
     return result
+
+
+def inspect_knowledge_index(settings: Settings) -> dict[str, Any]:
+    """只读检查知识索引状态，不创建目录、重建或替换 SQLite 文件。
+
+    Markdown 是事实源，SQLite 仅用于发现和检索；因此本函数只比较现有索引的
+    元数据、内容指纹和完整性，不调用 ``ensure_knowledge_index``。返回值只含
+    固定状态和安全摘要，不能把数据库物理路径或底层异常传给 Web/任务服务。
+    """
+    database = settings.knowledge_db
+    if not database.is_file():
+        return {"status": "missing", "available": False, "rebuilt": False, "source": "knowledge Markdown", "derived": "SQLite index"}
+    try:
+        expected = content_fingerprint(settings.content_root)
+        # ``mode=ro`` 不仅是约定，而是 SQLite 连接层的硬约束；使用 URI 编码
+        # 处理 Windows 盘符、空格和中文路径，避免检查动作创建 journal/WAL。
+        encoded_path = quote(str(database.resolve()).replace("\\", "/"), safe="/:\\")
+        readonly_uri = f"file:{encoded_path}?mode=ro"
+        connection = sqlite3.connect(readonly_uri, uri=True)
+        try:
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                return {
+                    "status": "damaged", "available": False, "rebuilt": False,
+                    "source": "knowledge Markdown", "derived": "SQLite index", "reason": "integrity_check_failed",
+                }
+            tables = {
+                str(row[0]) for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+                ).fetchall()
+            }
+            required = {"index_metadata", "documents", "chunks"}
+            if not required.issubset(tables):
+                return {
+                    "status": "damaged", "available": False, "rebuilt": False,
+                    "source": "knowledge Markdown", "derived": "SQLite index", "reason": "schema_incomplete",
+                }
+            metadata = dict(connection.execute("SELECT key, value FROM index_metadata"))
+        finally:
+            connection.close()
+    except (OSError, UnicodeError, sqlite3.Error):
+        return {
+            "status": "damaged", "available": False, "rebuilt": False,
+            "source": "knowledge Markdown", "derived": "SQLite index", "reason": "index_read_failed",
+        }
+    if metadata.get("schema_version") != SCHEMA_VERSION or metadata.get("parser_version") != PARSER_VERSION:
+        return {
+            "status": "stale", "available": True, "rebuilt": False,
+            "source": "knowledge Markdown", "derived": "SQLite index", "reason": "schema_version_mismatch",
+        }
+    if metadata.get("content_fingerprint") != expected:
+        return {
+            "status": "stale", "available": True, "rebuilt": False,
+            "source": "knowledge Markdown", "derived": "SQLite index", "reason": "content_changed",
+        }
+    return {
+        "status": "ready", "available": True, "rebuilt": False,
+        "source": "knowledge Markdown", "derived": "SQLite index", "tokenizer": metadata.get("tokenizer", "unknown"),
+    }
 
 
 def metadata_report(settings: Settings) -> dict[str, Any]:

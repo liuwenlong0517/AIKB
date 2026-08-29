@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,8 +19,14 @@ from aikb_web.api.v1.common import error_body, valid_request_id
 from aikb_web.api.v1.knowledge import router as knowledge_router
 from aikb_web.api.v1.runtime import router as runtime_router
 from aikb_web.api.v1.audit import router as audit_router
+from aikb_web.api.v1.actions import router as actions_router
+from aikb_web.api.v1.tasks import router as tasks_router
 from aikb_web.api.v1.system import router as system_router
+from aikb_web.core.actions import ActionRegistry, ConfirmationTokenService
 from aikb_web.core.gateway import GatewayError, KnowledgeNotFound, KnowledgeGateway, CoreKnowledgeGateway
+from aikb_web.core.orchestrator import TaskOrchestrator
+from aikb_web.core.windows_actions import WindowsActionsExecutor, WindowsActionsUnavailable
+from aikb_web.platform import platform_state
 
 
 LOGGER = logging.getLogger("aikb_web")
@@ -116,15 +124,47 @@ def _json_error(request: Request, status_code: int, code: str, message: str, det
     return JSONResponse(status_code=status_code, content=error_body(code, message, request, details))
 
 
-def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
+def create_app(gateway: KnowledgeGateway | None = None, orchestrator: TaskOrchestrator | None = None) -> FastAPI:
     """创建可注入网关的 FastAPI 应用，便于契约测试和未来核心替换。"""
-    app = FastAPI(title="AIKB WebUI API", version="0.1.0", docs_url="/docs", redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """在服务真正启动时创建编排器，退出时广播取消并回收线程。"""
+        if app.state.task_orchestrator is None and app.state.task_settings is not None:
+            current_platform = platform_state()
+            if current_platform.platform == "windows" and current_platform.supported:
+                try:
+                    adapter = WindowsActionsExecutor(app.state.task_settings)
+                    adapter.validate([item["action_id"] for item in app.state.action_registry.list()])
+                    app.state.platform_action_available = True
+                    app.state.task_orchestrator = TaskOrchestrator(
+                        app.state.task_settings,
+                        registry=app.state.action_registry,
+                        token_service=app.state.confirmation_tokens,
+                        executor=adapter,
+                        audit_sink=getattr(app.state.knowledge_gateway, "web_audit_write", None),
+                    )
+                except Exception:
+                    app.state.platform_action_available = False
+                    app.state.task_orchestrator = None
+            else:
+                app.state.platform_action_available = False
+        try:
+            yield
+        finally:
+            service = app.state.task_orchestrator
+            if service is not None:
+                service.shutdown()
+
+    app = FastAPI(title="AIKB WebUI API", version="0.1.0", docs_url="/docs", redoc_url=None, lifespan=lifespan)
+    dev_origins = ["http://127.0.0.1:5173", "http://localhost:5173"] if (
+        os.environ.get("AIKB_WEB_DEV_ORIGIN") == "1" or os.environ.get("AIKB_WEB_DEV_MODE") == "1"
+    ) else []
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_origins=dev_origins,
         allow_credentials=False,
-        allow_methods=["GET", "OPTIONS"],
-        allow_headers=["Accept", "Content-Type", "X-Request-ID"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Accept", "Content-Type", "X-Request-ID", "X-AIKB-Request"],
     )
     init_error = False
     if gateway is None:
@@ -135,6 +175,15 @@ def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
             init_error = True
     app.state.knowledge_gateway = gateway
     app.state.gateway_init_error = init_error
+    # 注册表和令牌服务独立于 workspace，保证只读动作目录/预览在知识服务降级时仍可诊断。
+    app.state.action_registry = getattr(orchestrator, "registry", None) or ActionRegistry()
+    app.state.confirmation_tokens = getattr(orchestrator, "tokens", None) or ConfirmationTokenService()
+    app.state.task_settings = None if init_error else getattr(gateway, "settings", None)
+    # 注入编排器代表调用方已提供并验证适配器（测试/后续平台实现）；默认服务仍须在
+    # lifespan 中完成 Windows 程序解析后才将此标记置为 True。
+    app.state.platform_action_available = orchestrator is not None
+    # None 表示尚未启动或任务服务不可用；导入阶段不创建 TaskStore、不恢复任务。
+    app.state.task_orchestrator = orchestrator
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:
@@ -160,7 +209,7 @@ def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
         if exc.status_code == 404:
             return _json_error(request, 404, "not_found", "资源不存在")
         if exc.status_code == 405:
-            return _json_error(request, 405, "method_not_allowed", "只允许只读查询")
+            return _json_error(request, 405, "method_not_allowed", "请求方法不被支持")
         return _json_error(request, exc.status_code, "http_error", "请求无法处理")
 
     @app.exception_handler(ValueError)
@@ -197,6 +246,9 @@ def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
             "data": {
                 "status": "degraded" if request.app.state.gateway_init_error else "ok",
                 "service": "aikb-web",
+                "knowledge_read_only": True,
+                "controlled_actions": bool(getattr(request.app.state, "platform_action_available", False)),
+                # 兼容旧客户端；新客户端应读取 knowledge_read_only。
                 "read_only": True,
             },
             "meta": {"request_id": request.state.request_id, "api_version": "v1"},
@@ -206,6 +258,8 @@ def create_app(gateway: KnowledgeGateway | None = None) -> FastAPI:
     app.include_router(knowledge_router, prefix="/api/v1")
     app.include_router(runtime_router, prefix="/api/v1")
     app.include_router(audit_router, prefix="/api/v1")
+    app.include_router(actions_router, prefix="/api/v1")
+    app.include_router(tasks_router, prefix="/api/v1")
 
     @app.api_route("/api/{path:path}", methods=["GET"])
     def unknown_api(path: str) -> None:

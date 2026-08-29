@@ -31,4 +31,14 @@ describe('ApiClient', () => {
     expect(result.capabilities.read_only).toBe(true);
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/v1/system/info', '/api/v1/system/capabilities']);
   });
+
+  it('受控变更请求固定发送 JSON 和 X-AIKB-Request 标记，不扩展自定义参数', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { preview: { action_id: 'validate.structure', parameters: {}, risk_level: 'read_only', effects: [], steps: [], timeout_seconds: 120, preview_digest: 'digest' }, confirmation_token: 'token', expires_in_seconds: 300 }, meta: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { task: { task_id: 'task-1', action_id: 'validate.structure', status: 'queued' } }, meta: {} }), { status: 200 }));
+    await api.previewAction('validate.structure');
+    await api.createTask({ action_id: 'validate.structure', parameters: {}, preview_digest: 'digest', confirmation_token: 'token' });
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'Content-Type': 'application/json', 'X-AIKB-Request': '1' }), body: '{"parameters":{}}' }));
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'Content-Type': 'application/json', 'X-AIKB-Request': '1' }), body: '{"action_id":"validate.structure","parameters":{},"preview_digest":"digest","confirmation_token":"token"}' }));
+  });
 });

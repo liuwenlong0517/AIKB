@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import os
+from urllib.parse import urlsplit
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -12,6 +14,7 @@ from fastapi import Request
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 KNOWLEDGE_ID_PATTERN = re.compile(r"^aikb:[a-z0-9][a-z0-9:-]*$")
 RUNTIME_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,119}$")
+TASK_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 AUDIT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 
 
@@ -57,20 +60,47 @@ def validate_logical_prefix(value: str | None) -> str | None:
     return validate_logical_identifier(normalized)
 
 
-def success(data: Any, request: Request, **extra_meta: Any) -> dict[str, Any]:
+def success(data: Any, request: Request, *, allow_safe_result: bool = False, **extra_meta: Any) -> dict[str, Any]:
     """构造统一成功响应，所有响应都带请求标识和 API 版本。"""
     meta = {"request_id": request_id(request), "api_version": "v1", **extra_meta}
-    return {"data": _sanitize_public(data), "meta": meta}
+    return {"data": _sanitize_public(data, allow_safe_result=allow_safe_result), "meta": meta}
 
 
-def _sanitize_public(value: Any) -> Any:
+_TASK_RESULT_DENY_KEYS = {
+    "absolute_path", "filesystem_path", "project_path", "repo_path", "repository_path", "workspace_path",
+    "workspace_root", "repo_root", "knowledge_root", "content_root", "source_file", "file_path",
+    "absolute_file_path", "path", "source_path", "command", "commands", "cmd", "argv", "token",
+    "confirmation_token", "secret", "password", "passwd", "authorization", "cookie", "diagnostic",
+    "traceback", "payload", "raw", "stdout", "stderr",
+}
+
+
+def _sanitize_safe_result(value: Any) -> Any:
+    """递归投影 TaskStore 已脱敏结果；任务专用白名单不得扩散到其他 API。"""
+    if isinstance(value, list):
+        return [_sanitize_safe_result(item) for item in value[:50]]
+    if not isinstance(value, dict):
+        return value
+    result: dict[str, Any] = {}
+    for key, item in list(value.items())[:50]:
+        normalized = str(key).strip().lower()
+        if normalized in _TASK_RESULT_DENY_KEYS or normalized.endswith("_path") or normalized.endswith("_token"):
+            continue
+        result[str(key)] = _sanitize_safe_result(item)
+    return result
+
+
+def _sanitize_public(value: Any, *, allow_safe_result: bool = False) -> Any:
     """移除核心扩展对象中的物理路径字段，保留 Markdown 正文等事实内容。"""
     if isinstance(value, list):
-        return [_sanitize_public(item) for item in value]
+        return [_sanitize_public(item, allow_safe_result=allow_safe_result) for item in value]
     if not isinstance(value, dict):
         return value
     sanitized: dict[str, Any] = {}
     for key, item in value.items():
+        if key == "result" and allow_safe_result:
+            sanitized[key] = _sanitize_safe_result(item)
+            continue
         if key in {
             "absolute_path", "filesystem_path", "database", "database_path", "traceback",
             "diagnostic", "action", "result_summary", "client", "connection_id", "payload",
@@ -81,7 +111,7 @@ def _sanitize_public(value: Any) -> Any:
             continue
         if key in {"path", "source_path"} and public_logical_path(item) is None:
             continue
-        sanitized[key] = _sanitize_public(item)
+        sanitized[key] = _sanitize_public(item, allow_safe_result=allow_safe_result)
     return sanitized
 
 
@@ -90,6 +120,14 @@ def validate_runtime_identifier(value: str, *, name: str = "标识") -> str:
     candidate = value.strip().lower()
     if not RUNTIME_ID_PATTERN.fullmatch(candidate):
         raise ValueError(f"{name} 无效")
+    return candidate
+
+
+def validate_task_identifier(value: str) -> str:
+    """校验编排任务 ID；仅接受服务生成的 32 位十六进制标识。"""
+    candidate = value.strip().lower()
+    if not TASK_ID_PATTERN.fullmatch(candidate):
+        raise ValueError("task_id 无效")
     return candidate
 
 
@@ -128,6 +166,38 @@ def error_body(code: str, message: str, request: Request, details: Any | None = 
     if details is not None:
         error["details"] = details
     return {"error": error, "meta": {"request_id": request_id(request), "api_version": "v1"}}
+
+
+def require_mutation_request(request: Request) -> None:
+    """校验写请求的 JSON、浏览器标记和同源边界，不接受任意跨站 POST。"""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        raise ValueError("请求格式无效")
+    if request.headers.get("X-AIKB-Request") != "1":
+        raise ValueError("请求标记无效")
+    origin = request.headers.get("origin")
+    host = request.headers.get("host", "").strip().lower()
+    if not origin or not host:
+        raise ValueError("请求来源无效")
+    host_parts = urlsplit(f"//{host}")
+    host_name = (host_parts.hostname or "").lower()
+    if host_name not in {"localhost", "127.0.0.1"}:
+        raise ValueError("请求来源无效")
+    parsed = urlsplit(origin)
+    origin_host = (parsed.netloc or "").lower()
+    origin_name = (parsed.hostname or "").lower()
+    if origin_name not in {"localhost", "127.0.0.1"}:
+        raise ValueError("请求来源无效")
+    same_origin = (
+        parsed.scheme == request.url.scheme
+        and origin_name == host_name
+        and (parsed.port or (443 if parsed.scheme == "https" else 80))
+        == (host_parts.port or (443 if request.url.scheme == "https" else 80))
+    )
+    dev_mode = os.environ.get("AIKB_WEB_DEV_ORIGIN") == "1" or os.environ.get("AIKB_WEB_DEV_MODE") == "1"
+    explicit_dev_origin = origin in {"http://localhost:5173", "http://127.0.0.1:5173"}
+    if not same_origin and not (dev_mode and explicit_dev_origin):
+        raise ValueError("请求来源无效")
 
 
 def public_logical_path(value: Any) -> str | None:

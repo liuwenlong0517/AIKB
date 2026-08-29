@@ -12,8 +12,11 @@ from .common import split_csv, success, validate_audit_identifier, validate_proj
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
-AUDIT_STATUSES = {"started", "succeeded", "failed", "noop", "blocked", "incomplete"}
-AUDIT_SOURCES = {"mcp", "hook"}
+AUDIT_STATUSES = {
+    "started", "succeeded", "failed", "noop", "blocked", "incomplete",
+    "cancelled", "timed_out", "interrupted",
+}
+AUDIT_SOURCES = {"mcp", "hook", "web"}
 
 
 def _gateway(request: Request, capability: str = "web_audit_query") -> Any:

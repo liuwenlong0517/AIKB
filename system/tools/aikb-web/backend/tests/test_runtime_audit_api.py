@@ -100,6 +100,11 @@ class RuntimeAuditApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/audit/events/invoke-1").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/audit/events/not-found").status_code, 404)
 
+        # 阶段 3 Web 动作和新增终态必须能经过同一审计观察面筛选。
+        for status in ("cancelled", "timed_out", "interrupted"):
+            filtered = self.client.get("/api/v1/audit/events", params={"source": "web", "status": status})
+            self.assertEqual(filtered.status_code, 200)
+
     def test_invalid_ids_and_parameter_errors_are_structured(self) -> None:
         for path in (
             "/api/v1/runtime/working-states/C:%5Cprivate",
@@ -124,6 +129,15 @@ class RuntimeAuditApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["data"]["repositories"]["control"]["dirty"])
         self.assertNotIn("E:\\", response.text)
+
+    def test_system_capabilities_do_not_misreport_controlled_actions(self) -> None:
+        """能力状态由实际平台动作初始化结果决定，不沿用阶段 2 固定文案。"""
+        app = create_app(FakeGateway())
+        app.state.platform_action_available = True
+        response = TestClient(app).get("/api/v1/system/capabilities")
+        controlled = next(item for item in response.json()["data"]["capabilities"] if item["id"] == "controlled.actions")
+        self.assertTrue(controlled["supported"])
+        self.assertNotIn("reason", controlled)
 
     def test_detail_propagates_shared_index_degraded_state(self) -> None:
         """确认单任务详情不吞掉共享核心的 rebuilt/unavailable 状态。"""

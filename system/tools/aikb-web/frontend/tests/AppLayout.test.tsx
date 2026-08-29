@@ -19,6 +19,7 @@ describe('AppLayout', () => {
     expect(screen.getByRole('link', { name: '知识库' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '搜索' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '系统状态' })).toBeInTheDocument();
+    expect(screen.getByText('本地受控管理模式')).toBeInTheDocument();
     expect(screen.getByText('测试知识文档')).toBeInTheDocument();
     expect(document.getElementById('app-scroll-container')).toBeInTheDocument();
     // rc-menu 会在挂载后异步同步选中项，等待该更新完成，避免测试结束时遗留 act 警告。

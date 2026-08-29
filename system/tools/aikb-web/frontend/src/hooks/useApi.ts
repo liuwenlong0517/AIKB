@@ -1,8 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData } from '../types/api';
+import { TaskEventStream } from '../api/taskEvents';
+import { useEffect, useRef, useState } from 'react';
 
 export const useOverview = () => useQuery({ queryKey: ['knowledge-overview'], queryFn: api.overview });
 export const useKnowledgeTree = () => useQuery({ queryKey: ['knowledge-tree'], queryFn: api.tree });
@@ -43,3 +45,83 @@ export const useAuditEvents = (params: { since?: string; date?: string; agent?: 
 /** 审计调用有限详情，按逻辑 invocation_id 查询。 */
 export const useAuditEvent = (invocationId: string | undefined): UseQueryResult<ApiResponse<AuditEvent>> =>
   useQuery({ queryKey: ['audit-event', invocationId], queryFn: () => api.audit.detail(invocationId as string), enabled: Boolean(invocationId) });
+
+/** 读取静态动作注册表；动作卡片仅可选择 action_id，不开放自定义参数编辑。 */
+export const useActions = (): UseQueryResult<ApiResponse<ActionsData>> =>
+  useQuery({ queryKey: ['actions'], queryFn: api.actions });
+
+/** 请求服务端规范化预览和一次性令牌；预览本身不触发执行。 */
+export const usePreviewAction = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (actionId: string) => api.previewAction(actionId),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['tasks'] }); },
+  });
+};
+
+/** 创建已确认的受控任务；调用方只能提交预览返回的四个字段。 */
+export const useCreateTask = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { action_id: string; parameters: Record<string, unknown>; preview_digest: string; confirmation_token: string }) => api.createTask(body),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['tasks'] }); },
+  });
+};
+
+/** 读取任务列表，并让执行后列表能够及时反映新建任务。 */
+export const useTasks = (): UseQueryResult<ApiResponse<TasksData>> =>
+  useQuery({ queryKey: ['tasks'], queryFn: api.tasks, refetchInterval: 10_000 });
+
+/** 读取单个任务的安全快照。 */
+export const useTask = (taskId: string | undefined): UseQueryResult<ApiResponse<TaskData>> =>
+  useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => api.task(taskId as string),
+    enabled: Boolean(taskId),
+    // SSE 可能因网络、代理或浏览器限制中断；非终态每两秒轮询一次作为最终状态兜底。
+    refetchInterval: (query) => {
+      const status = query.state.data?.data.task.status;
+      return status && ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(status) ? false : 2_000;
+    },
+  });
+
+/** 取消任务是幂等请求；服务端决定终态任务的当前状态，前端不重复推断。 */
+export const useCancelTask = (taskId: string | undefined) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.cancelTask(taskId as string),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['task', taskId] });
+      void queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+};
+
+/**
+ * 订阅任务 SSE 并自动恢复；事件只上送给页面，具体状态合并由页面控制，便于审查安全字段。
+ * enabled 为 false（例如终态任务）时不会创建连接。
+ */
+export const useTaskEvents = (taskId: string | undefined, enabled: boolean) => {
+  const [eventQueue, setEventQueue] = useState<TaskEvent[]>([]);
+  const [error, setError] = useState<Error | null>(null);
+  const [connected, setConnected] = useState(false);
+  const streamGeneration = useRef(0);
+  useEffect(() => {
+    const currentGeneration = ++streamGeneration.current;
+    // 路由复用时清掉上一任务的事件和错误，避免新任务继承旧任务的实时状态。
+    setEventQueue([]);
+    setError(null);
+    setConnected(false);
+    if (!taskId || !enabled) return undefined;
+    const stream = new TaskEventStream();
+    const subscription = stream.subscribe(taskId, {
+      onOpen: () => { if (currentGeneration === streamGeneration.current) { setConnected(true); setError(null); } },
+      // 使用函数式更新，React 在同一批次收到多个 SSE 帧时仍会逐个追加，不丢 output/status。
+      onEvent: (nextEvent) => { if (currentGeneration === streamGeneration.current) setEventQueue((current) => [...current, nextEvent]); },
+      onError: (nextError) => { if (currentGeneration === streamGeneration.current) { setConnected(false); setError(nextError); } },
+      onTerminal: () => { if (currentGeneration === streamGeneration.current) setConnected(false); },
+    });
+    return () => { streamGeneration.current += 1; subscription.close(); setConnected(false); };
+  }, [taskId, enabled]);
+  return { events: eventQueue, event: eventQueue[eventQueue.length - 1], error, connected };
+};

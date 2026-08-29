@@ -51,7 +51,7 @@ export interface SearchData {
   index?: { tokenizer?: string; rebuilt?: boolean };
 }
 
-export interface KnowledgeRelation { direction: 'incoming' | 'outgoing'; type: string; target: string }
+export interface KnowledgeRelation { direction: string; type: string; target: string; target_title?: string | null }
 
 export interface DocumentData extends CoreDocumentSummary {
   content: string;
@@ -164,8 +164,8 @@ export interface CheckpointListData {
   index?: { status?: string; rebuilt?: boolean; available?: boolean };
 }
 
-export type AuditStatus = 'started' | 'succeeded' | 'failed' | 'noop' | 'blocked' | 'incomplete';
-export type AuditSource = 'mcp' | 'hook';
+export type AuditStatus = 'started' | 'succeeded' | 'failed' | 'noop' | 'blocked' | 'incomplete' | 'cancelled' | 'timed_out' | 'interrupted';
+export type AuditSource = 'mcp' | 'hook' | 'web';
 
 export interface AuditSummaryData {
   count: number;
@@ -204,4 +204,85 @@ export interface AuditListData {
   items: AuditEvent[];
   pagination: Pagination;
   summary?: { has_damaged?: boolean; damaged_count?: number };
+}
+
+/** 阶段 3 首批受控动作风险级别；前端不据此推断未公开能力。 */
+export type ActionRiskLevel = 'read_only' | 'derived_write';
+
+export interface ActionSpec {
+  action_id: string;
+  title: string;
+  description: string;
+  supported_platforms: string[];
+  risk_level: ActionRiskLevel | string;
+  effects: string[];
+  executor_kind?: string;
+  program_key?: string;
+  timeout_seconds: number;
+  concurrency_group?: string;
+  concurrency_limit?: number;
+  parameter_schema: Record<string, unknown>;
+  confirmation_required?: boolean;
+  supported?: boolean;
+  reason?: string | null;
+}
+
+export interface ActionsData { items: ActionSpec[] }
+
+export interface ActionPreview {
+  action_id: string;
+  parameters: Record<string, unknown>;
+  steps: string[];
+  risk_level: ActionRiskLevel | string;
+  effects: string[];
+  timeout_seconds: number;
+  concurrency_group?: string;
+  confirmation_required?: boolean;
+  preview_digest: string;
+}
+
+export interface ActionPreviewData {
+  preview: ActionPreview;
+  confirmation_token: string;
+  expires_in_seconds: number;
+}
+
+export type TaskStatus = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled' | 'interrupted';
+export type TaskEventType = 'snapshot' | 'status' | 'progress' | 'output' | 'result' | 'heartbeat';
+
+export interface TaskSnapshot {
+  task_id: string;
+  action_id: string;
+  parameters?: Record<string, unknown>;
+  risk_level?: ActionRiskLevel | string;
+  effects?: string[];
+  timeout_seconds?: number;
+  status: TaskStatus | string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  progress?: number | null;
+  output?: string | null;
+  output_truncated?: boolean;
+  result?: unknown;
+  invocation_id?: string | null;
+  last_event_id?: number | null;
+  last_reason?: string | null;
+}
+
+export interface TasksData { items: TaskSnapshot[]; total?: number | null }
+export interface TaskData { task: TaskSnapshot }
+
+export interface TaskEvent {
+  event_id: number;
+  type: TaskEventType | string;
+  task_id?: string;
+  status?: TaskStatus | string;
+  progress?: number | null;
+  text?: string | null;
+  output?: string | null;
+  result?: unknown;
+  task?: TaskSnapshot;
+  snapshot?: TaskSnapshot;
+  replay_reset?: boolean;
+  [key: string]: unknown;
 }

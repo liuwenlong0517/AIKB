@@ -106,6 +106,7 @@ def system_info(request: Request) -> dict[str, Any]:
 def capabilities(request: Request) -> dict[str, Any]:
     """返回平台能力模型；macOS 明确保留但不伪装成已支持。"""
     current_platform = platform_state()
+    actions_supported = bool(getattr(request.app.state, "platform_action_available", False))
     return success(
         {
             "platform": current_platform.public_dict(),
@@ -118,10 +119,13 @@ def capabilities(request: Request) -> dict[str, Any]:
                 {"id": "audit.read", "supported": True},
                 {"id": "knowledge.write", "supported": False, "reason": "read_only"},
                 {"id": "runtime.work_state.write", "supported": False, "reason": "read_only"},
-                {"id": "controlled.actions", "supported": False, "reason": "not_available_in_phase_2"},
-                {"id": "shell.execute", "supported": False, "reason": "not_available_in_phase_2"},
-                {"id": "git.write", "supported": False, "reason": "not_available_in_phase_2"},
-                {"id": "network.access", "supported": False, "reason": "not_available_in_phase_2"},
+                {
+                    "id": "controlled.actions", "supported": actions_supported,
+                    **({} if actions_supported else {"reason": "platform_or_prerequisites_unavailable"}),
+                },
+                {"id": "shell.execute", "supported": False, "reason": "not_supported"},
+                {"id": "git.write", "supported": False, "reason": "not_supported"},
+                {"id": "network.access", "supported": False, "reason": "not_supported"},
             ],
         },
         request,

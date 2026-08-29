@@ -1,7 +1,9 @@
 # 校验控制仓、独立知识仓和 workspace/ 的入口白名单、链接、规则预算及索引契约。
 # 该脚本只报告结构问题，不修改被校验仓库。
 param(
-    [string]$KnowledgePath
+    [string]$KnowledgePath,
+    # Web 受控执行器传入服务端已解析的绝对 Python；手工/CI 不传时保持 PATH 查找。
+    [string]$PythonPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -298,8 +300,26 @@ else {
     }
 }
 
-$python = Get-Command python -ErrorAction SilentlyContinue
-if (-not $python) {
+$pythonSource = $null
+if ($PythonPath) {
+    try {
+        $resolvedPythonPath = (Resolve-Path -LiteralPath $PythonPath -ErrorAction Stop).Path
+        if (-not (Test-Path -LiteralPath $resolvedPythonPath -PathType Leaf)) {
+            throw 'PythonPath 不是文件'
+        }
+        $pythonSource = $resolvedPythonPath
+    }
+    catch {
+        Add-ValidationError '指定的 PythonPath 无法解析为文件'
+    }
+}
+else {
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($python) {
+        $pythonSource = $python.Source
+    }
+}
+if (-not $pythonSource) {
     Add-ValidationError '未找到 Python，无法验证知识元数据和适配器实现'
 }
 else {
@@ -312,7 +332,7 @@ else {
         $previousKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
         $env:AIKB_HOME = $repoRoot
         $env:AIKB_KNOWLEDGE_HOME = $knowledgeRoot
-        $metadataOutput = & $python.Source -m aikb validate 2>&1
+        $metadataOutput = & $pythonSource -m aikb validate 2>&1
         if ($LASTEXITCODE -ne 0) {
             Add-ValidationError "知识元数据验证失败：$($metadataOutput -join ' ')"
         }

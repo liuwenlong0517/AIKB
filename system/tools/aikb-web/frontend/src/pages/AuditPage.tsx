@@ -6,8 +6,8 @@ import { PageHeader } from '../components/PageHeader';
 import { useAuditEvent, useAuditEvents, useAuditSummary } from '../hooks/useApi';
 import type { ApiMeta, AuditEvent, AuditStatus } from '../types/api';
 
-const STATUS_LABELS: Record<AuditStatus, string> = { started: '已开始', succeeded: '成功', failed: '失败', noop: '无操作', blocked: '已阻止', incomplete: '未完成' };
-const STATUS_COLORS: Record<AuditStatus, string> = { started: 'blue', succeeded: 'green', failed: 'red', noop: 'default', blocked: 'orange', incomplete: 'gold' };
+const STATUS_LABELS: Record<AuditStatus, string> = { started: '已开始', succeeded: '成功', failed: '失败', noop: '无操作', blocked: '已阻止', incomplete: '未完成', cancelled: '已取消', timed_out: '已超时', interrupted: '已中断' };
+const STATUS_COLORS: Record<AuditStatus, string> = { started: 'blue', succeeded: 'green', failed: 'red', noop: 'default', blocked: 'orange', incomplete: 'gold', cancelled: 'default', timed_out: 'orange', interrupted: 'purple' };
 
 /** 审计降级提示只映射固定 warning 枚举，避免把 JSONL 路径或异常正文带到浏览器。 */
 function WarningBar({ meta }: { meta?: ApiMeta }) {
@@ -58,7 +58,7 @@ function AuditList() {
   const events = eventsQuery.data?.data;
   const clear = () => { setSince(''); setDateFilter(''); setAgent(''); setSource(undefined); setStatus(undefined); setOperation(''); setPage(1); };
   return <>
-    <PageHeader title="审计日志" description="查看本机 MCP 与 hook 调用的安全摘要和有限详情。" />
+    <PageHeader title="审计日志" description="查看本机 MCP、hook 与 Web 受控动作的安全摘要和有限详情。" />
     <WarningBar meta={mergeMeta(summaryQuery.data?.meta, eventsQuery.data?.meta)} />
     <AsyncState loading={summaryQuery.isLoading} error={summaryQuery.error} onRetry={() => void summaryQuery.refetch()} empty={!summary}>
       {summary && <Row gutter={[16, 16]}>
@@ -67,7 +67,7 @@ function AuditList() {
         <Col xs={12} sm={6}><Card><Statistic title="失败 / 未完成" value={(summary.statuses.failed ?? 0) + (summary.statuses.incomplete ?? 0)} /></Card></Col>
         <Col xs={12} sm={6}><Card><Statistic title="平均耗时" value={summary.average_duration_ms ?? 0} suffix="ms" /></Card></Col>
         <Col xs={24} lg={12}><Card title="状态分布"><Space wrap>{Object.entries(summary.statuses).map(([key, count]) => <Tag key={key}>{STATUS_LABELS[key as AuditStatus] ?? key}：{count}</Tag>)}</Space></Card></Col>
-        <Col xs={24} lg={12}><Card title="来源与降级"><Space wrap><Tag>mcp：{summary.sources.mcp ?? 0}</Tag><Tag>hook：{summary.sources.hook ?? 0}</Tag><Tag color={summary.fallback_records ? 'orange' : undefined}>fallback：{summary.fallback_records ?? 0}</Tag><Tag color={summary.damaged_count ? 'red' : undefined}>损坏：{summary.damaged_count ?? 0}</Tag></Space><Typography.Paragraph type="secondary">最近活动：{date(summary.last_activity)}</Typography.Paragraph></Card></Col>
+        <Col xs={24} lg={12}><Card title="来源与降级"><Space wrap><Tag>mcp：{summary.sources.mcp ?? 0}</Tag><Tag>hook：{summary.sources.hook ?? 0}</Tag><Tag>web：{summary.sources.web ?? 0}</Tag><Tag color={summary.fallback_records ? 'orange' : undefined}>fallback：{summary.fallback_records ?? 0}</Tag><Tag color={summary.damaged_count ? 'red' : undefined}>损坏：{summary.damaged_count ?? 0}</Tag></Space><Typography.Paragraph type="secondary">最近活动：{date(summary.last_activity)}</Typography.Paragraph></Card></Col>
       </Row>}
     </AsyncState>
     <Card className="section-gap search-controls">
@@ -76,7 +76,7 @@ function AuditList() {
         <Input aria-label="审计日期" placeholder="日期，例如 2026-08-29" value={dateFilter} onChange={(event) => { setDateFilter(event.target.value); setSince(''); setPage(1); }} />
         <Input aria-label="按 Agent 筛选审计" placeholder="Agent" value={agent} onChange={(event) => { setAgent(event.target.value); setPage(1); }} />
         <Input aria-label="按操作筛选审计" placeholder="操作" value={operation} onChange={(event) => { setOperation(event.target.value); setPage(1); }} />
-        <Select aria-label="按来源筛选审计" allowClear placeholder="全部来源" style={{ width: 130 }} value={source} onChange={(value) => { setSource(value); setPage(1); }} options={[{ value: 'mcp', label: 'MCP' }, { value: 'hook', label: 'Hook' }]} />
+        <Select aria-label="按来源筛选审计" allowClear placeholder="全部来源" style={{ width: 130 }} value={source} onChange={(value) => { setSource(value); setPage(1); }} options={[{ value: 'mcp', label: 'MCP' }, { value: 'hook', label: 'Hook' }, { value: 'web', label: 'Web' }]} />
         <Select aria-label="按状态筛选审计" allowClear placeholder="全部状态" style={{ width: 150 }} value={status} onChange={(value) => { setStatus(value); setPage(1); }} options={Object.entries(STATUS_LABELS).map(([valueKey, label]) => ({ value: valueKey, label }))} />
         <Button onClick={clear}>清除筛选</Button>
       </Space>

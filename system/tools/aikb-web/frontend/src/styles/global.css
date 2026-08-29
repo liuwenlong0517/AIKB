@@ -37,6 +37,11 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .metadata-label { margin-top: 20px; margin-bottom: 8px !important; }
 .related-item { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
 .runtime-section-value { margin: 5px 0 0 !important; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-action-card { height: 100%; }
+.task-preview-card { border-color: #91caff; background: #f8fbff; }
+.task-confirmation { display: inline-flex; align-items: center; gap: 8px; }
+.task-progress { margin-top: 10px; margin-bottom: 8px; }
+.task-output { max-height: 480px; margin: 0; padding: 14px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 8px; background: #172033; color: #e8effa; }
 .markdown-body { color: #293448; line-height: 1.8; overflow-wrap: anywhere; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #14213d; line-height: 1.35; margin: 1.5em 0 0.7em; }
 .markdown-body h1:first-child { margin-top: 0; }

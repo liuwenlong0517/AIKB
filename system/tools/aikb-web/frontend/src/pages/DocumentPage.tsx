@@ -4,6 +4,7 @@ import { AsyncState } from '../components/AsyncState';
 import { MarkdownViewer } from '../components/MarkdownViewer';
 import { PageHeader } from '../components/PageHeader';
 import { useDocument } from '../hooks/useApi';
+import { relationDirectionLabel, relationTypeLabel } from '../utils/relations';
 
 /** Markdown 详情页只展示后端返回的 verified 文档，不提供编辑、删除或 Git 写入操作。 */
 export function DocumentPage() {
@@ -36,8 +37,10 @@ export function DocumentPage() {
             <Card title="关联知识" className="section-gap">
               {document.relations?.length ? document.relations.map((relation, index) => (
                 <div className="related-item" key={`${relation.direction}-${relation.type}-${relation.target}-${index}`}>
-                  <Link to={`/knowledge/view?id=${encodeURIComponent(relation.target)}`}>{relation.target}</Link>
-                  <Typography.Text type="secondary">{relation.direction} · {relation.type}</Typography.Text>
+                  <Link to={`/knowledge/view?id=${encodeURIComponent(relation.target)}`}>
+                    {relation.target_title ?? '关联知识'}（稳定 ID：{relation.target}）
+                  </Link>
+                  <Typography.Text type="secondary">{relationDirectionLabel(relation.direction)} · {relationTypeLabel(relation.type)}</Typography.Text>
                 </div>
               )) : <Typography.Text type="secondary">暂无关联知识</Typography.Text>}
             </Card>

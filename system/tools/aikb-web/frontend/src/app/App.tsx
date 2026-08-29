@@ -8,6 +8,7 @@ import { SearchPage } from '../pages/SearchPage';
 import { SystemPage } from '../pages/SystemPage';
 import { RuntimePage } from '../pages/RuntimePage';
 import { AuditPage } from '../pages/AuditPage';
+import { TasksPage } from '../pages/TasksPage';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
@@ -30,6 +31,8 @@ export function App() {
             <Route path="/runtime/:workId/checkpoints/:checkpointId" element={<RuntimePage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/audit/:invocationId" element={<AuditPage />} />
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/tasks/:taskId" element={<TasksPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
