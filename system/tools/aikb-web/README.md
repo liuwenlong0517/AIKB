@@ -27,4 +27,4 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/vali
 
 开发前端时，先启动后端，再在 `frontend/` 运行 `npm run dev`。Vite 只把 `/api` 转发到 `http://127.0.0.1:8000`。
 
-完整接口、读模型架构、页面空状态和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计、阶段 3 动作和阶段 4A 规则写入是否可用，仍以启动时共享核心、平台执行器、规则恢复状态和各资源接口响应为准。阶段 3 的实现契约见 `docs/phase-3-preconditions.md`；阶段 4A 的规则白名单、事务恢复和开发波次见 `docs/phase-4-preconditions.md`。当前只开放 `USER_RULES.md` 的受控应用，仍未开放其他规则/知识写入、安装、索引重建或 macOS 实现。
+完整接口、读模型架构、页面空状态和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计、阶段 3 动作和阶段 4A 规则写入是否可用，仍以启动时共享核心、平台执行器、规则恢复状态和各资源接口响应为准。阶段 3 的实现契约见 `docs/phase-3-preconditions.md`；阶段 4A 的规则白名单、事务恢复和开发波次见 `docs/phase-4-preconditions.md`；阶段 4B 的安装修复目标、补偿事务和六波次计划见 `docs/phase-4b-install-repair-preconditions.md`。当前只开放 `USER_RULES.md` 的受控应用，阶段 4B 仍处于前置契约完成、实现未开始状态，也未开放其他规则/知识写入、索引重建或 macOS 实现。
