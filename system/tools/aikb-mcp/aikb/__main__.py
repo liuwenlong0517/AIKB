@@ -13,6 +13,7 @@ from .config import Settings
 from .hooks import handle_hook
 from .indexer import metadata_report, rebuild_knowledge_index, review_report
 from .knowledge import KnowledgeService
+from .rules import validate_candidate_file, validate_structure_rules
 from .server import run_server
 from .workstate import WorkStateStore
 
@@ -41,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve")
     serve.add_argument("--agent", default="unknown")
     sub.add_parser("validate")
+    rule_validate = sub.add_parser("validate-rules", help="验证静态控制规则或服务端候选文件")
+    rule_validate.add_argument("--rule-id", choices=["entry", "user", "agent", "contributing"])
+    rule_validate.add_argument("--candidate-file", type=Path)
     sub.add_parser("review")
     sub.add_parser("rebuild")
     search = sub.add_parser("search")
@@ -96,6 +100,20 @@ def main(argv: list[str] | None = None) -> int:
         run_server(settings, agent=args.agent if args.command else "unknown")
     elif command == "validate":
         report = metadata_report(settings)
+        _json(report)
+        return 0 if report["valid"] else 1
+    elif command == "validate-rules":
+        if args.candidate_file is not None and not args.rule_id:
+            print("候选校验必须同时指定静态规则 ID", file=sys.stderr)
+            return 2
+        if args.candidate_file is not None:
+            report = validate_candidate_file(args.rule_id, args.candidate_file).as_dict()
+        elif args.rule_id:
+            from .rules import target_path, validate_rule_file
+
+            report = validate_rule_file(args.rule_id, target_path(settings.repo_root, args.rule_id)).as_dict()
+        else:
+            report = validate_structure_rules(settings.repo_root)
         _json(report)
         return 0 if report["valid"] else 1
     elif command == "review":

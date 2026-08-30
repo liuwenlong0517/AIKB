@@ -154,6 +154,62 @@ class WebAuditModelTests(unittest.TestCase):
         self.assertNotIn("path", projected)
         self.assertNotIn("result", projected)
 
+    def test_v4_fields_are_projected_and_invalid_values_are_dropped(self) -> None:
+        """Web 只投影合法规则关联字段与摘要，正文、差异和路径即使混入旧记录也不泄漏。"""
+        valid = web_audit_item({
+            "schema_version": 4, "record_type": "invocation_finished", "event_id": "event-v4",
+            "invocation_id": "invoke-v4", "status": "succeeded", "resource_type": "RULE",
+            "resource_id": "USER", "change_id": "change-v4", "before_hash": "A" * 64,
+            "after_hash": "b" * 64, "rollback_status": "RECOVERY_REQUIRED",
+            "candidate": "rule body must not pass", "diff": "full diff must not pass",
+            "path": r"C:\private\USER_RULES.md",
+        })
+        self.assertEqual(valid["schema_version"], 4)
+        self.assertEqual(valid["resource_type"], "rule")
+        self.assertEqual(valid["resource_id"], "user")
+        self.assertEqual(valid["change_id"], "change-v4")
+        self.assertEqual(valid["before_hash"], "a" * 64)
+        self.assertEqual(valid["after_hash"], "b" * 64)
+        self.assertEqual(valid["rollback_status"], "recovery_required")
+        serialized = json.dumps(valid, ensure_ascii=False)
+        self.assertNotIn("rule body", serialized)
+        self.assertNotIn("full diff", serialized)
+        self.assertNotIn("USER_RULES", serialized)
+
+        invalid = web_audit_item({
+            "schema_version": 4, "event_id": "event-invalid", "resource_type": "file",
+            "resource_id": "secret", "change_id": r"C:\private\change", "before_hash": "x",
+            "after_hash": "f" * 63, "rollback_status": "success",
+        })
+        for field in ("change_id", "resource_type", "resource_id", "before_hash", "after_hash", "rollback_status"):
+            self.assertIsNone(invalid[field])
+
+    def test_v4_change_filter_and_legacy_records(self) -> None:
+        """变更筛选只命中 v4 规则调用，旧 v1/v2 记录仍可查询且字段为空。"""
+        self.store.loaded["events"].extend([
+            {
+                "schema_version": 4, "record_type": "invocation_started", "event_id": "start-v4",
+                "invocation_id": "invoke-v4", "timestamp": "2026-08-29T09:02:00+08:00",
+                "source": "web", "agent": "codex", "operation": "rule.user.update", "status": "started",
+                "change_id": "change-v4", "resource_type": "rule", "resource_id": "user",
+                "before_hash": "a" * 64, "rollback_status": "not_started",
+            },
+            {
+                "schema_version": 4, "record_type": "invocation_finished", "event_id": "finish-v4",
+                "invocation_id": "invoke-v4", "timestamp": "2026-08-29T09:02:01+08:00",
+                "source": "web", "agent": "codex", "operation": "rule.user.update", "status": "succeeded",
+                "change_id": "change-v4", "resource_type": "rule", "resource_id": "user",
+                "before_hash": "a" * 64, "after_hash": "b" * 64, "rollback_status": "not_applicable",
+            },
+        ])
+        payload = web_audit_query(self.store, change_id="change-v4", resource_type="rule", resource_id="user", page_size=10)
+        self.assertEqual(payload["pagination"]["total"], 1)
+        self.assertEqual(payload["items"][0]["after_hash"], "b" * 64)
+        self.assertEqual(web_audit_query(self.store, change_id="not-found", page_size=10)["pagination"]["total"], 0)
+        legacy = web_audit_query(self.store, source="hook", page_size=10)["items"][0]
+        for field in ("change_id", "resource_type", "resource_id", "before_hash", "after_hash", "rollback_status"):
+            self.assertIsNone(legacy[field])
+
     def test_web_text_redacts_unix_roots_without_touching_logical_paths(self) -> None:
         """确认 Unix 绝对路径不残留根目录前缀，知识逻辑路径和 URL 保持可读。"""
         for root in ("opt", "srv", "root", "usr", "mnt", "foo"):

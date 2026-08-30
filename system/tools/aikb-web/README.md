@@ -1,6 +1,6 @@
 # AIKB WebUI
 
-AIKB WebUI 是 AIKB 的本地管理终端。第一、二阶段提供 Windows 上的正式知识总览、目录、搜索、Markdown 阅读、运行状态、检查点与脱敏审计观察面；第三阶段新增三项经过白名单约束的本地只读动作和任务中心。知识与规则仍不可在线修改，动作也不接受任意 Shell、脚本路径或自定义工作目录；服务不开放局域网监听。
+AIKB WebUI 是 AIKB 的本地管理终端。第一、二阶段提供 Windows 上的正式知识总览、目录、搜索、Markdown 阅读、运行状态、检查点与脱敏审计观察面；第三阶段新增三项经过白名单约束的本地只读动作和任务中心。阶段 4A 已完成波次 0 的共享验证器、审计 v4 和静态事务契约，但尚未开放规则页面、预览或写入，因此知识与规则仍不可在线修改，动作也不接受任意 Shell、脚本路径或自定义工作目录；服务不开放局域网监听。
 
 ## 开发边界
 
@@ -25,4 +25,4 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/vali
 
 开发前端时，先启动后端，再在 `frontend/` 运行 `npm run dev`。Vite 只把 `/api` 转发到 `http://127.0.0.1:8000`。
 
-完整接口、读模型架构、页面空状态和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计和阶段 3 任务路由是否可用，仍以启动时共享核心/Windows 执行器初始化结果和各资源接口响应为准。阶段 3 的设计前置契约与当前实现差异见 `docs/phase-3-preconditions.md`；后续规则写入、安装、索引重建和 macOS 实现不在当前范围内。
+完整接口、读模型架构、页面空状态和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计和阶段 3 任务路由是否可用，仍以启动时共享核心/Windows 执行器初始化结果和各资源接口响应为准。阶段 3 的实现契约见 `docs/phase-3-preconditions.md`；阶段 4A 的规则白名单、事务恢复和开发波次见 `docs/phase-4-preconditions.md`。波次 0 只提供内部基础，不构成可用的规则治理功能；当前仍未开放规则预览/写入、安装、索引重建或 macOS 实现。

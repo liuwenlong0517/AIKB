@@ -173,101 +173,10 @@ if ($catalogText -match '\[[^\]]+\]\(workspace/') {
     Add-ValidationError 'CATALOG.md 不应登记 workspace/ 下的工作状态或派生数据库'
 }
 
-$entryText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md')
-foreach ($requiredText in @(
-    'AIKB_HOME',
-    'system/rules/AI_RULES.md',
-    'system/rules/USER_RULES.md',
-    '用户明确要求跳过时不接入',
-    '根目录 `README.md` 是人类维护手册',
-    '不属于 Agent 默认上下文'
-)) {
-    if (-not $entryText.Contains($requiredText)) {
-        Add-ValidationError "ENTRY_RULES.md 缺少入口职责：$requiredText"
-    }
-}
-
-$roleRequirements = @{
-    'system/rules/USER_RULES.md' = @(
-        '当前任务及更高优先级指令优先', '未经用户明确要求不得修改', 'Java', '使用中文',
-        '对用户前提和事实保持独立判断', '无法可靠确认', '实际执行任何文件或目录删除前',
-        '类/模块', '方法/函数', '关键代码', '无需通读全部代码', '不得逐行复述',
-        '理解相关现有实现', '最小必要范围原则', '无法验证时明确说明', '依据项目环境或可靠文档确认'
-    )
-    'system/rules/AI_RULES.md' = @(
-        'ENTRY_RULES.md', 'INDEX.md', 'read_knowledge', 'search_knowledge', 'content_hash',
-        'workspace/', 'work_id', 'system/rules/CONTRIBUTING.md', 'CATALOG.md', 'Markdown 是知识事实源',
-        '首次接入不默认读取控制仓或知识仓的 `INDEX.md`', 'MCP 不可用', '用户要求跳过 AIKB',
-        '不在每次任务后自动写库', '必须先确认'
-    )
-    'INDEX.md' = @(
-        '稳定降级入口', '根目录 `README.md` 是人类维护手册', 'AIKB_KNOWLEDGE_HOME',
-        '%AIKB_HOME%\content', 'system/rules/CONTRIBUTING.md', '知识仓 `CATALOG.md`'
-    )
-    'system/rules/CONTRIBUTING.md' = @(
-        'content/experience/inbox/', 'system/templates/', 'system/schemas/knowledge-entry.schema.json',
-        'CATALOG.md', 'INDEX.md', '`id`', '`relations`', 'system/tests/validate-structure.ps1',
-        '无需逐次确认', '请求用户决定', '不发布未通过校验的正式知识'
-    )
-}
-
 $knowledgeIndexText = Get-Content -Raw -LiteralPath (Join-Path $knowledgeRoot 'INDEX.md')
 foreach ($requiredText in @('knowledge/README.md', 'experience/README.md', 'workflows/README.md', 'projects/README.md', 'CATALOG.md')) {
     if (-not $knowledgeIndexText.Contains($requiredText)) {
         Add-ValidationError "知识仓 INDEX.md 缺少稳定入口：$requiredText"
-    }
-}
-
-foreach ($relativePath in $roleRequirements.Keys) {
-    # 规则文本的职责词和禁止词共同防止层级边界逐渐漂移。
-    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
-    foreach ($requiredText in $roleRequirements[$relativePath]) {
-        if (-not $text.Contains($requiredText)) {
-            Add-ValidationError "$relativePath 缺少职责闭环：$requiredText"
-        }
-    }
-}
-
-$forbiddenByRole = @{
-    'ENTRY_RULES.md' = @('search_knowledge', 'read_knowledge', 'work_id', 'CATALOG.md')
-    'system/rules/USER_RULES.md' = @('search_knowledge', 'read_knowledge', 'work_id')
-    'INDEX.md' = @('work_id', 'session_id', 'relation_limit')
-}
-foreach ($relativePath in $forbiddenByRole.Keys) {
-    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
-    foreach ($forbiddenText in $forbiddenByRole[$relativePath]) {
-        if ($text.Contains($forbiddenText)) {
-            Add-ValidationError "$relativePath 混入其他层职责：$forbiddenText"
-        }
-    }
-}
-
-$portableRuleFiles = @(
-    'ENTRY_RULES.md',
-    'INDEX.md',
-    'system/rules/USER_RULES.md',
-    'system/rules/AI_RULES.md',
-    'system/rules/CONTRIBUTING.md'
-)
-foreach ($relativePath in $portableRuleFiles) {
-    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
-    if ($text -match '[A-Za-z]:\\') {
-        Add-ValidationError "$relativePath 不得包含机器绝对路径"
-    }
-}
-
-$ruleBudgets = @{
-    'ENTRY_RULES.md' = 800
-    'INDEX.md' = 800
-    'system/rules/USER_RULES.md' = 800
-    'system/rules/AI_RULES.md' = 2100
-    'system/rules/CONTRIBUTING.md' = 3200
-}
-# 核心入口需要保持短小，避免每个新会话加载过多控制面上下文。
-foreach ($relativePath in $ruleBudgets.Keys) {
-    $text = Get-Content -Raw -LiteralPath (Join-Path $repoRoot $relativePath)
-    if ($text.Length -gt $ruleBudgets[$relativePath]) {
-        Add-ValidationError "核心规则超过字符预算：$relativePath = $($text.Length) > $($ruleBudgets[$relativePath])"
     }
 }
 
@@ -335,6 +244,22 @@ else {
         $metadataOutput = & $pythonSource -m aikb validate 2>&1
         if ($LASTEXITCODE -ne 0) {
             Add-ValidationError "知识元数据验证失败：$($metadataOutput -join ' ')"
+        }
+        # 职责词、禁止词、绝对路径和规则预算由 Python 共享验证器统一维护，
+        # 结构脚本只负责调用和汇总，避免 PowerShell 与 Web 预览出现两套事实源。
+        $ruleOutput = & $pythonSource -m aikb --repo-root $repoRoot validate-rules 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            try {
+                $ruleReport = ($ruleOutput -join "`n") | ConvertFrom-Json
+                foreach ($rule in $ruleReport.rules) {
+                    foreach ($ruleError in $rule.errors) {
+                        Add-ValidationError ([string]$ruleError)
+                    }
+                }
+            }
+            catch {
+                Add-ValidationError "共享规则校验失败：$($ruleOutput -join ' ')"
+            }
         }
     }
     finally {

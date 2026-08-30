@@ -68,6 +68,8 @@ class FakeGateway:
         return {"items": [{
             "invocation_id": "invoke-1", "event_id": "event-1", "status": "succeeded",
             "action": "must-not-pass", "traceback": "must-not-pass",
+            "schema_version": 4, "change_id": "change-1", "resource_type": "rule", "resource_id": "user",
+            "before_hash": "a" * 64, "after_hash": "b" * 64, "rollback_status": "not_applicable",
         }], "summary": {"count": 1, "damaged_count": 0}, "pagination": {"total": 1}}
 
     def web_audit_detail(self, identifier: str) -> dict[str, Any] | None:
@@ -96,6 +98,8 @@ class RuntimeAuditApiTests(unittest.TestCase):
         payload = response.json()
         serialized = json.dumps(payload, ensure_ascii=False)
         self.assertNotIn("must-not-pass", serialized)
+        self.assertIn("change-1", serialized)
+        self.assertIn("not_applicable", serialized)
         self.assertEqual(self.client.get("/api/v1/audit/summary").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/audit/events/invoke-1").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/audit/events/not-found").status_code, 404)
@@ -104,6 +108,16 @@ class RuntimeAuditApiTests(unittest.TestCase):
         for status in ("cancelled", "timed_out", "interrupted"):
             filtered = self.client.get("/api/v1/audit/events", params={"source": "web", "status": status})
             self.assertEqual(filtered.status_code, 200)
+
+        # 规则资源筛选只接受静态枚举，避免 Web 查询成为任意资源探测入口。
+        filtered = self.client.get("/api/v1/audit/events", params={
+            "change_id": "change-1", "resource_type": "rule", "resource_id": "user",
+        })
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/audit/events", params={"resource_type": "file"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/v1/audit/events", params={"resource_id": "secret"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/v1/audit/events", params={"change_id": r"C:\private\change"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/v1/audit/events", params={"change_id": "scope:change"}).status_code, 400)
 
     def test_invalid_ids_and_parameter_errors_are_structured(self) -> None:
         for path in (

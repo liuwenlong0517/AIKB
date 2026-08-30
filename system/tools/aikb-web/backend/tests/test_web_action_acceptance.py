@@ -90,7 +90,7 @@ class WebActionAcceptanceTests(unittest.TestCase):
             invocation = task["invocation_id"]
             records = [item for item in self.audit if item.get("invocation_id") == invocation]
             self.assertEqual({item["record_type"] for item in records}, {"invocation_started", "invocation_finished"})
-            self.assertTrue(all(item.get("schema_version") == 3 for item in records))
+            self.assertTrue(all(item.get("schema_version") == 4 for item in records))
             self.assertTrue(all(item.get("task_id") == task["task_id"] and item.get("action_id") == task["action_id"] for item in records))
         self.assertEqual(self.before, {"control": self._git_state(self.settings.repo_root), "knowledge": self._git_state(self.settings.knowledge_root)})
 

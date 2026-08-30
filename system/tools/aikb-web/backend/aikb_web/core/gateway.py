@@ -390,7 +390,7 @@ class CoreKnowledgeGateway:
             raise GatewayError("审计读取失败") from error
 
     def web_audit_write(self, record: Mapping[str, Any]) -> Any:
-        """写入编排任务的最小审计关联；写入层负责 schema v3 脱敏和 fallback。"""
+        """写入编排任务的最小审计关联；写入层负责 schema v4 脱敏和 fallback。"""
         store = self._audit()
         method = getattr(store, "write", None)
         if not callable(method):

@@ -20,15 +20,23 @@ from xml.sax.saxutils import escape as xml_escape
 from .config import Settings
 
 
-AUDIT_SCHEMA_VERSION = 3
+AUDIT_SCHEMA_VERSION = 4
 AUDIT_FIELDS = (
     "schema_version", "record_type", "event_id", "invocation_id", "timestamp", "source", "agent",
     "client", "connection_id", "session_id", "session_label", "project_id", "operation", "action", "action_text",
     "status", "outcome_code", "result_summary", "result_text", "capture_level", "duration_ms", "error_type",
-    "task_id", "action_id", "target_task_id",
+    "task_id", "action_id", "target_task_id", "change_id", "resource_type", "resource_id",
+    "before_hash", "after_hash", "rollback_status",
 )
 FINISHED_STATUS = {"succeeded", "failed", "noop", "blocked", "cancelled", "timed_out", "interrupted"}
 AUDIT_STATUSES = {"started", *FINISHED_STATUS}
+AUDIT_RESOURCE_TYPES = {"rule"}
+AUDIT_RESOURCE_IDS = {"entry", "user", "agent", "contributing"}
+AUDIT_ROLLBACK_STATUSES = {
+    "not_applicable", "not_started", "pending", "succeeded", "recovery_required",
+}
+AUDIT_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
+AUDIT_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 # 审计事件的来源是公开契约的一部分；未知来源不能原样落盘，否则会生成 schema 无法接受的事件。
 AUDIT_SOURCES = {"mcp", "hook", "web"}
 SECRET_PATTERN = re.compile(
@@ -46,6 +54,23 @@ def _redact_text(value: str, limit: int = 500) -> str:
     text = SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
     text = TOKEN_VALUE_PATTERN.sub("[REDACTED]", text)
     return text[:limit]
+
+
+def _safe_audit_identifier(value: Any, *, limit: int = 120) -> str | None:
+    """规范化审计关联标识；只接受无路径、无控制字符的短 ASCII 标识。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if len(text) > limit or not AUDIT_IDENTIFIER_PATTERN.fullmatch(text):
+        return None
+    return text
+
+
+def _safe_audit_hash(value: Any) -> str | None:
+    """只接受内容摘要的 64 位十六进制表示，并统一为小写。"""
+    if not isinstance(value, str) or not AUDIT_HASH_PATTERN.fullmatch(value):
+        return None
+    return value.lower()
 
 
 def _sanitize(value: Any, *, depth: int = 0) -> Any:
@@ -345,6 +370,33 @@ class AuditStore:
         ):
             if normalized.get(field) is not None:
                 normalized[field] = _redact_text(str(normalized[field]), limit)
+        # 规则变更关联字段不走通用文本脱敏：这些字段必须满足更窄的格式契约，
+        # 否则路径、差异正文或异常消息可能借新字段进入审计事实源。
+        normalized["change_id"] = _safe_audit_identifier(normalized.get("change_id"))
+        normalized["resource_type"] = (
+            str(normalized.get("resource_type") or "").strip().lower()
+            if str(normalized.get("resource_type") or "").strip().lower() in AUDIT_RESOURCE_TYPES
+            else None
+        )
+        normalized["resource_id"] = (
+            str(normalized.get("resource_id") or "").strip().lower()
+            if str(normalized.get("resource_id") or "").strip().lower() in AUDIT_RESOURCE_IDS
+            else None
+        )
+        # resource_id 只有在资源类型确认是 rule 时才有意义，避免形成未定义的
+        # 资源命名空间；未知的资源组合整体降级为 null，而不是猜测其含义。
+        if normalized["resource_type"] != "rule":
+            normalized["resource_id"] = None
+        normalized["before_hash"] = _safe_audit_hash(normalized.get("before_hash"))
+        normalized["after_hash"] = _safe_audit_hash(normalized.get("after_hash"))
+        rollback_status = str(normalized.get("rollback_status") or "").strip().lower()
+        normalized["rollback_status"] = rollback_status if rollback_status in AUDIT_ROLLBACK_STATUSES else None
+        if normalized["resource_type"] != "rule" or normalized["resource_id"] is None:
+            # 变更哈希和回滚结果必须隶属于已知规则资源；孤立字段既无法审查，
+            # 也可能被滥用为任意文本侧信道，因此按组合契约整体丢弃。
+            normalized["before_hash"] = None
+            normalized["after_hash"] = None
+            normalized["rollback_status"] = None
         normalized["action"] = _sanitize(normalized.get("action"))
         normalized["result_summary"] = _sanitize(normalized.get("result_summary"))
         normalized["client"] = _sanitize(normalized.get("client"))
@@ -443,6 +495,8 @@ class AuditStore:
         client: dict[str, Any] | None = None, connection_id: str | None = None,
         session_id: str | None = None, project_id: str | None = None, session_label: str | None = None,
         task_id: str | None = None, action_id: str | None = None, target_task_id: str | None = None,
+        change_id: str | None = None, resource_type: str | None = None, resource_id: str | None = None,
+        before_hash: str | None = None, after_hash: str | None = None, rollback_status: str | None = None,
     ) -> dict[str, Any]:
         session_label = session_label or self.resolve_session_label(
             agent=agent, source=source, session_id=session_id, connection_id=connection_id, project_id=project_id,
@@ -455,6 +509,8 @@ class AuditStore:
             "session_id": session_id, "session_label": session_label, "project_id": project_id, "operation": operation, "action": action,
             "action_text": describe_action(operation, action), "capture_level": self.settings.audit_capture_level,
             "status": "started", "task_id": task_id, "action_id": action_id, "target_task_id": target_task_id,
+            "change_id": change_id, "resource_type": resource_type, "resource_id": resource_id,
+            "before_hash": before_hash, "after_hash": after_hash, "rollback_status": rollback_status,
         })
         return {"invocation_id": invocation_id, "started": started, "write": result}
 
@@ -464,6 +520,8 @@ class AuditStore:
         client: dict[str, Any] | None = None, connection_id: str | None = None,
         session_id: str | None = None, project_id: str | None = None, session_label: str | None = None,
         task_id: str | None = None, action_id: str | None = None, target_task_id: str | None = None,
+        change_id: str | None = None, resource_type: str | None = None, resource_id: str | None = None,
+        before_hash: str | None = None, after_hash: str | None = None, rollback_status: str | None = None,
     ) -> dict[str, Any]:
         safe_status = status if status in FINISHED_STATUS else "failed"
         duration = max(0, round((time.perf_counter() - float(invocation["started"])) * 1000))
@@ -475,6 +533,8 @@ class AuditStore:
             "result_text": describe_result(operation, safe_status, outcome_code, result_summary),
             "capture_level": self.settings.audit_capture_level, "duration_ms": duration, "error_type": error_type,
             "task_id": task_id, "action_id": action_id, "target_task_id": target_task_id,
+            "change_id": change_id, "resource_type": resource_type, "resource_id": resource_id,
+            "before_hash": before_hash, "after_hash": after_hash, "rollback_status": rollback_status,
         })
 
     def connection_initialized(self, *, agent: str, client: dict[str, Any], connection_id: str) -> dict[str, Any]:
@@ -547,7 +607,8 @@ def _event_datetime(event: dict[str, Any]) -> datetime | None:
 def filter_events(
     events: list[dict[str, Any]], *, since: str | None = None, on_date: str | None = None,
     agent: str | None = None, source: str | None = None, status: str | list[str] | tuple[str, ...] | None = None,
-    operation: str | None = None,
+    operation: str | None = None, change_id: str | None = None, resource_type: str | None = None,
+    resource_id: str | None = None,
 ) -> list[dict[str, Any]]:
     threshold = parse_since(since)
     selected_date = date.fromisoformat(on_date) if on_date else None
@@ -566,6 +627,12 @@ def filter_events(
         if statuses and event.get("status") not in statuses:
             continue
         if operation and event.get("operation") != operation:
+            continue
+        if change_id and event.get("change_id") != change_id:
+            continue
+        if resource_type and event.get("resource_type") != resource_type:
+            continue
+        if resource_id and event.get("resource_id") != resource_id:
             continue
         result.append(event)
     return result
@@ -588,7 +655,8 @@ def combine_invocations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             for key in (
                 "schema_version", "source", "agent", "client", "connection_id", "session_id", "session_label", "project_id", "operation", "capture_level",
-                "task_id", "action_id", "target_task_id",
+                "task_id", "action_id", "target_task_id", "change_id", "resource_type", "resource_id",
+                "before_hash", "after_hash", "rollback_status",
             ):
                 if key not in item or item.get(key) is None:
                     item[key] = event.get(key)
@@ -644,6 +712,7 @@ WEB_AUDIT_SAFE_FIELDS = (
     "source", "agent", "session_id", "session_label", "project_id", "operation", "status", "outcome_code",
     "action_text", "result_text", "capture_level", "duration_ms", "error_type", "fallback",
     "task_id", "action_id", "target_task_id",
+    "change_id", "resource_type", "resource_id", "before_hash", "after_hash", "rollback_status",
 )
 WEB_AUDIT_WINDOWS_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/](?![\\/])|\\\\)[^\s\"'<>|]+")
 # 覆盖常见根目录与未知的两级以上 Unix 绝对路径；冒号边界排除
@@ -690,6 +759,16 @@ def _web_error_type(value: Any) -> str | None:
     return "error"
 
 
+def _web_change_id(value: Any) -> str | None:
+    """将变更标识限制为服务生成的安全 ASCII 标识，不返回路径或差异内容。"""
+    return _safe_audit_identifier(value)
+
+
+def _web_hash(value: Any) -> str | None:
+    """只投影合法内容摘要；旧记录或非法值保持 null。"""
+    return _safe_audit_hash(value)
+
+
 def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
     """将已合并审计项转换成 Web 安全读模型。
 
@@ -700,8 +779,20 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(item, dict):
         return {}
+    resource_type = str(item.get("resource_type") or "").strip().lower()
+    resource_type = resource_type if resource_type in AUDIT_RESOURCE_TYPES else None
+    resource_id = str(item.get("resource_id") or "").strip().lower()
+    resource_id = resource_id if resource_id in AUDIT_RESOURCE_IDS and resource_type == "rule" else None
+    rollback_status = str(item.get("rollback_status") or "").strip().lower()
+    rollback_status = rollback_status if rollback_status in AUDIT_ROLLBACK_STATUSES else None
+    before_hash = _web_hash(item.get("before_hash"))
+    after_hash = _web_hash(item.get("after_hash"))
+    if resource_type != "rule" or resource_id is None:
+        before_hash = None
+        after_hash = None
+        rollback_status = None
     result: dict[str, Any] = {
-        "schema_version": item.get("schema_version") if item.get("schema_version") in {1, 2, 3} else None,
+        "schema_version": item.get("schema_version") if item.get("schema_version") in {1, 2, 3, 4} else None,
         "record_type": _web_identifier(item.get("record_type"), 80),
         "event_id": _web_identifier(item.get("event_id"), 120),
         "invocation_id": _web_identifier(item.get("invocation_id"), 120),
@@ -726,6 +817,12 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
         "task_id": _web_identifier(item.get("task_id"), 120),
         "action_id": _web_identifier(item.get("action_id"), 120),
         "target_task_id": _web_identifier(item.get("target_task_id"), 120),
+        "change_id": _web_change_id(item.get("change_id")),
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "before_hash": before_hash,
+        "after_hash": after_hash,
+        "rollback_status": rollback_status,
     }
     # 返回固定字段集合，避免把安全投影当成通用字典而意外追加原始内容。
     return {key: result[key] for key in WEB_AUDIT_SAFE_FIELDS if key in result}
@@ -782,7 +879,8 @@ def _web_summary(summary: dict[str, Any]) -> dict[str, Any]:
 def web_audit_query(
     store: AuditStore, *, since: str | None = None, on_date: str | None = None, agent: str | None = None,
     source: str | None = None, status: str | list[str] | tuple[str, ...] | None = None, operation: str | None = None,
-    session_label: str | None = None, project_id: str | None = None, page: int = 1, page_size: int = 50,
+    session_label: str | None = None, project_id: str | None = None, change_id: str | None = None,
+    resource_type: str | None = None, resource_id: str | None = None, page: int = 1, page_size: int = 50,
 ) -> dict[str, Any]:
     """查询审计 Web 安全模型，统一复用事实源读取、筛选、调用合并和汇总逻辑。
 
@@ -796,6 +894,7 @@ def web_audit_query(
     combined = combine_invocations(events if isinstance(events, list) else [])
     selected = filter_events(
         combined, since=since, on_date=on_date, agent=agent, source=source, status=status, operation=operation,
+        change_id=change_id, resource_type=resource_type, resource_id=resource_id,
     )
     selected = _web_filters(selected, session_label=session_label, project_id=project_id)
     # 审计页面默认展示最新活动；排序发生在分页前，避免第一页落在最旧历史。
@@ -826,12 +925,14 @@ def web_audit_query(
 def web_audit_summary(
     store: AuditStore, *, since: str | None = None, on_date: str | None = None, agent: str | None = None,
     source: str | None = None, status: str | list[str] | tuple[str, ...] | None = None, operation: str | None = None,
-    session_label: str | None = None, project_id: str | None = None,
+    session_label: str | None = None, project_id: str | None = None, change_id: str | None = None,
+    resource_type: str | None = None, resource_id: str | None = None,
 ) -> dict[str, Any]:
     """返回 Web 审计安全汇总；与列表使用完全相同的筛选和兼容逻辑。"""
     return web_audit_query(
         store, since=since, on_date=on_date, agent=agent, source=source, status=status, operation=operation,
-        session_label=session_label, project_id=project_id, page=1, page_size=WEB_AUDIT_MAX_PAGE_SIZE,
+        session_label=session_label, project_id=project_id, change_id=change_id, resource_type=resource_type,
+        resource_id=resource_id, page=1, page_size=WEB_AUDIT_MAX_PAGE_SIZE,
     )["summary"]
 
 

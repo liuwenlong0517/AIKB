@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.aikb/schemas/audit-event.schema.json",
-  "title": "AIKB audit event schema v3",
+  "title": "AIKB audit event schema v4",
   "type": "object",
   "required": ["schema_version", "record_type", "event_id", "timestamp", "source", "agent", "operation", "status"],
   "properties": {
-    "schema_version": {"enum": [1, 2, 3]},
+    "schema_version": {"enum": [1, 2, 3, 4]},
     "record_type": {
       "enum": ["invocation_started", "invocation_finished", "connection_initialized", "wrapper_failure"]
     },
@@ -31,7 +31,26 @@
     "error_type": {"type": ["string", "null"], "maxLength": 120},
     "task_id": {"type": ["string", "null"], "maxLength": 120},
     "action_id": {"type": ["string", "null"], "maxLength": 120},
-    "target_task_id": {"type": ["string", "null"], "maxLength": 120}
+    "target_task_id": {"type": ["string", "null"], "maxLength": 120},
+    "change_id": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$"
+    },
+    "resource_type": {"enum": ["rule", null]},
+    "resource_id": {"enum": ["entry", "user", "agent", "contributing", null]},
+    "before_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "after_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "rollback_status": {
+      "enum": ["not_applicable", "not_started", "pending", "succeeded", "recovery_required", null]
+    }
   },
   "additionalProperties": false
 }

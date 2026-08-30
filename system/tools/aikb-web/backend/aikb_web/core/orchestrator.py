@@ -14,6 +14,8 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Mapping, Protocol
 
+from aikb.audit import AUDIT_SCHEMA_VERSION
+
 from .actions import ActionError, ActionRegistry, ConfirmationTokenService
 from .tasks import TERMINAL_STATES, TaskError, TaskStore
 
@@ -102,7 +104,7 @@ class TaskOrchestrator:
         if not callable(self.audit_sink):
             return
         record = {
-            "schema_version": 3,
+            "schema_version": AUDIT_SCHEMA_VERSION,
             "record_type": record_type,
             "event_id": uuid.uuid4().hex,
             "invocation_id": str(task.get("invocation_id") or task.get("task_id")),

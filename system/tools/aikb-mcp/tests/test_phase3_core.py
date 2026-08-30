@@ -77,8 +77,8 @@ class InspectIndexTests(unittest.TestCase):
         self.assertTrue(all(not sidecar.exists() for sidecar in sidecars))
 
 
-class AuditV3Tests(unittest.TestCase):
-    """验证 v3 有限任务关联字段、新状态和旧版本投影兼容。"""
+class AuditV4CompatibilityTests(unittest.TestCase):
+    """验证 v4 规则关联字段、任务状态和 v1-v3 投影兼容。"""
 
     def setUp(self) -> None:
         """准备审计存储。"""
@@ -101,7 +101,7 @@ class AuditV3Tests(unittest.TestCase):
         loaded = self.store.read_events()
         combined = combine_invocations(loaded["events"])
         projected = web_audit_query(self.store, source="web", status="timed_out")["items"]
-        self.assertEqual(AUDIT_SCHEMA_VERSION, 3)
+        self.assertEqual(AUDIT_SCHEMA_VERSION, 4)
         self.assertTrue({"cancelled", "timed_out", "interrupted"}.issubset(FINISHED_STATUS))
         self.assertEqual(projected[0]["status"], "timed_out")
         self.assertEqual(projected[0]["task_id"], "task-1")
@@ -118,6 +118,42 @@ class AuditV3Tests(unittest.TestCase):
             self.assertIsNone(projected["task_id"])
             self.assertIsNone(projected["action_id"])
             self.assertIsNone(projected["target_task_id"])
+
+    def test_v4_rule_change_fields_are_strictly_normalized(self) -> None:
+        """规则变更字段只保留静态资源、摘要和固定回滚状态，非法输入不得落盘。"""
+        valid_before = "A" * 64
+        valid_after = "b" * 64
+        self.store.write({
+            "record_type": "invocation_finished", "source": "web", "agent": "codex",
+            "operation": "rule.user.update", "status": "succeeded", "outcome_code": "ok",
+            "change_id": "change-2026.08.30", "resource_type": "RULE", "resource_id": "USER",
+            "before_hash": valid_before, "after_hash": valid_after, "rollback_status": "SUCCEEDED",
+            "path": r"C:\private\rule.md", "diff": "must not be stored",
+        })
+        event = self.store.read_events()["events"][-1]
+        self.assertEqual(event["schema_version"], 4)
+        self.assertEqual(event["change_id"], "change-2026.08.30")
+        self.assertEqual(event["resource_type"], "rule")
+        self.assertEqual(event["resource_id"], "user")
+        self.assertEqual(event["before_hash"], valid_before.lower())
+        self.assertEqual(event["after_hash"], valid_after)
+        self.assertEqual(event["rollback_status"], "succeeded")
+        self.assertNotIn("path", event)
+        self.assertNotIn("diff", event)
+
+        self.store.write({
+            "record_type": "invocation_finished", "source": "web", "agent": "codex",
+            "operation": "rule.user.update", "status": "failed", "outcome_code": "invalid",
+            "change_id": r"C:\private\change", "resource_type": "file", "resource_id": "secret",
+            "before_hash": "not-a-hash", "after_hash": "f" * 63, "rollback_status": "success",
+        })
+        invalid = self.store.read_events()["events"][-1]
+        self.assertIsNone(invalid["change_id"])
+        self.assertIsNone(invalid["resource_type"])
+        self.assertIsNone(invalid["resource_id"])
+        self.assertIsNone(invalid["before_hash"])
+        self.assertIsNone(invalid["after_hash"])
+        self.assertIsNone(invalid["rollback_status"])
 
     def test_invalid_source_is_safely_normalized_to_schema_value(self) -> None:
         """非法来源采用固定安全降级，审计 JSONL 始终只出现契约允许的来源。"""
