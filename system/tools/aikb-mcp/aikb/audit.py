@@ -27,6 +27,7 @@ AUDIT_FIELDS = (
     "status", "outcome_code", "result_summary", "result_text", "capture_level", "duration_ms", "error_type",
     "task_id", "action_id", "target_task_id", "change_id", "resource_type", "resource_id",
     "before_hash", "after_hash", "rollback_status",
+    "maintenance_target_id", "before_fingerprint", "after_fingerprint", "restart_required",
 )
 FINISHED_STATUS = {"succeeded", "failed", "noop", "blocked", "cancelled", "timed_out", "interrupted"}
 AUDIT_STATUSES = {"started", *FINISHED_STATUS}
@@ -34,6 +35,52 @@ AUDIT_RESOURCE_TYPES = {"rule"}
 AUDIT_RESOURCE_IDS = {"entry", "user", "agent", "contributing"}
 AUDIT_ROLLBACK_STATUSES = {
     "not_applicable", "not_started", "pending", "succeeded", "recovery_required",
+}
+# 阶段 4B 的维护审计只允许服务端静态目标和固定操作名；这些值不能由浏览器
+# 或配置正文扩展。未知维护操作会被降级为普通安全事件，维护关联字段随之丢弃。
+AUDIT_MAINTENANCE_TARGETS = {"environment", "agent.codex", "agent.claude-code"}
+AUDIT_MAINTENANCE_ACTION_IDS = {
+    "maintenance.environment.update", "maintenance.agent.codex.repair",
+    "maintenance.agent.claude-code.repair",
+}
+AUDIT_MAINTENANCE_OPERATIONS = {
+    "maintenance.inspect", "maintenance.preview", "maintenance.apply", "maintenance.verify",
+    "maintenance.rollback", "maintenance.recover",
+    # WebUI 动作契约使用按目标命名的固定 action_id；审计层同样允许这些服务端常量
+    # 作为 operation，避免集成时退回到任意操作字符串。
+    "maintenance.environment.update", "maintenance.agent.codex.repair",
+    "maintenance.agent.claude-code.repair",
+}
+AUDIT_MAINTENANCE_ACTION_STEPS = {
+    "precheck", "preflight", "backup", "write_environment", "write_root_instructions", "write_mcp",
+    "write_hooks", "verify", "rollback", "recover",
+    "write:user_environment:aikb", "write:root_instructions:codex", "write:mcp:codex",
+    "write:hooks:codex", "write:root_instructions:claude-code", "write:mcp:claude-code",
+    "write:hooks:claude-code",
+}
+AUDIT_MAINTENANCE_OPERATION_LABELS = {
+    "maintenance": "维护操作",
+    "maintenance.inspect": "维护预检",
+    "maintenance.preview": "维护预览",
+    "maintenance.apply": "应用维护变更",
+    "maintenance.verify": "验证维护变更",
+    "maintenance.rollback": "回滚维护变更",
+    "maintenance.recover": "恢复维护事务",
+    "maintenance.environment.update": "更新 AIKB 用户环境",
+    "maintenance.agent.codex.repair": "修复 Codex 安装",
+    "maintenance.agent.claude-code.repair": "修复 Claude Code 安装",
+}
+AUDIT_MAINTENANCE_STEP_LABELS = {
+    "precheck": "预检", "preflight": "预检", "backup": "备份",
+    "write_environment": "写入用户环境", "write:user_environment:aikb": "写入用户环境",
+    "write_root_instructions": "写入根指令", "write_root_instructions:codex": "写入 Codex 根指令",
+    "write:root_instructions:codex": "写入 Codex 根指令",
+    "write:root_instructions:claude-code": "写入 Claude Code 根指令",
+    "write_mcp": "写入 MCP", "write:mcp:codex": "写入 Codex MCP",
+    "write:mcp:claude-code": "写入 Claude Code MCP",
+    "write_hooks": "写入 hooks", "write:hooks:codex": "写入 Codex hooks",
+    "write:hooks:claude-code": "写入 Claude Code hooks",
+    "verify": "验证", "rollback": "回滚", "recover": "恢复",
 }
 AUDIT_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
 AUDIT_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -71,6 +118,17 @@ def _safe_audit_hash(value: Any) -> str | None:
     if not isinstance(value, str) or not AUDIT_HASH_PATTERN.fullmatch(value):
         return None
     return value.lower()
+
+
+def _safe_maintenance_action(value: Any) -> dict[str, str] | None:
+    """仅保留维护步骤枚举，拒绝把调用参数、路径或配置正文写入 action。"""
+    if not isinstance(value, dict):
+        return None
+    step = value.get("step")
+    if not isinstance(step, str):
+        return None
+    step = step.strip().lower()
+    return {"step": step} if step in AUDIT_MAINTENANCE_ACTION_STEPS else None
 
 
 def _sanitize(value: Any, *, depth: int = 0) -> Any:
@@ -175,6 +233,11 @@ def summarize_tool_action(name: str, arguments: dict[str, Any]) -> dict[str, Any
 def describe_action(operation: str, action: dict[str, Any] | None) -> str:
     """把白名单动作摘要翻译为稳定中文说明，不依赖模型生成或原始 prompt。"""
     action = action or {}
+    maintenance_label = AUDIT_MAINTENANCE_OPERATION_LABELS.get(operation)
+    if maintenance_label is not None:
+        step = action.get("step")
+        step_label = AUDIT_MAINTENANCE_STEP_LABELS.get(step) if isinstance(step, str) else None
+        return f"{maintenance_label}：{step_label}" if step_label else maintenance_label
     if operation == "search_knowledge":
         filters = []
         if action.get("type"):
@@ -204,6 +267,21 @@ def describe_action(operation: str, action: dict[str, Any] | None) -> str:
 
 def describe_result(operation: str, status: str, outcome_code: str | None, result: dict[str, Any] | None) -> str:
     """将结果代码和最小统计信息转换为可读结论，失败不写入完整异常文本。"""
+    if operation in AUDIT_MAINTENANCE_OPERATION_LABELS:
+        # 维护 outcome 只能影响固定中文状态，不拼接调用方提供的代码、异常或结果对象。
+        if status == "failed":
+            return "维护失败"
+        if status == "blocked":
+            return "维护已阻止"
+        if status == "noop":
+            return "维护无需变更"
+        if status == "cancelled":
+            return "维护已取消"
+        if status == "timed_out":
+            return "维护超时"
+        if status == "interrupted":
+            return "维护被中断"
+        return "维护已完成" if status == "succeeded" else "维护处理中"
     result = result or {}
     if status == "failed":
         return f"执行失败：{outcome_code or '未知错误'}"
@@ -362,6 +440,9 @@ class AuditStore:
         normalized["event_id"] = str(normalized.get("event_id") or self.new_id())
         normalized["timestamp"] = str(normalized.get("timestamp") or timestamp)
         normalized["agent"] = _redact_text(str(normalized.get("agent") or "unknown"), 120)
+        raw_operation = normalized.get("operation")
+        operation_text = str(raw_operation or "").strip().lower()
+        is_maintenance = operation_text in AUDIT_MAINTENANCE_OPERATIONS
         for field, limit in (
             ("invocation_id", 120), ("connection_id", 120), ("session_id", 160), ("session_label", 240), ("project_id", 120),
             ("operation", 120), ("status", 40), ("outcome_code", 120), ("error_type", 120),
@@ -370,6 +451,42 @@ class AuditStore:
         ):
             if normalized.get(field) is not None:
                 normalized[field] = _redact_text(str(normalized[field]), limit)
+        if is_maintenance:
+            # 维护操作和 action 是审计协议字段，不是任意调用对象。操作名用固定枚举，
+            # action 只留下步骤；result_summary/client 在维护事件中不具备必要性，
+            # 直接丢弃可避免环境值、备份内容、命令和秘密从嵌套对象穿透。
+            normalized["operation"] = operation_text
+            normalized["action"] = _safe_maintenance_action(normalized.get("action"))
+            normalized["result_summary"] = None
+            normalized["client"] = None
+            action_id = normalized.get("action_id")
+            normalized["action_id"] = (
+                action_id if action_id in AUDIT_MAINTENANCE_ACTION_IDS else None
+            )
+            normalized["outcome_code"] = _safe_audit_identifier(normalized.get("outcome_code"))
+            normalized["error_type"] = _safe_audit_identifier(normalized.get("error_type"))
+            normalized["action_text"] = describe_action(operation_text, normalized["action"])
+            normalized["result_text"] = describe_result(
+                operation_text, str(normalized.get("status") or ""), normalized.get("outcome_code"), None,
+            )
+        elif operation_text.startswith("maintenance"):
+            # 看起来像维护事件但不在白名单的操作不能原样落盘；固定为无关联的
+            # 摘要名称，同时丢弃维护扩展字段，避免把路径伪装成操作名。
+            normalized["operation"] = "maintenance"
+            normalized["action"] = None
+            normalized["action_id"] = None
+            normalized["result_summary"] = None
+            normalized["client"] = None
+            normalized["outcome_code"] = None
+            normalized["error_type"] = None
+            normalized["action_text"] = describe_action("maintenance", None)
+            normalized["result_text"] = describe_result("maintenance", str(normalized.get("status") or ""), None, None)
+        else:
+            # 维护扩展字段不得附着到 v1-v4 普通/MCP/hook/规则事件，避免伪造目标关联。
+            normalized["maintenance_target_id"] = None
+            normalized["before_fingerprint"] = None
+            normalized["after_fingerprint"] = None
+            normalized["restart_required"] = None
         # 规则变更关联字段不走通用文本脱敏：这些字段必须满足更窄的格式契约，
         # 否则路径、差异正文或异常消息可能借新字段进入审计事实源。
         normalized["change_id"] = _safe_audit_identifier(normalized.get("change_id"))
@@ -393,10 +510,34 @@ class AuditStore:
         normalized["rollback_status"] = rollback_status if rollback_status in AUDIT_ROLLBACK_STATUSES else None
         if normalized["resource_type"] != "rule" or normalized["resource_id"] is None:
             # 变更哈希和回滚结果必须隶属于已知规则资源；孤立字段既无法审查，
-            # 也可能被滥用为任意文本侧信道，因此按组合契约整体丢弃。
+            # 也可能被滥用为任意文本侧信道，因此按组合契约整体丢弃。维护事件
+            # 复用 rollback_status，但其归属由下面的静态 maintenance_target_id 判断。
             normalized["before_hash"] = None
             normalized["after_hash"] = None
-            normalized["rollback_status"] = None
+            if not is_maintenance:
+                normalized["rollback_status"] = None
+        if is_maintenance:
+            target = normalized.get("maintenance_target_id")
+            target = target.strip().lower() if isinstance(target, str) else None
+            normalized["maintenance_target_id"] = target if target in AUDIT_MAINTENANCE_TARGETS else None
+            normalized["before_fingerprint"] = _safe_audit_hash(normalized.get("before_fingerprint"))
+            normalized["after_fingerprint"] = _safe_audit_hash(normalized.get("after_fingerprint"))
+            # ``bool("false")`` 会把恶意字符串变成 True，故维护审计只接受真正的 JSON bool。
+            normalized["restart_required"] = (
+                normalized.get("restart_required") if isinstance(normalized.get("restart_required"), bool) else None
+            )
+            if normalized["maintenance_target_id"] is None:
+                normalized["change_id"] = None
+                normalized["rollback_status"] = None
+                normalized["action_id"] = None
+                normalized["before_fingerprint"] = None
+                normalized["after_fingerprint"] = None
+                normalized["restart_required"] = None
+        else:
+            normalized["maintenance_target_id"] = None
+            normalized["before_fingerprint"] = None
+            normalized["after_fingerprint"] = None
+            normalized["restart_required"] = None
         normalized["action"] = _sanitize(normalized.get("action"))
         normalized["result_summary"] = _sanitize(normalized.get("result_summary"))
         normalized["client"] = _sanitize(normalized.get("client"))
@@ -497,6 +638,8 @@ class AuditStore:
         task_id: str | None = None, action_id: str | None = None, target_task_id: str | None = None,
         change_id: str | None = None, resource_type: str | None = None, resource_id: str | None = None,
         before_hash: str | None = None, after_hash: str | None = None, rollback_status: str | None = None,
+        maintenance_target_id: str | None = None, before_fingerprint: str | None = None,
+        after_fingerprint: str | None = None, restart_required: bool | None = None,
     ) -> dict[str, Any]:
         session_label = session_label or self.resolve_session_label(
             agent=agent, source=source, session_id=session_id, connection_id=connection_id, project_id=project_id,
@@ -511,6 +654,8 @@ class AuditStore:
             "status": "started", "task_id": task_id, "action_id": action_id, "target_task_id": target_task_id,
             "change_id": change_id, "resource_type": resource_type, "resource_id": resource_id,
             "before_hash": before_hash, "after_hash": after_hash, "rollback_status": rollback_status,
+            "maintenance_target_id": maintenance_target_id, "before_fingerprint": before_fingerprint,
+            "after_fingerprint": after_fingerprint, "restart_required": restart_required,
         })
         return {"invocation_id": invocation_id, "started": started, "write": result}
 
@@ -522,6 +667,8 @@ class AuditStore:
         task_id: str | None = None, action_id: str | None = None, target_task_id: str | None = None,
         change_id: str | None = None, resource_type: str | None = None, resource_id: str | None = None,
         before_hash: str | None = None, after_hash: str | None = None, rollback_status: str | None = None,
+        maintenance_target_id: str | None = None, before_fingerprint: str | None = None,
+        after_fingerprint: str | None = None, restart_required: bool | None = None,
     ) -> dict[str, Any]:
         safe_status = status if status in FINISHED_STATUS else "failed"
         duration = max(0, round((time.perf_counter() - float(invocation["started"])) * 1000))
@@ -535,6 +682,8 @@ class AuditStore:
             "task_id": task_id, "action_id": action_id, "target_task_id": target_task_id,
             "change_id": change_id, "resource_type": resource_type, "resource_id": resource_id,
             "before_hash": before_hash, "after_hash": after_hash, "rollback_status": rollback_status,
+            "maintenance_target_id": maintenance_target_id, "before_fingerprint": before_fingerprint,
+            "after_fingerprint": after_fingerprint, "restart_required": restart_required,
         })
 
     def connection_initialized(self, *, agent: str, client: dict[str, Any], connection_id: str) -> dict[str, Any]:
@@ -657,6 +806,7 @@ def combine_invocations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "schema_version", "source", "agent", "client", "connection_id", "session_id", "session_label", "project_id", "operation", "capture_level",
                 "task_id", "action_id", "target_task_id", "change_id", "resource_type", "resource_id",
                 "before_hash", "after_hash", "rollback_status",
+                "maintenance_target_id", "before_fingerprint", "after_fingerprint", "restart_required",
             ):
                 if key not in item or item.get(key) is None:
                     item[key] = event.get(key)
@@ -713,6 +863,7 @@ WEB_AUDIT_SAFE_FIELDS = (
     "action_text", "result_text", "capture_level", "duration_ms", "error_type", "fallback",
     "task_id", "action_id", "target_task_id",
     "change_id", "resource_type", "resource_id", "before_hash", "after_hash", "rollback_status",
+    "maintenance_target_id", "before_fingerprint", "after_fingerprint", "restart_required",
 )
 WEB_AUDIT_WINDOWS_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/](?![\\/])|\\\\)[^\s\"'<>|]+")
 # 覆盖常见根目录与未知的两级以上 Unix 绝对路径；冒号边界排除
@@ -769,6 +920,14 @@ def _web_hash(value: Any) -> str | None:
     return _safe_audit_hash(value)
 
 
+def _web_maintenance_target(value: Any) -> str | None:
+    """只公开三个服务端静态维护目标，不让 Web 读模型携带任意路径标识。"""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    return value if value in AUDIT_MAINTENANCE_TARGETS else None
+
+
 def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
     """将已合并审计项转换成 Web 安全读模型。
 
@@ -779,6 +938,24 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(item, dict):
         return {}
+    operation = str(item.get("operation") or "").strip().lower()
+    maintenance_target_id = _web_maintenance_target(item.get("maintenance_target_id"))
+    raw_maintenance_action_id = item.get("action_id")
+    maintenance_action_id = (
+        raw_maintenance_action_id
+        if isinstance(raw_maintenance_action_id, str)
+        and raw_maintenance_action_id in AUDIT_MAINTENANCE_ACTION_IDS
+        else None
+    )
+    before_fingerprint = _web_hash(item.get("before_fingerprint"))
+    after_fingerprint = _web_hash(item.get("after_fingerprint"))
+    restart_required = item.get("restart_required") if isinstance(item.get("restart_required"), bool) else None
+    if operation not in AUDIT_MAINTENANCE_OPERATIONS or maintenance_target_id is None:
+        maintenance_target_id = None
+        maintenance_action_id = None
+        before_fingerprint = None
+        after_fingerprint = None
+        restart_required = None
     resource_type = str(item.get("resource_type") or "").strip().lower()
     resource_type = resource_type if resource_type in AUDIT_RESOURCE_TYPES else None
     resource_id = str(item.get("resource_id") or "").strip().lower()
@@ -790,7 +967,8 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
     if resource_type != "rule" or resource_id is None:
         before_hash = None
         after_hash = None
-        rollback_status = None
+        if operation not in AUDIT_MAINTENANCE_OPERATIONS or maintenance_target_id is None:
+            rollback_status = None
     result: dict[str, Any] = {
         "schema_version": item.get("schema_version") if item.get("schema_version") in {1, 2, 3, 4} else None,
         "record_type": _web_identifier(item.get("record_type"), 80),
@@ -815,7 +993,7 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
         "error_type": _web_error_type(item.get("error_type")),
         "fallback": bool(item.get("_fallback") or item.get("fallback")),
         "task_id": _web_identifier(item.get("task_id"), 120),
-        "action_id": _web_identifier(item.get("action_id"), 120),
+        "action_id": maintenance_action_id if operation in AUDIT_MAINTENANCE_OPERATIONS else _web_identifier(item.get("action_id"), 120),
         "target_task_id": _web_identifier(item.get("target_task_id"), 120),
         "change_id": _web_change_id(item.get("change_id")),
         "resource_type": resource_type,
@@ -823,6 +1001,10 @@ def web_audit_item(item: dict[str, Any]) -> dict[str, Any]:
         "before_hash": before_hash,
         "after_hash": after_hash,
         "rollback_status": rollback_status,
+        "maintenance_target_id": maintenance_target_id,
+        "before_fingerprint": before_fingerprint,
+        "after_fingerprint": after_fingerprint,
+        "restart_required": restart_required,
     }
     # 返回固定字段集合，避免把安全投影当成通用字典而意外追加原始内容。
     return {key: result[key] for key in WEB_AUDIT_SAFE_FIELDS if key in result}

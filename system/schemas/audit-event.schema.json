@@ -42,14 +42,28 @@
     "resource_id": {"enum": ["entry", "user", "agent", "contributing", null]},
     "before_hash": {
       "type": ["string", "null"],
-      "pattern": "^[0-9a-fA-F]{64}$"
+      "pattern": "^[0-9a-f]{64}$"
     },
     "after_hash": {
       "type": ["string", "null"],
-      "pattern": "^[0-9a-fA-F]{64}$"
+      "pattern": "^[0-9a-f]{64}$"
     },
     "rollback_status": {
       "enum": ["not_applicable", "not_started", "pending", "succeeded", "recovery_required", null]
+    },
+    "maintenance_target_id": {
+      "enum": ["environment", "agent.codex", "agent.claude-code", null]
+    },
+    "before_fingerprint": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "after_fingerprint": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "restart_required": {
+      "type": ["boolean", "null"]
     }
   },
   "additionalProperties": false
