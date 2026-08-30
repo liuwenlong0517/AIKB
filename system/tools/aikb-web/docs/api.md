@@ -1,11 +1,11 @@
 # AIKB WebUI API 契约
 
-本文档是阶段 1～4A 波次 1 的 Windows 本地 WebUI 接口契约，供后端、前端与验收共同使用。知识、运行状态和审计读取接口保持只读；阶段 3 只通过显式受控动作接口执行三项注册的本地只读检查；阶段 4A 当前只增加规则读取和候选预览。规则/知识应用写入、安装、索引重建和任意 Shell 仍不属于公共能力。
+本文档是阶段 1～4A 波次 2 的 Windows 本地 WebUI 接口契约，供后端、前端与验收共同使用。知识、运行状态和审计读取接口保持只读；阶段 3 只通过显式受控动作接口执行三项注册的本地只读检查；阶段 4A 仅增加四项规则读取以及 `USER_RULES.md` 的候选预览和受控应用。其他规则/知识写入、安装、索引重建和任意 Shell 仍不属于公共能力。
 
 ## 1. 传输与共同包络
 
 - 基础路径为 /api/v1；服务只绑定 127.0.0.1。
-- 知识、运行状态、审计和系统查询只接受 GET 和 OPTIONS。动作预览、任务创建/取消和规则候选预览是明确列出的受保护 POST；其他写方法仍返回结构化 405，不得触发未注册动作、规则/知识写入、Git 写操作或索引重建。
+- 知识、运行状态、审计和系统查询只接受 GET 和 OPTIONS。动作预览、任务创建/取消、规则候选预览和 `user` 规则应用是明确列出的受保护 POST；其他写方法仍返回结构化 405，不得触发未注册动作、其他规则/知识写入、Git 写操作或索引重建。
 - 成功响应固定为 { "data": <T>, "meta": <Meta> }；失败响应固定为 { "error": <Error>, "meta": <Meta> }。
 - meta.request_id 为服务生成或校验后的短 ASCII 请求标识，并通过 X-Request-ID 响应头返回；客户端提供的非法值会被忽略并重新生成。
 - JSON 使用 UTF-8。时间使用带时区的 ISO-8601 字符串；分页排序必须稳定，未另行说明时按更新时间或开始时间倒序。
@@ -231,7 +231,7 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 
 返回 `text/event-stream`。允许事件类型为 `snapshot`、`status`、`progress`、`output`、`result`、`heartbeat`；事件 ID 在任务内单调递增。客户端通过 `Last-Event-ID` 回放，游标失效时收到带 `replay_reset=true` 的最新安全快照；心跳最长 15 秒，终态结果发出后关闭。输出受单块 8 KiB、单行 4 KiB、单任务 2 MiB 预算约束，超限只公开 `truncated` 标志并保留最终安全结果。
 
-## 7. 阶段 4A 规则读取与候选预览
+## 7. 阶段 4A 规则读取、候选预览与受控应用
 
 规则注册表固定为 `entry`、`user`、`agent`、`contributing`；四项均可读取，只有 `user` 的 `writable=true`。浏览器只使用逻辑 ID，不接收或提交物理路径。
 
@@ -243,7 +243,15 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 
 只允许 `user`。请求体严格为 `base_content_hash` 和 `candidate_content`，并要求 JSON、`X-AIKB-Request: 1` 与本机同源 Host/Origin。服务在预览前后检查普通分支、无 merge/rebase 等操作、全仓洁净、revision 和当前正文哈希；候选走共享规则验证器。
 
-成功返回完整 unified diff、校验摘要、`change_id`、前后/diff 哈希、`preview_digest`、五分钟进程内确认令牌和过期时间。候选最多 2,000 行，diff 最多 4,000 行或 256 KiB，超限必须拒绝而不是截断。草稿只在 `workspace/runtime/web/rule-changes/` 保存候选和 `prepared` 事务摘要，不创建备份，不写任务或审计。当前没有 `/rules/{rule_id}/apply` 路由，令牌没有 HTTP 消费入口。
+成功返回完整 unified diff、校验摘要、`change_id`、前后/diff 哈希、`preview_digest`、五分钟进程内确认令牌和过期时间。候选最多 2,000 行，diff 最多 4,000 行或 256 KiB，超限必须拒绝而不是截断。预览只在 `workspace/runtime/web/rule-changes/` 保存候选和 `prepared` 事务摘要，不创建备份，不写任务或审计。
+
+### POST /rules/user/apply
+
+请求体严格为 `change_id` 和 `confirmation_token`；不接收正文、路径、diff、命令或浏览器提供的 `preview_digest`。服务先做不消费令牌的事务/仓库/哈希预检并写入审计开始事实，再创建只保存 `change_id` 的 `rule.user.update` 任务。后台任务在固定跨进程全仓锁内重新校验并单次消费令牌，使用同目录临时文件、`fsync` 和 `os.replace` 原子替换；正式复核失败时自动回滚。响应只返回安全任务摘要，任务进入真实终态后才写成功、回滚或恢复审计。
+
+### GET /rules/changes/{change_id}
+
+返回无正文事务状态和关联任务安全摘要，用于页面轮询 `prepared`、`applying`、`validating`、`succeeded`、`rolled_back` 或 `recovery_required`。确认令牌、候选、备份、完整 diff、物理路径和底层异常永不返回。终态审计失败或无法安全恢复时，系统状态同时报告 `rule_recovery_required` 并阻止新的规则写入。
 
 ## 8. 分页、空集和降级统一规则
 

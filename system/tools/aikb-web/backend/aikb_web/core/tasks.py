@@ -266,9 +266,17 @@ class TaskStore:
     def create_task(
         self, *, action_id: str, parameters: Mapping[str, Any], risk_level: str, effects: list[str] | tuple[str, ...],
         timeout_seconds: int, concurrency_group: str, preview_digest: str, invocation_id: str | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
-        """创建 queued 任务并写入首个事实事件；不执行动作。"""
-        task_id = uuid.uuid4().hex
+        """创建 queued 任务并写入首个事实事件；不执行动作。
+
+        ``task_id`` 仅供服务端规则协调器预生成并与事务 claim 绑定；公共请求
+        不能控制此参数，非法或重复 ID 会在事实源写入前拒绝。
+        """
+        if task_id is None:
+            task_id = uuid.uuid4().hex
+        elif not isinstance(task_id, str) or TASK_ID_PATTERN.fullmatch(task_id) is None:
+            raise TaskError("task_id 无效")
         now = self._clock()
         directory = self.tasks_root / f"{now:%Y}" / f"{now:%m}" / task_id
         directory.mkdir(parents=True, exist_ok=False)

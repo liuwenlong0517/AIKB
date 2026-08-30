@@ -41,14 +41,16 @@ _ALLOWED_TRANSACTION_FIELDS = frozenset(
 )
 _TRANSITIONS = MappingProxyType(
     {
-        "prepared": frozenset({"applying", "expired", "rejected"}),
+        # 令牌已经消费但 applying 状态无法可靠落盘时，只能进入人工恢复态；
+        # succeeded/rolled_back 的恢复态用于终态审计失败，正文材料仍需保留。
+        "prepared": frozenset({"applying", "expired", "rejected", "recovery_required"}),
         "applying": frozenset({"validating", "rolling_back"}),
         "validating": frozenset({"succeeded", "rolling_back"}),
         "rolling_back": frozenset({"rolled_back", "recovery_required"}),
-        "succeeded": frozenset(),
+        "succeeded": frozenset({"recovery_required"}),
         "expired": frozenset(),
         "rejected": frozenset(),
-        "rolled_back": frozenset(),
+        "rolled_back": frozenset({"recovery_required"}),
         "recovery_required": frozenset(),
     }
 )

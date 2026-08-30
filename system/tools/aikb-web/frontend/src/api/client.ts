@@ -23,6 +23,8 @@ import type {
   RuleDetail,
   RulePreviewData,
   RulesData,
+  RuleApplyData,
+  RuleChangeEnvelope,
 } from '../types/api';
 
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
@@ -168,6 +170,12 @@ export const api = {
   /** 只生成候选校验和完整 diff，不执行规则写入或创建任务。 */
   previewRule: (ruleId: string, body: { base_content_hash: string; candidate_content: string }) =>
     apiClient.postEnvelope<RulePreviewData>(`/rules/${encodeURIComponent(ruleId)}/preview`, body),
+  /** 应用只提交服务端生成的逻辑摘要和短期令牌，正文/路径不会进入请求。 */
+  applyRule: (ruleId: string, body: { change_id: string; confirmation_token: string }) =>
+    apiClient.postEnvelope<RuleApplyData>(`/rules/${encodeURIComponent(ruleId)}/apply`, body),
+  /** 读取规则事务安全状态，供应用后展示校验、回滚和人工恢复结果。 */
+  ruleChange: (changeId: string): Promise<ApiResponse<RuleChangeEnvelope>> =>
+    apiClient.getEnvelope<RuleChangeEnvelope>(`/rules/changes/${encodeURIComponent(changeId)}`),
 };
 
 /** 共享核心的详情读模型包含 item 包装；在 API 客户端边界统一摊平，页面不感知后端适配层形状。 */

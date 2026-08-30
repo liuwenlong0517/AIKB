@@ -67,6 +67,15 @@ export interface SystemInfoData {
   python: { version: string };
   repositories: { control: RepositoryState; knowledge: RepositoryState };
   index: { available?: boolean; tokenizer?: string; rebuilt?: boolean };
+  /** 规则事务协调器的安全恢复摘要；不存在时表示部署未提供该能力。 */
+  rule_writes?: RuleWriteStatus;
+}
+
+export interface RuleWriteStatus {
+  available?: boolean;
+  blocked?: boolean;
+  recovery_required?: boolean;
+  warning?: string;
 }
 
 export interface CapabilityData {
@@ -316,7 +325,7 @@ export interface RuleValidation {
   [key: string]: unknown;
 }
 
-/** 规则预览结果。服务端令牌仅用于未来应用流程，本批次页面不消费它。 */
+/** 规则预览结果；令牌只在当前页面内存中短暂保留，并仅用于后续受控应用。 */
 export interface RulePreviewData {
   rule_id: string;
   change_id: string;
@@ -335,3 +344,41 @@ export interface RulePreviewData {
 }
 
 export interface RulesData { items: RuleSummary[] }
+
+/** 规则应用接口只返回逻辑变更/任务关联和安全状态，不包含正文、diff 或物理路径。 */
+export type RuleChangeStatus = 'prepared' | 'applying' | 'validating' | 'succeeded' | 'expired' | 'rejected' | 'rolling_back' | 'rolled_back' | 'recovery_required' | string;
+
+export interface RuleChangeData {
+  change_id: string;
+  rule_id?: string;
+  action_id?: string;
+  risk_level?: string;
+  status: RuleChangeStatus;
+  before_hash?: string;
+  after_hash?: string;
+  diff_hash?: string;
+  preview_digest?: string;
+  repository_revision?: string;
+  task_id?: string | null;
+  rollback_status?: 'not_applicable' | 'not_started' | 'pending' | 'succeeded' | 'recovery_required' | string;
+  error_code?: string | null;
+  error_message?: string | null;
+  [key: string]: unknown;
+}
+
+/** GET /rules/changes/{change_id} 的完整安全包装，保留变更、任务关联与全局阻断标记。 */
+export interface RuleChangeEnvelope {
+  change: RuleChangeData;
+  task?: { task_id?: string; status?: string; action_id?: string; change_id?: string; created_at?: string | null } | null;
+  blocked?: boolean;
+}
+
+/** apply 响应中的任务/变更安全关联；不允许携带候选正文或路径。 */
+export interface RuleApplyData {
+  change_id: string;
+  task_id?: string | null;
+  status?: RuleChangeStatus;
+  change?: RuleChangeData;
+  task?: TaskSnapshot;
+  [key: string]: unknown;
+}

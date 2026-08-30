@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope } from '../types/api';
 import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
 
@@ -12,7 +12,7 @@ export const useDocument = (id: string | undefined) =>
   useQuery({ queryKey: ['document', id], queryFn: () => api.document(id as string), enabled: Boolean(id) });
 export const useSystem = () => useQuery({ queryKey: ['system'], queryFn: api.system });
 export const useSearch = (query: string, filters: SearchFilters) =>
-  useQuery({
+    useQuery({
     queryKey: ['search', query, filters],
     queryFn: () => api.search(query, filters),
     enabled: query.trim().length > 0,
@@ -31,6 +31,25 @@ export const usePreviewRule = () =>
   useMutation({
     mutationFn: (input: { ruleId: string; base_content_hash: string; candidate_content: string }): Promise<ApiResponse<RulePreviewData>> =>
       api.previewRule(input.ruleId, { base_content_hash: input.base_content_hash, candidate_content: input.candidate_content }),
+  });
+
+/** 提交已确认的规则事务；仅允许 ruleId（路由）、change_id 和内存令牌进入请求。 */
+export const useApplyRule = () =>
+  useMutation({
+    mutationFn: (input: { ruleId: string; change_id: string; confirmation_token: string }): Promise<ApiResponse<RuleApplyData>> =>
+      api.applyRule(input.ruleId, { change_id: input.change_id, confirmation_token: input.confirmation_token }),
+  });
+
+/** 查询规则事务安全状态；应用后轮询到固定终态，刷新页面不会凭本地状态重放 apply。 */
+export const useRuleChange = (changeId: string | undefined, enabled = true): UseQueryResult<ApiResponse<RuleChangeEnvelope>> =>
+  useQuery<ApiResponse<RuleChangeEnvelope>>({
+    queryKey: ['rule-change', changeId],
+    queryFn: () => api.ruleChange(changeId as string),
+    enabled: Boolean(changeId) && enabled,
+    refetchInterval: (query) => {
+      const status = query.state.data?.data.change.status;
+      return status && ['succeeded', 'expired', 'rejected', 'rolled_back', 'recovery_required'].includes(status) ? false : 2_000;
+    },
   });
 
 /** 活动 Working State 列表查询；筛选参数进入 query key，保证分页和筛选切换不会复用错误页面。 */

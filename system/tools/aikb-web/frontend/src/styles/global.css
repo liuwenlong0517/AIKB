@@ -57,6 +57,9 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .rules-preview-loading { min-height: 220px; display: grid; place-items: center; color: #68758a; }
 .rules-diff { max-height: 620px; margin: 0; padding: 14px; overflow: auto; white-space: pre; tab-size: 4; border-radius: 8px; background: #172033; color: #e8effa; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
 .rules-token-note { display: block; margin-top: 12px; font-size: 12px; }
+.rules-confirmation-zone { display: grid; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid #ffd591; border-radius: 8px; background: #fffaf0; }
+.rules-confirmation-checkbox { line-height: 1.6; }
+.rules-apply-result { padding-top: 4px; }
 .markdown-body { color: #293448; line-height: 1.8; overflow-wrap: anywhere; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #14213d; line-height: 1.35; margin: 1.5em 0 0.7em; }
 .markdown-body h1:first-child { margin-top: 0; }

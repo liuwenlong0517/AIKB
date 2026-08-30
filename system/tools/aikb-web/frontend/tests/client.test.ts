@@ -53,4 +53,22 @@ describe('ApiClient', () => {
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/v1/rules', '/api/v1/rules/user', '/api/v1/rules/user/preview']);
     expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: 'POST', body: JSON.stringify({ base_content_hash: 'a'.repeat(64), candidate_content: '# 用户规则修改\n' }) }));
   });
+
+  it('apply 只发送 change_id 和内存确认令牌，并编码规则 ID', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ data: { change_id: 'change-1', task_id: 'task-1', status: 'applying' }, meta: {} }), { status: 200 }));
+    await api.applyRule('user', { change_id: 'change-1', confirmation_token: 'memory-token' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/rules/user/apply', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ change_id: 'change-1', confirmation_token: 'memory-token' }),
+    }));
+  });
+
+  it('读取规则变更时保留 change、任务和阻断状态包装', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ data: { change: { change_id: 'change-1', status: 'rolled_back', rollback_status: 'succeeded' }, task: { task_id: 'task-1', status: 'failed' }, blocked: true }, meta: {} }), { status: 200 }));
+    const result = await api.ruleChange('change-1');
+    expect(result.data.change.status).toBe('rolled_back');
+    expect(result.data.task?.task_id).toBe('task-1');
+    expect(result.data.blocked).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/rules/changes/change-1', expect.anything());
+  });
 });

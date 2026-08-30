@@ -30,6 +30,16 @@ export function SystemPage() {
               <Descriptions.Item label="本次重建">{data?.info.index.rebuilt ? '是' : '否'}</Descriptions.Item>
             </Descriptions></Card>
           </Col>
+          {data?.info.rule_writes && <Col xs={24}>
+            <Card title="规则写入状态">
+              <Descriptions column={1}>
+                <Descriptions.Item label="服务">{data.info.rule_writes.available === false ? <Tag color="orange">不可用</Tag> : <Tag color="green">可用</Tag>}</Descriptions.Item>
+                <Descriptions.Item label="写入状态">{data.info.rule_writes.blocked || data.info.rule_writes.recovery_required ? <Tag color="red">已阻断，需人工恢复</Tag> : <Tag color="green">未阻断</Tag>}</Descriptions.Item>
+                {data.info.rule_writes.warning && <Descriptions.Item label="安全提示">{data.info.rule_writes.warning}</Descriptions.Item>}
+              </Descriptions>
+              {(data.info.rule_writes.blocked || data.info.rule_writes.recovery_required) && <Alert className="section-gap" type="error" showIcon message="规则写入需要人工恢复" description="系统不会自动重试或覆盖现场；请核对规则变更和审计安全摘要。" />}
+            </Card>
+          </Col>}
           <Col xs={24}><Card title="仓库状态"><List dataSource={repositories} locale={{ emptyText: '暂无仓库状态' }} renderItem={([name, repo]) => <List.Item><div><Typography.Text strong>{name === 'control' ? '控制仓' : '知识仓'}</Typography.Text><Typography.Paragraph type="secondary">{repo.branch ?? '未知分支'} · {repo.short_commit ?? '无提交信息'}</Typography.Paragraph></div><Tag color={repo.available ? 'green' : 'orange'}>{repo.available ? '可用' : '不可用'}</Tag></List.Item>} /></Card></Col>
           <Col xs={24}><Card title="第一阶段能力"><List dataSource={data?.capabilities.capabilities ?? []} renderItem={(capability) => <List.Item><span>{capability.id}</span>{capability.supported ? <Tag color="green">可用</Tag> : <span><Tag>不可用</Tag>{capability.reason && <Typography.Text type="secondary">{capability.reason}</Typography.Text>}</span>}</List.Item>} /></Card></Col>
         </Row>

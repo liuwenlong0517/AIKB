@@ -379,8 +379,8 @@ class Phase4RulePreviewSecurityTests(unittest.TestCase):
             self.assertFalse((workspace / "active").exists())
             self.assertFalse((workspace / "archive").exists())
 
-    def test_apply_route_is_not_exposed_in_this_batch(self) -> None:
-        """批次 2 仍未开放 apply；任意方法均不得落入写入实现。"""
+    def test_apply_route_is_unavailable_before_write_service_startup(self) -> None:
+        """create_app/import 阶段不创建写服务，未启动 lifespan 时 apply 不可用。"""
         for method in ("get", "post", "put", "patch", "delete"):
             with self.subTest(method=method):
                 response = getattr(self.client, method)(APPLY_ROUTE, headers=self.good_headers)

@@ -53,7 +53,7 @@ def _settings(request: Request) -> Any | None:
 
 @router.get("/info")
 def system_info(request: Request) -> dict[str, Any]:
-    """返回平台、双仓 Git 摘要和索引状态等不敏感运行信息。"""
+    """返回平台、双仓 Git 摘要、索引和规则恢复提示等不敏感运行信息。"""
     settings = _settings(request)
     gateway = getattr(request.app.state, "knowledge_gateway", None)
     index: dict[str, Any] = {"available": False}
@@ -89,12 +89,15 @@ def system_info(request: Request) -> dict[str, Any]:
         control_root = getattr(settings, "repo_root", None)
         knowledge_root = getattr(settings, "knowledge_root", None)
         repositories = {"control": _safe_repo_state(control_root), "knowledge": _safe_repo_state(knowledge_root)}
+    rule_apply = getattr(request.app.state, "rule_apply_service", None)
+    rule_status = rule_apply.public_status() if callable(getattr(rule_apply, "public_status", None)) else {"available": False}
     return success(
         {
             "platform": {"name": platform.system().lower(), "architecture": platform.machine().lower()},
             "python": {"version": platform.python_version()},
             "repositories": repositories,
             "index": index,
+            "rule_writes": rule_status,
         },
         request,
         degraded=bool(warnings),

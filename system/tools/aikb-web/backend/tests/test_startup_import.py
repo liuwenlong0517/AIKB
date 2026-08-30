@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -31,6 +32,26 @@ class StartupImportTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_import_does_not_create_rule_task_runtime(self) -> None:
+        """仅 import 主模块不得创建 TaskStore 目录或恢复规则任务事实源。"""
+        with tempfile.TemporaryDirectory(prefix="aikb-import-") as temporary:
+            environment = os.environ.copy()
+            environment.pop("PYTHONPATH", None)
+            environment["AIKB_HOME"] = temporary
+            result = subprocess.run(
+                [sys.executable, "-c", "import aikb_web.main"],
+                cwd=BACKEND_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((Path(temporary) / "runtime" / "web" / "tasks").exists())
 
 
 if __name__ == "__main__":

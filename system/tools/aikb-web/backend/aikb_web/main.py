@@ -28,6 +28,8 @@ from aikb_web.core.gateway import GatewayError, KnowledgeNotFound, KnowledgeGate
 from aikb_web.core.orchestrator import TaskOrchestrator
 from aikb_web.core.windows_actions import WindowsActionsExecutor, WindowsActionsUnavailable
 from aikb_web.core.rule_preview import RulePreviewService, RuleServiceError
+from aikb_web.core.rule_task import RuleChangeTaskCoordinator
+from aikb_web.core.rule_transaction import RuleTransactionExecutor
 from aikb_web.platform import platform_state
 
 
@@ -126,11 +128,41 @@ def _json_error(request: Request, status_code: int, code: str, message: str, det
     return JSONResponse(status_code=status_code, content=error_body(code, message, request, details))
 
 
-def create_app(gateway: KnowledgeGateway | None = None, orchestrator: TaskOrchestrator | None = None) -> FastAPI:
-    """创建可注入网关的 FastAPI 应用，便于契约测试和未来核心替换。"""
+def create_app(
+    gateway: KnowledgeGateway | None = None,
+    orchestrator: TaskOrchestrator | None = None,
+    rule_change_executor: Any | None = None,
+    rule_task_coordinator: RuleChangeTaskCoordinator | None = None,
+) -> FastAPI:
+    """创建可注入网关/任务/规则执行器的 FastAPI 应用，便于契约测试和平台替换。"""
+    gateway_was_default = gateway is None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """在服务真正启动时创建编排器，退出时广播取消并回收线程。"""
+        # 默认规则写入服务只在正式 lifespan 启动时创建；这样 import/create_app
+        # 阶段不会创建 TaskStore 运行面或扫描/恢复历史事实源。
+        if (
+            app.state.rule_task_coordinator is None
+            and app.state.rule_auto_wire
+            and app.state.rule_preview_service is not None
+        ):
+            try:
+                executor = RuleTransactionExecutor(app.state.rule_preview_service)
+                app.state.rule_change_executor = executor
+                app.state.rule_task_coordinator = RuleChangeTaskCoordinator(
+                    executor,
+                    workspace_root=getattr(app.state.rule_preview_service, "_workspace_root", None),
+                    audit_sink=getattr(app.state.knowledge_gateway, "web_audit_write", None),
+                )
+                app.state.rule_apply_service = app.state.rule_task_coordinator
+            except Exception:
+                app.state.rule_change_executor = None
+                app.state.rule_task_coordinator = None
+        rule_tasks = getattr(app.state, "rule_task_coordinator", None)
+        if rule_tasks is not None and not app.state.rule_tasks_recovered:
+            rule_tasks.recover()
+            app.state.rule_tasks_recovered = True
         if app.state.task_orchestrator is None and app.state.task_settings is not None:
             current_platform = platform_state()
             if current_platform.platform == "windows" and current_platform.supported:
@@ -156,6 +188,9 @@ def create_app(gateway: KnowledgeGateway | None = None, orchestrator: TaskOrches
             service = app.state.task_orchestrator
             if service is not None:
                 service.shutdown()
+            rule_tasks = getattr(app.state, "rule_task_coordinator", None)
+            if rule_tasks is not None:
+                rule_tasks.shutdown()
 
     app = FastAPI(title="AIKB WebUI API", version="0.1.0", docs_url="/docs", redoc_url=None, lifespan=lifespan)
     dev_origins = ["http://127.0.0.1:5173", "http://localhost:5173"] if (
@@ -191,6 +226,25 @@ def create_app(gateway: KnowledgeGateway | None = None, orchestrator: TaskOrches
         app.state.rule_preview_service = RulePreviewService(getattr(gateway, "settings", None))
     except RuleServiceError:
         app.state.rule_preview_service = None
+    # 生产默认装配同一个预览服务上的原子事务 executor 和任务协调器；测试可注入
+    # coordinator 覆盖。协调器不会在初始化时写规则，只恢复已存在的事务材料。
+    executor = rule_change_executor or getattr(orchestrator, "rule_change_executor", None)
+    coordinator = rule_task_coordinator
+    if coordinator is None and executor is not None and app.state.rule_preview_service is not None:
+        try:
+            coordinator = RuleChangeTaskCoordinator(
+                executor,
+                workspace_root=getattr(app.state.rule_preview_service, "_workspace_root", None),
+                audit_sink=getattr(gateway, "web_audit_write", None),
+            )
+        except Exception:
+            coordinator = None
+    app.state.rule_change_executor = executor
+    app.state.rule_auto_wire = bool(gateway_was_default and executor is None)
+    app.state.rule_task_coordinator = coordinator
+    # 兼容已有状态接口名称；值实际是新协调器，而非 queued 即成功的 submitter。
+    app.state.rule_apply_service = coordinator
+    app.state.rule_tasks_recovered = False
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:

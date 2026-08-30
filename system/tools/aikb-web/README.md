@@ -1,6 +1,6 @@
 # AIKB WebUI
 
-AIKB WebUI 是 AIKB 的本地管理终端。第一、二阶段提供 Windows 上的正式知识总览、目录、搜索、Markdown 阅读、运行状态、检查点与脱敏审计观察面；第三阶段新增三项经过白名单约束的本地只读动作和任务中心。阶段 4A 已完成波次 0 基础，并在波次 1 增加规则目录、正文审阅和 `USER_RULES.md` 候选完整差异预览；当前仍没有规则应用或正式写入能力，动作也不接受任意 Shell、脚本路径或自定义工作目录；服务不开放局域网监听。
+AIKB WebUI 是 AIKB 的本地管理终端。第一、二阶段提供 Windows 上的正式知识总览、目录、搜索、Markdown 阅读、运行状态、检查点与脱敏审计观察面；第三阶段新增三项经过白名单约束的本地只读动作和任务中心。阶段 4A 已完成波次 0～2：四项规则可审阅，`USER_RULES.md` 支持完整差异预览、单次确认、受控任务、原子替换、自动回滚和启动恢复；不会产生 Git commit/push，动作也不接受任意 Shell、脚本路径或自定义工作目录；服务不开放局域网监听。
 
 ## 开发边界
 
@@ -12,6 +12,7 @@ AIKB WebUI 是 AIKB 的本地管理终端。第一、二阶段提供 Windows 上
 - 阶段 3 当前只注册 `validate.structure`、`repository.status.control`、`repository.status.knowledge` 三项 Windows 本地只读动作；通过服务端预览、严格空参数 Schema、单次确认令牌、JSONL 任务事实源、SSE 和受控 Job Object 执行；
 - 任务输出、结果和审计均为安全投影，任务事实源位于 `workspace/runtime/web/tasks/`，知识、规则和 Git 事实源不被动作修改；
 - 规则中心使用四个固定逻辑 ID 读取规则，只有 `user` 可以生成候选预览；预览要求控制仓全仓洁净，只写 `workspace/runtime/web/rule-changes/` 下的短期候选和无正文事务摘要，不修改正式规则、Git、任务或审计；
+- 规则应用只接收服务端 `change_id` 和进程内单次令牌；专用任务在跨进程全仓锁内重检 revision、哈希和候选，使用同目录临时文件原子替换，失败自动回滚，任务、事务和审计仅保存安全关联字段；
 - macOS 只保留平台契约和目录位置，尚未实现或验证。
 
 ## 常用命令
@@ -26,4 +27,4 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/vali
 
 开发前端时，先启动后端，再在 `frontend/` 运行 `npm run dev`。Vite 只把 `/api` 转发到 `http://127.0.0.1:8000`。
 
-完整接口、读模型架构、页面空状态和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计和阶段 3 任务路由是否可用，仍以启动时共享核心/Windows 执行器初始化结果和各资源接口响应为准。阶段 3 的实现契约见 `docs/phase-3-preconditions.md`；阶段 4A 的规则白名单、事务恢复和开发波次见 `docs/phase-4-preconditions.md`。当前只开放规则审阅和候选预览，仍未开放规则应用/写入、安装、索引重建或 macOS 实现。
+完整接口、读模型架构、页面空状态和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计、阶段 3 动作和阶段 4A 规则写入是否可用，仍以启动时共享核心、平台执行器、规则恢复状态和各资源接口响应为准。阶段 3 的实现契约见 `docs/phase-3-preconditions.md`；阶段 4A 的规则白名单、事务恢复和开发波次见 `docs/phase-4-preconditions.md`。当前只开放 `USER_RULES.md` 的受控应用，仍未开放其他规则/知识写入、安装、索引重建或 macOS 实现。

@@ -1,6 +1,6 @@
 # AIKB WebUI 阶段 4 规则治理前置契约与开发计划
 
-本文档冻结阶段 4 的任务分发条件。2026-08-30 已完成波次 0 的共享基础和波次 1 的规则读取/候选预览；当前只开放四项规则审阅及 `USER_RULES.md` 完整差异预览，不开放应用写入、安装、修复、索引重建或 Git 写操作。阶段 4 拆为 4A“规则治理”和 4B“安装与修复”；只有 4A 经真实 Windows 回归并形成稳定事务模型后，才为 4B 单独制定动作准入契约。
+本文档冻结阶段 4 的任务分发条件。2026-08-30 已完成波次 0～2：共享基础、规则读取/候选预览以及 `USER_RULES.md` 的原子应用、自动回滚、启动恢复和任务/审计关联；当前不开放其他规则或知识写入、安装、修复、索引重建或 Git 写操作。阶段 4 拆为 4A“规则治理”和 4B“安装与修复”；波次 3 完成真实 Windows 与浏览器终验后，才评估是否为 4B 单独制定动作准入契约。
 
 ## 1. 阶段结论与首批边界
 
@@ -43,7 +43,7 @@
 - `GET /api/v1/rules`：规则目录和能力；
 - `GET /api/v1/rules/{rule_id}`：当前正文、安全元数据、`content_hash` 和短 Git revision；
 - `POST /api/v1/rules/{rule_id}/preview`：提交 `base_content_hash` 与候选正文，返回候选校验结果、完整统一 diff、`change_id`、`preview_digest` 和五分钟单次确认令牌；
-- `POST /api/v1/rules/{rule_id}/apply`：只接收 `change_id`、`preview_digest` 和确认令牌，创建受控任务并返回任务 ID；
+- `POST /api/v1/rules/{rule_id}/apply`：只接收 `change_id` 和确认令牌；`preview_digest` 由服务端事务读取并重新绑定校验，接口创建受控任务并返回任务 ID；
 - `GET /api/v1/rule-changes/{change_id}`：返回安全状态、哈希、校验摘要和关联任务，不返回候选正文、备份或物理路径。
 
 所有 POST 继续要求 `application/json`、`X-AIKB-Request: 1`、严格 Host/Origin 和无通配 CORS。请求体、错误、访问日志、任务事件和审计均不得记录规则正文、完整 diff 或确认令牌。

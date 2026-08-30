@@ -124,25 +124,39 @@ class RulePreviewTokenService:
     def consume(self, token: str, expected: Mapping[str, str]) -> None:
         """校验并消费令牌绑定；本批次没有 HTTP 消费入口，供后续 apply 复用。"""
         with self._lock:
-            record = self._records.get(token)
-            if record is None:
-                raise RulePreviewRejected("确认令牌无效或已消费", status_code=409, code="preview_token_invalid")
-            if self._clock() >= record.expires_at:
-                self._records.pop(token, None)
-                raise RulePreviewRejected("确认令牌已过期", status_code=409, code="preview_token_expired")
-            fields = {
-                "rule_id": record.rule_id, "change_id": record.change_id,
-                "risk_level": record.risk_level, "repository_revision": record.repository_revision,
-                "before_hash": record.before_hash, "after_hash": record.after_hash,
-                "diff_hash": record.diff_hash, "validator_version": record.validator_version,
-                "preview_digest": record.preview_digest,
-            }
-            if set(expected) != set(fields) or any(
-                not isinstance(value, str) or not hmac.compare_digest(fields[key], value)
-                for key, value in expected.items()
-            ):
-                raise RulePreviewRejected("确认令牌与预览不匹配", status_code=409, code="preview_token_mismatch")
+            record = self._validate_locked(token, expected)
             self._records.pop(token, None)
+
+    def validate(self, token: str, expected: Mapping[str, str]) -> None:
+        """严格检查令牌绑定和过期时间但不消费，供应用层预检安全复用。"""
+        with self._lock:
+            self._validate_locked(token, expected)
+
+    def peek(self, token: str, expected: Mapping[str, str]) -> _PreviewTokenRecord:
+        """返回已验证的进程内令牌记录但不消费；调用方不得将记录写入响应或日志。"""
+        with self._lock:
+            return self._validate_locked(token, expected)
+
+    def _validate_locked(self, token: str, expected: Mapping[str, str]) -> _PreviewTokenRecord:
+        """在令牌锁内执行不带副作用的绑定检查，供 validate/peek/consume 共用。"""
+        record = self._records.get(token)
+        if record is None:
+            raise RulePreviewRejected("确认令牌无效或已消费", status_code=409, code="preview_token_invalid")
+        if self._clock() >= record.expires_at:
+            raise RulePreviewRejected("确认令牌已过期", status_code=409, code="preview_token_expired")
+        fields = {
+            "rule_id": record.rule_id, "change_id": record.change_id,
+            "risk_level": record.risk_level, "repository_revision": record.repository_revision,
+            "before_hash": record.before_hash, "after_hash": record.after_hash,
+            "diff_hash": record.diff_hash, "validator_version": record.validator_version,
+            "preview_digest": record.preview_digest,
+        }
+        if set(expected) != set(fields) or any(
+            not isinstance(value, str) or not hmac.compare_digest(fields[key], value)
+            for key, value in expected.items()
+        ):
+            raise RulePreviewRejected("确认令牌与预览不匹配", status_code=409, code="preview_token_mismatch")
+        return record
 
 
 class RulePreviewService:
@@ -259,7 +273,12 @@ class RulePreviewService:
 
     def _transaction_dir(self, change_id: str, now: datetime) -> Path:
         """创建仅当前用户可访问的年月事务目录，不接受外部目录名。"""
-        root = self._workspace_root / "runtime" / "web" / "rule-changes" / now.strftime("%Y") / now.strftime("%m")
+        runtime_root = self._workspace_root
+        for component in ("runtime", "web", "rule-changes"):
+            runtime_root = runtime_root / component
+            if runtime_root.is_symlink():
+                raise RuleServiceError("规则预览运行面不可用")
+        root = runtime_root / now.strftime("%Y") / now.strftime("%m")
         directory = root / change_id
         try:
             directory.mkdir(parents=True, exist_ok=False)

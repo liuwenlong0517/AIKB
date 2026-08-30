@@ -181,10 +181,10 @@ class Phase4RulesApiTests(unittest.TestCase):
         change_root = Path(self.temp.name) / "runtime" / "web" / "rule-changes"
         self.assertFalse(any(path.name.startswith("change-") for path in change_root.rglob("*")))
 
-    def test_no_apply_route_is_registered(self) -> None:
-        """阶段 4A 批次 2 明确不注册 apply 路由。"""
+    def test_apply_is_unavailable_without_started_write_service(self) -> None:
+        """未启动 lifespan/规则协调器时，apply 必须保持不可用且不产生副作用。"""
         response = self.client.post("/api/v1/rules/user/apply", headers=self.headers, json={})
-        self.assertIn(response.status_code, {404, 405})
+        self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":
