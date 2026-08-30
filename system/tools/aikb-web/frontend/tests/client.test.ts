@@ -41,4 +41,16 @@ describe('ApiClient', () => {
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'Content-Type': 'application/json', 'X-AIKB-Request': '1' }), body: '{"parameters":{}}' }));
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'Content-Type': 'application/json', 'X-AIKB-Request': '1' }), body: '{"action_id":"validate.structure","parameters":{},"preview_digest":"digest","confirmation_token":"token"}' }));
   });
+
+  it('按规则 ID 编码详情路由，并发送候选正文预览契约', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [] }, meta: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { rule_id: 'user', content: '# 用户规则\n', content_hash: 'a'.repeat(64), revision: 'b'.repeat(7), title: '个人规则', description: '', readable: true, writable: true, risk_level: 'source_write', max_chars: 800 }, meta: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { rule_id: 'user', change_id: 'change-1', diff: '--- a/user\n+++ b/user\n', preview_digest: 'c'.repeat(64), confirmation_token: 'secret', expires_at: '2026-08-30T01:05:00Z' }, meta: {} }), { status: 200 }));
+    await api.rules();
+    await api.rule('user');
+    await api.previewRule('user', { base_content_hash: 'a'.repeat(64), candidate_content: '# 用户规则修改\n' });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/v1/rules', '/api/v1/rules/user', '/api/v1/rules/user/preview']);
+    expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: 'POST', body: JSON.stringify({ base_content_hash: 'a'.repeat(64), candidate_content: '# 用户规则修改\n' }) }));
+  });
 });

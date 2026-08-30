@@ -20,18 +20,23 @@ import type {
   ActionsData,
   TaskData,
   TasksData,
+  RuleDetail,
+  RulePreviewData,
+  RulesData,
 } from '../types/api';
 
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
 export class ApiClientError extends Error {
   readonly code?: string;
   readonly requestId?: string;
+  readonly details?: unknown;
 
-  constructor(message: string, code?: string, requestId?: string) {
+  constructor(message: string, code?: string, requestId?: string, details?: unknown) {
     super(message);
     this.name = 'ApiClientError';
     this.code = code;
     this.requestId = requestId;
+    this.details = details;
   }
 }
 
@@ -102,7 +107,7 @@ export class ApiClient {
     if (!body || typeof body !== 'object') throw new ApiClientError(`服务返回了无效的响应结构（HTTP ${response.status}）`);
     if (!response.ok || 'error' in body) {
       const error = 'error' in body ? body.error : undefined;
-      throw new ApiClientError(error?.message ?? `请求失败（HTTP ${response.status}）`, error?.code, body.meta?.request_id);
+      throw new ApiClientError(error?.message ?? `请求失败（HTTP ${response.status}）`, error?.code, body.meta?.request_id, error?.details);
     }
     if (!('data' in body)) throw new ApiClientError(`服务返回了无效的数据包络（HTTP ${response.status}）`);
     return body as ApiResponse<T>;
@@ -157,6 +162,12 @@ export const api = {
   createTask: (body: { action_id: string; parameters: Record<string, unknown>; preview_digest: string; confirmation_token: string }) =>
     apiClient.postEnvelope<TaskData>('/tasks', body),
   cancelTask: (taskId: string) => apiClient.postEnvelope<TaskData>(`/tasks/${encodeURIComponent(taskId)}/cancel`, {}),
+  /** 阶段 4A 规则目录和详情；只接受静态规则 ID，路径不进入浏览器。 */
+  rules: () => apiClient.getEnvelope<RulesData>('/rules'),
+  rule: (ruleId: string) => apiClient.getEnvelope<RuleDetail>(`/rules/${encodeURIComponent(ruleId)}`),
+  /** 只生成候选校验和完整 diff，不执行规则写入或创建任务。 */
+  previewRule: (ruleId: string, body: { base_content_hash: string; candidate_content: string }) =>
+    apiClient.postEnvelope<RulePreviewData>(`/rules/${encodeURIComponent(ruleId)}/preview`, body),
 };
 
 /** 共享核心的详情读模型包含 item 包装；在 API 客户端边界统一摊平，页面不感知后端适配层形状。 */

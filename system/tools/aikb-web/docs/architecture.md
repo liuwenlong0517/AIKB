@@ -1,13 +1,13 @@
-# AIKB WebUI 阶段 3 架构与读模型
+# AIKB WebUI 阶段 4A 波次 1 架构与读模型
 
-本文档定义 Windows 本地管理终端的读模型与受控动作边界。阶段 1～2 的知识、运行状态和审计读取保持只读；阶段 3 增加三项静态注册的本地只读动作、任务事实源、SSE 和 Windows Job Object 执行链路。macOS 仍只保留平台扩展位置，尚未实现或验证。
+本文档定义 Windows 本地管理终端的读模型与受控动作边界。阶段 1～2 的知识、运行状态和审计读取保持只读；阶段 3 增加三项静态注册的本地只读动作、任务事实源、SSE 和 Windows Job Object 执行链路；阶段 4A 波次 1 增加四项静态规则读取和 `user` 候选预览，但不提供应用。macOS 仍只保留平台扩展位置，尚未实现或验证。
 
 ## 数据流与边界
 
     React 页面
       → /api/v1 HTTP JSON
-      → FastAPI 只读路由与统一错误边界
-      → Web 读模型适配器 / 受控任务编排器
+      → FastAPI 只读/受保护预览路由与统一错误边界
+      → Web 读模型适配器 / 规则预览服务 / 受控任务编排器
       → aikb-mcp/aikb 共享核心
       → Markdown / workspace Working State / workspace/audit JSONL / workspace/runtime/web/tasks / SQLite 派生索引
 
@@ -17,6 +17,7 @@
 - Working State 读模型读取 workspace/active 的 work.md、检查点及其索引；不把工作状态提升为正式知识。
 - 审计读模型读取 workspace/audit/events/、fallback JSON，并按 invocation_id 聚合；报告和索引只是派生物。
 - 受控任务只消费静态动作注册表和平台适配器：前端不能提交命令、路径或环境；任务事件 JSONL 是事实源，snapshot 是可重建投影，审计仍写入独立 JSONL 事实源。
+- 规则预览只消费静态规则 ID、基线哈希和候选正文：正式规则保持不变，完整 diff 只存在于同步响应，候选和无正文事务摘要进入专用本机运行面。
 - 系统读模型只输出平台、Python、双仓 Git 短摘要和索引可用性；Git 命令必须固定、超时、白名单字段。
 
 运行状态第一小版本只读活动项；归档项和关闭项不进入查询范围。列表默认按最新更新时间倒序，审计调用默认按最新开始时间倒序，并以逻辑 ID 做稳定排序兜底。
@@ -54,8 +55,11 @@ API Client 只接受 {data, meta} 或 {error, meta}。页面通过状态钩子�
       ├─ /{task_id}
       ├─ /{task_id}/cancel
       └─ /{task_id}/events
+    /rules
+      └─ /{rule_id}
+           └─ /preview
 
-知识、运行状态和审计路由只读。阶段 3 仅注册受保护的动作预览、任务创建、任务取消和任务事件流；这些入口不能扩展为规则/知识写入、Git 写入、索引重建或任意 Shell。未知 /api/* 必须 JSON 404，不能被 SPA 回退吞掉。
+知识、运行状态和审计路由只读。阶段 3 注册受保护的动作预览、任务创建、任务取消和任务事件流；阶段 4A 当前只增加规则读取和候选预览，未注册 apply。所有入口都不能扩展为规则/知识正式写入、Git 写入、索引重建或任意 Shell。未知 /api/* 必须 JSON 404，不能被 SPA 回退吞掉。
 
 ## 可信度和降级
 
@@ -78,6 +82,10 @@ session_id 和 session_label 都是可缺失的事实字段；缺失时保留 nu
 动作注册表由版本控制下的 Python 代码静态构造，当前只有 `validate.structure`、`repository.status.control` 和 `repository.status.knowledge`。预览层生成规范化参数与摘要，确认令牌绑定摘要且只能消费一次；编排器负责全局/动作组并发、状态转换、超时、取消和启动恢复。Windows 执行器以固定程序数组和最小环境启动外部进程，在恢复线程前关联 Job Object，并以 kill-on-close 收敛父、子、孙进程。
 
 任务输出在写入事实源前脱敏、限行、限块和限总量；API/SSE 只公开安全投影，不能返回物理目录、命令、PID、句柄、环境、令牌或原始异常。服务重启时遗留非终态任务标记为 `interrupted`，不重新附着旧进程。审计通过 `web` 来源及任务关联字段追踪开始、完成和独立取消请求。
+
+## 阶段 4A 规则预览边界
+
+规则目标继续由共享静态注册表解析，Web 公共模型丢弃物理相对路径。预览服务使用固定只读 Git 查询检查普通分支、操作状态、revision 和全仓洁净度，候选通过共享验证器后生成完整 unified diff。预览草稿位于 `workspace/runtime/web/rule-changes/`，事务只保存逻辑 ID、哈希、状态和时间；完整 diff、令牌和物理路径不落入事务、任务或审计。当前没有正式替换、备份、任务关联、审计写入或启动恢复，这些属于下一波次。
 
 ## 未来扩展点
 

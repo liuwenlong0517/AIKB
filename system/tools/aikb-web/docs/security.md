@@ -1,13 +1,15 @@
-# AIKB WebUI 阶段 3 安全边界
+# AIKB WebUI 阶段 4A 波次 1 安全边界
 
 ## 运行边界
 
 - 仅 Windows 本机支持，服务固定监听 127.0.0.1；启动器不接受任意监听地址、端口转发或局域网开关。
-- 知识、运行状态和审计 API 只开放 GET、OPTIONS；阶段 3 另有受保护的动作预览、任务创建和取消 POST。动作只能来自三项静态注册的 Windows 本地只读检查，不执行任意 Shell/PowerShell，不写 Markdown、规则、Working State 或 Git 事实源，不做 commit/push/reset/checkout。
+- 知识、运行状态和审计 API 只开放 GET、OPTIONS；阶段 3 另有受保护的动作预览、任务创建和取消 POST，阶段 4A 当前另有规则候选预览 POST。动作只能来自三项静态注册的 Windows 本地只读检查；规则预览只为 `user` 创建本机草稿，不执行任意 Shell/PowerShell，不修改正式 Markdown、Working State、任务、审计或 Git 事实源，不做 commit/push/reset/checkout。
 - 生产模式由 FastAPI 同源提供前端静态资源；开发 CORS 只允许约定的本机 Vite 端口，不允许通配符来源。
 - 未知 API 返回 JSON 404，不得回退到 HTML；页面深路由才允许 SPA 入口回退。
 
 阶段 3 任务运行数据只写入 `workspace/runtime/web/tasks/`，作为本机运行面；动作审计写入 `workspace/audit/events/` JSONL。两者均不写入正式知识目录。知识接口仍固定只公开 `verified`。
+
+阶段 4A 预览草稿只写入 `workspace/runtime/web/rule-changes/`：`candidate.md` 是短期本机材料，`transaction.json` 只含逻辑 ID、哈希、状态和时间。完整 diff 只在同步响应内返回；令牌仅存进程内并返回当前页面内存，不写任务、审计或事务。当前不存在 apply 路由。
 
 ## 输入和逻辑标识
 
@@ -24,7 +26,7 @@
 - SQL、底层异常原文、完整 traceback、模块导入路径和服务端日志；
 - prompt、聊天全文、transcript、隐藏推理、完整 MCP payload/返回值和二进制附件；
 - 审计诊断正文、原始诊断附件路径、知识正文（搜索和审计响应中）；
-- token、cookie、password、private key 及其他未脱敏秘密。
+- cookie、password、private key、会话/访问令牌及其他未脱敏秘密。只有动作或规则预览契约明确返回的五分钟进程内确认令牌例外；页面不得展示或记录该字段。
 
 Working State 列表和详情只返回紧凑恢复信息；session_id 没有可靠来源时必须为 null，session_label 同样没有可靠来源时必须为 null，不可用 Agent、connection ID、时间戳或人工标签伪造。审计优先显示真实 session_label；技术字段仍保持原值或 null，三者不得混称。
 
@@ -49,6 +51,14 @@ workspace/audit/ 是独立本机操作面，不属于知识和 Working State。J
 - 仓库状态动作只返回分支、短提交、dirty 和变更数量；Git porcelain 原文及变更文件名不得写入任务事实源或返回浏览器。
 - 任务输出按 UTF-8、单块/单行/总量预算脱敏和裁剪；页面只渲染安全结果与有限输出。
 - macOS 只保留平台契约和目录，不创建伪执行器；真实设备和进程回归完成前 `supported=false`。
+
+## 规则预览边界
+
+- 规则 ID 固定为 `entry`、`user`、`agent`、`contributing`，只有 `user` 可预览候选；未知或路径型 ID 不回退到文件系统。
+- 预览前后均检查普通分支、无 Git 未完成操作、全仓洁净、revision 和目标正文哈希；冲突只返回稳定错误码。
+- 候选通过共享编码、预算、职责词、禁止词和绝对路径检查；无变化、超过 2,000 行或 diff 超过 4,000 行/256 KiB 均拒绝。
+- 请求正文、候选、完整 diff、令牌和底层异常不得进入访问日志、任务或审计；内部文件错误映射为安全 503，不进入通用 traceback 日志。
+- 草稿创建或令牌签发失败时，只清理本次新建且经过年月目录与安全 change ID 双重限定的半成品目录，不触碰其他事务。
 
 既有审计规则继续有效：任何级别均不得记录聊天全文、隐藏推理、transcript、二进制、未脱敏密钥或完整 traceback；诊断输入输出只能在显式环境变量下脱敏、限长保存。
 

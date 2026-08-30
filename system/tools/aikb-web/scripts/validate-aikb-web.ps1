@@ -7,12 +7,23 @@ $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $env:PYTHONIOENCODING = 'utf-8'
 $webRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $controlRoot = (Resolve-Path -LiteralPath (Join-Path $webRoot '../../..')).Path
+$backendRoot = Join-Path $webRoot 'backend'
 $frontendRoot = Join-Path $webRoot 'frontend'
 
 python -m unittest discover -s (Join-Path $controlRoot 'system/tools/aikb-mcp/tests') -v
 if ($LASTEXITCODE -ne 0) { throw "共享核心测试失败，退出码：$LASTEXITCODE" }
-python -m unittest discover -s (Join-Path $webRoot 'backend/tests') -v
-if ($LASTEXITCODE -ne 0) { throw "Web 后端测试失败，退出码：$LASTEXITCODE" }
+
+# 与正式 ``uvicorn --app-dir backend`` 使用相同的 Web 包可见边界。测试从
+# backend 工作目录发现，既不依赖调用者的 PYTHONPATH，也不会因测试文件加载
+# 顺序不同而让部分模块偶然可导入、部分模块失败。
+Push-Location $backendRoot
+try {
+    python -m unittest discover -s tests -v
+    if ($LASTEXITCODE -ne 0) { throw "Web 后端测试失败，退出码：$LASTEXITCODE" }
+}
+finally {
+    Pop-Location
+}
 
 Push-Location $frontendRoot
 try {

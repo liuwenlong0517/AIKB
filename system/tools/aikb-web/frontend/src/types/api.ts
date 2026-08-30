@@ -286,3 +286,52 @@ export interface TaskEvent {
   replay_reset?: boolean;
   [key: string]: unknown;
 }
+
+/** 阶段 4A 静态规则目录项；路径永远不由浏览器接收或推导。 */
+export interface RuleSummary {
+  rule_id: 'entry' | 'user' | 'agent' | 'contributing' | string;
+  title: string;
+  description: string;
+  readable: boolean;
+  writable: boolean;
+  risk_level: string;
+  max_chars: number;
+  content_hash?: string;
+  revision?: string;
+}
+
+/** 规则详情正文和服务端安全元数据。 */
+export interface RuleDetail extends RuleSummary {
+  content: string;
+  content_hash: string;
+  revision: string;
+}
+
+/** 候选正文校验投影；正文和完整 diff 只在预览响应期间留在内存。 */
+export interface RuleValidation {
+  valid?: boolean;
+  ok?: boolean;
+  errors?: Array<string | { code?: string; message?: string }>;
+  warnings?: Array<string | { code?: string; message?: string }>;
+  [key: string]: unknown;
+}
+
+/** 规则预览结果。服务端令牌仅用于未来应用流程，本批次页面不消费它。 */
+export interface RulePreviewData {
+  rule_id: string;
+  change_id: string;
+  before_hash?: string;
+  after_hash?: string;
+  diff_hash?: string;
+  diff?: string;
+  unified_diff?: string;
+  validation?: RuleValidation;
+  preview_digest: string;
+  confirmation_token?: string;
+  expires_at?: string;
+  expires_in_seconds?: number;
+  revision?: string;
+  [key: string]: unknown;
+}
+
+export interface RulesData { items: RuleSummary[] }

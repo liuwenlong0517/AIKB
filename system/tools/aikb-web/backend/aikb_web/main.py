@@ -22,10 +22,12 @@ from aikb_web.api.v1.audit import router as audit_router
 from aikb_web.api.v1.actions import router as actions_router
 from aikb_web.api.v1.tasks import router as tasks_router
 from aikb_web.api.v1.system import router as system_router
+from aikb_web.api.v1.rules import router as rules_router
 from aikb_web.core.actions import ActionRegistry, ConfirmationTokenService
 from aikb_web.core.gateway import GatewayError, KnowledgeNotFound, KnowledgeGateway, CoreKnowledgeGateway
 from aikb_web.core.orchestrator import TaskOrchestrator
 from aikb_web.core.windows_actions import WindowsActionsExecutor, WindowsActionsUnavailable
+from aikb_web.core.rule_preview import RulePreviewService, RuleServiceError
 from aikb_web.platform import platform_state
 
 
@@ -184,6 +186,11 @@ def create_app(gateway: KnowledgeGateway | None = None, orchestrator: TaskOrches
     app.state.platform_action_available = orchestrator is not None
     # None 表示尚未启动或任务服务不可用；导入阶段不创建 TaskStore、不恢复任务。
     app.state.task_orchestrator = orchestrator
+    # 规则预览服务只在已有可信设置时创建；它不注册任务执行器，也不写正式规则。
+    try:
+        app.state.rule_preview_service = RulePreviewService(getattr(gateway, "settings", None))
+    except RuleServiceError:
+        app.state.rule_preview_service = None
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:
@@ -260,6 +267,7 @@ def create_app(gateway: KnowledgeGateway | None = None, orchestrator: TaskOrches
     app.include_router(audit_router, prefix="/api/v1")
     app.include_router(actions_router, prefix="/api/v1")
     app.include_router(tasks_router, prefix="/api/v1")
+    app.include_router(rules_router, prefix="/api/v1")
 
     @app.api_route("/api/{path:path}", methods=["GET"])
     def unknown_api(path: str) -> None:

@@ -9,6 +9,7 @@ import { SystemPage } from '../pages/SystemPage';
 import { RuntimePage } from '../pages/RuntimePage';
 import { AuditPage } from '../pages/AuditPage';
 import { TasksPage } from '../pages/TasksPage';
+import { RulesPage } from '../pages/RulesPage';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
@@ -24,6 +25,8 @@ export function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/knowledge/view" element={<DocumentPage />} />
+            <Route path="/rules" element={<RulesPage />} />
+            <Route path="/rules/:ruleId" element={<RulesPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/system" element={<SystemPage />} />
             <Route path="/runtime" element={<RuntimePage />} />

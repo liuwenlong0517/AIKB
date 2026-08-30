@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData } from '../types/api';
 import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
 
@@ -16,6 +16,21 @@ export const useSearch = (query: string, filters: SearchFilters) =>
     queryKey: ['search', query, filters],
     queryFn: () => api.search(query, filters),
     enabled: query.trim().length > 0,
+  });
+
+/** 读取固定四项规则目录；服务端返回的摘要不含物理路径。 */
+export const useRules = (): UseQueryResult<ApiResponse<RulesData>> =>
+  useQuery({ queryKey: ['rules'], queryFn: api.rules });
+
+/** 读取选中规则正文；深层路由刷新时由 ruleId 独立恢复详情。 */
+export const useRule = (ruleId: string | undefined): UseQueryResult<ApiResponse<RuleDetail>> =>
+  useQuery({ queryKey: ['rule', ruleId], queryFn: () => api.rule(ruleId as string), enabled: Boolean(ruleId) });
+
+/** 生成候选正文的服务端校验、完整 diff 和短期预览凭据，不调用应用接口。 */
+export const usePreviewRule = () =>
+  useMutation({
+    mutationFn: (input: { ruleId: string; base_content_hash: string; candidate_content: string }): Promise<ApiResponse<RulePreviewData>> =>
+      api.previewRule(input.ruleId, { base_content_hash: input.base_content_hash, candidate_content: input.candidate_content }),
   });
 
 /** 活动 Working State 列表查询；筛选参数进入 query key，保证分页和筛选切换不会复用错误页面。 */

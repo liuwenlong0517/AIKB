@@ -1,11 +1,11 @@
 # AIKB WebUI API 契约
 
-本文档是阶段 1～3 的 Windows 本地 WebUI 接口契约，供后端、前端与验收共同使用。知识、运行状态和审计读取接口保持只读；阶段 3 只通过显式受控动作接口执行三项注册的本地只读检查。规则/知识写入、安装、索引重建和任意 Shell 仍不属于公共能力。
+本文档是阶段 1～4A 波次 1 的 Windows 本地 WebUI 接口契约，供后端、前端与验收共同使用。知识、运行状态和审计读取接口保持只读；阶段 3 只通过显式受控动作接口执行三项注册的本地只读检查；阶段 4A 当前只增加规则读取和候选预览。规则/知识应用写入、安装、索引重建和任意 Shell 仍不属于公共能力。
 
 ## 1. 传输与共同包络
 
 - 基础路径为 /api/v1；服务只绑定 127.0.0.1。
-- 知识、运行状态、审计和系统查询只接受 GET 和 OPTIONS。动作预览、任务创建/取消是阶段 3 明确列出的受保护 POST；其他写方法仍返回结构化 405，不得触发未注册动作、规则/知识写入、Git 写操作或索引重建。
+- 知识、运行状态、审计和系统查询只接受 GET 和 OPTIONS。动作预览、任务创建/取消和规则候选预览是明确列出的受保护 POST；其他写方法仍返回结构化 405，不得触发未注册动作、规则/知识写入、Git 写操作或索引重建。
 - 成功响应固定为 { "data": <T>, "meta": <Meta> }；失败响应固定为 { "error": <Error>, "meta": <Meta> }。
 - meta.request_id 为服务生成或校验后的短 ASCII 请求标识，并通过 X-Request-ID 响应头返回；客户端提供的非法值会被忽略并重新生成。
 - JSON 使用 UTF-8。时间使用带时区的 ISO-8601 字符串；分页排序必须稳定，未另行说明时按更新时间或开始时间倒序。
@@ -231,7 +231,21 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 
 返回 `text/event-stream`。允许事件类型为 `snapshot`、`status`、`progress`、`output`、`result`、`heartbeat`；事件 ID 在任务内单调递增。客户端通过 `Last-Event-ID` 回放，游标失效时收到带 `replay_reset=true` 的最新安全快照；心跳最长 15 秒，终态结果发出后关闭。输出受单块 8 KiB、单行 4 KiB、单任务 2 MiB 预算约束，超限只公开 `truncated` 标志并保留最终安全结果。
 
-## 7. 分页、空集和降级统一规则
+## 7. 阶段 4A 规则读取与候选预览
+
+规则注册表固定为 `entry`、`user`、`agent`、`contributing`；四项均可读取，只有 `user` 的 `writable=true`。浏览器只使用逻辑 ID，不接收或提交物理路径。
+
+### GET /rules、GET /rules/{rule_id}
+
+目录返回标题、说明、读写能力、风险、字符预算、内容哈希和 Git revision；详情另返回当前正文。公共投影不包含 `relative_path`、控制仓根目录或文件异常。未知或路径型 ID 返回安全 404。
+
+### POST /rules/{rule_id}/preview
+
+只允许 `user`。请求体严格为 `base_content_hash` 和 `candidate_content`，并要求 JSON、`X-AIKB-Request: 1` 与本机同源 Host/Origin。服务在预览前后检查普通分支、无 merge/rebase 等操作、全仓洁净、revision 和当前正文哈希；候选走共享规则验证器。
+
+成功返回完整 unified diff、校验摘要、`change_id`、前后/diff 哈希、`preview_digest`、五分钟进程内确认令牌和过期时间。候选最多 2,000 行，diff 最多 4,000 行或 256 KiB，超限必须拒绝而不是截断。草稿只在 `workspace/runtime/web/rule-changes/` 保存候选和 `prepared` 事务摘要，不创建备份，不写任务或审计。当前没有 `/rules/{rule_id}/apply` 路由，令牌没有 HTTP 消费入口。
+
+## 8. 分页、空集和降级统一规则
 
 - page 从 1 开始；阶段 2 新增的运行状态 page_size 上限为 50，审计上限为 100。超限返回 400 invalid_request，不得静默扩大或无限制读取；阶段 1 搜索继续使用 `limit<=20`。
 - total 是当前筛选下可信计数；无法计算时返回 null，并在 meta.degraded=true，不得用当前页长度伪造总数。
@@ -239,6 +253,6 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 - 可重建索引不可用时，能从 Markdown/JSONL 事实源安全读取的接口可以局部降级；无法保证结果完整性的搜索、分页或详情接口必须 503。
 - 所有降级都要给机器可读的 warnings 枚举（如 index_unavailable、audit_partial、damaged_records、session_id_unavailable），不把底层异常文本放入响应。
 
-## 8. 明确禁止公开的内容
+## 9. 明确禁止公开的内容
 
 任何接口、错误包络、日志转发或浏览器源代码都不得公开：Windows 绝对路径、盘符、UNC 路径、workspace/数据库物理路径、完整 Git 输出、SQL、环境变量值、密钥/token/cookie、完整请求 payload、完整 MCP 返回值、知识正文（搜索/审计场景）、诊断正文、聊天全文、transcript、隐藏推理、二进制附件和完整 traceback。需要定位问题时只返回 request_id，由本机服务日志关联。
