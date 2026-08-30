@@ -44,7 +44,7 @@
 - `GET /api/v1/rules/{rule_id}`：当前正文、安全元数据、`content_hash` 和短 Git revision；
 - `POST /api/v1/rules/{rule_id}/preview`：提交 `base_content_hash` 与候选正文，返回候选校验结果、完整统一 diff、`change_id`、`preview_digest` 和五分钟单次确认令牌；
 - `POST /api/v1/rules/{rule_id}/apply`：只接收 `change_id` 和确认令牌；`preview_digest` 由服务端事务读取并重新绑定校验，接口创建受控任务并返回任务 ID；
-- `GET /api/v1/rule-changes/{change_id}`：返回安全状态、哈希、校验摘要和关联任务，不返回候选正文、备份或物理路径。
+- `GET /api/v1/rules/changes/{change_id}`：返回安全状态、哈希、校验摘要和关联任务，不返回候选正文、备份或物理路径。
 
 所有 POST 继续要求 `application/json`、`X-AIKB-Request: 1`、严格 Host/Origin 和无通配 CORS。请求体、错误、访问日志、任务事件和审计均不得记录规则正文、完整 diff 或确认令牌。
 
@@ -190,6 +190,17 @@ applying | validating -> rolling_back -> rolled_back | recovery_required
 - 完成结构、MCP、后端、前端、构建、安全扫描和 UTF-8 回归。
 
 验收：阶段 4A 第一小版本满足本文件全部门槛后，才能考虑扩大可写规则或启动 4B。
+
+本次波次 3 终审已完成隔离临时 Git 仓的 Windows 故障注入与多进程竞争、真实浏览器
+成功应用流程、后端契约、构建/结构和启动边界验收；终审
+开始时 AIKB 控制仓与知识仓的最终提交哈希保持不变且均为 clean，终审只在控制仓
+新增本终审测试/文档。未获授权在真实 checkout 执行 USER_RULES.md 往返写入，也不能
+据此宣称真实规则往返已经完成；任何发布结论必须明确区分“隔离验收通过”和“真实
+规则往返未执行”。
+显式 Windows 隔离验收已覆盖成功、校验拒绝、并发认领、回滚、崩溃恢复、第三方
+修改和 UTF-8/CRLF 边界；真实浏览器已覆盖审阅、完整 diff、确认、任务终态、正文
+刷新、任务跳转和刷新不重放。由于未进行授权的真实规则往返，本次结果仍不能标记
+为阶段 4A 最终可发布，也不能据此扩大可写规则范围。
 
 ## 9. 阶段 4B 阻塞条件
 

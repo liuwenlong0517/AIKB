@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
-from .tasks import TaskError, TaskStore
+from .tasks import TERMINAL_STATES, TaskError, TaskStore
 from .rule_changes import RULE_USER_UPDATE_SPEC, RuleChangeTransaction
 
 
@@ -26,6 +26,7 @@ _CHANGE_ID = re.compile(r"^change-[0-9a-f]{32}$")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _TERMINAL = frozenset({"succeeded", "expired", "rejected", "rolled_back", "recovery_required"})
+_TASK_TERMINAL = TERMINAL_STATES
 _METADATA_FIELDS = frozenset(
     {
         "change_id", "rule_id", "action_id", "risk_level", "before_hash", "after_hash",
