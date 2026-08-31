@@ -151,6 +151,24 @@ _TARGET_EFFECTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     }
 )
 
+# 写步骤到逻辑叶子的唯一静态映射；执行器只能引用此事实源，不得按目标散落
+# 硬编码叶子关系。preflight、backup、verify 没有写叶子，rollback 仅是补偿语义。
+MAINTENANCE_WRITE_LEAVES_BY_TARGET: Mapping[str, Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "environment": MappingProxyType({"write_environment": MAINTENANCE_LEAVES_BY_TARGET["environment"]}),
+        "agent.codex": MappingProxyType({
+            "write_root_instructions": ("agent.codex.root_instructions",),
+            "write_mcp": ("agent.codex.mcp",),
+            "write_hooks": ("agent.codex.hooks",),
+        }),
+        "agent.claude-code": MappingProxyType({
+            "write_root_instructions": ("agent.claude-code.root_instructions",),
+            "write_mcp": ("agent.claude-code.mcp",),
+            "write_hooks": ("agent.claude-code.hooks",),
+        }),
+    }
+)
+
 
 def validate_logical_id(value: str, field_name: str = "logical_id") -> str:
     """校验不含路径分隔符、空白和控制字符的逻辑标识。
@@ -415,6 +433,7 @@ __all__ = [
     "MAINTENANCE_DIFFERENCE_CODES",
     "MAINTENANCE_LEAF_IDS",
     "MAINTENANCE_LEAVES_BY_TARGET",
+    "MAINTENANCE_WRITE_LEAVES_BY_TARGET",
     "MAINTENANCE_REASON_CODES",
     "MAINTENANCE_STATUSES",
     "MAINTENANCE_STEP_IDS",

@@ -69,6 +69,7 @@ class MaintenanceWriteLock:
             self._thread_lock = _THREAD_LOCKS.setdefault(self._thread_key, threading.Lock())
         self._handle: Any = None
         self._held = False
+        self._owner_thread_id: int | None = None
 
     @property
     def lock_name(self) -> str:
@@ -98,6 +99,7 @@ class MaintenanceWriteLock:
                 try:
                     self._try_os_lock()
                     self._held = True
+                    self._owner_thread_id = threading.get_ident()
                     return
                 except OSError:
                     self._thread_lock.release()
@@ -149,6 +151,8 @@ class MaintenanceWriteLock:
         """释放 OS 句柄和线程锁；重复释放安全无副作用。"""
         if not self._held:
             return
+        if self._owner_thread_id != threading.get_ident():
+            raise MaintenanceLockError("维护锁只能由持有线程释放")
         handle, self._handle = self._handle, None
         try:
             if handle is not None:
@@ -159,7 +163,18 @@ class MaintenanceWriteLock:
                 handle.close()
         finally:
             self._held = False
+            self._owner_thread_id = None
             self._thread_lock.release()
+
+    @property
+    def held_by_current_thread(self) -> bool:
+        """只返回当前线程是否持有锁，不暴露锁文件路径或所有者标识。"""
+        return self._held and self._owner_thread_id == threading.get_ident()
+
+    def assert_held_by_current_thread(self) -> None:
+        """校验调用方确实持有本锁，供锁内认领接口 fail-closed 使用。"""
+        if not self.held_by_current_thread:
+            raise MaintenanceLockError("维护锁必须由当前线程持有")
 
     def __enter__(self) -> "MaintenanceWriteLock":
         self.acquire()
@@ -201,23 +216,33 @@ class MaintenanceClaimCoordinator:
             _validate_id(owner_id, "owner_id")
         try:
             with self._lock.held(timeout=timeout, cancel_event=cancel_event):
-                current = self._store.load(change_id)
-                if not isinstance(current, MaintenanceChange):
-                    raise MaintenanceClaimError("维护事务不存在")
-                if current.status != "prepared" or current.task_id is not None:
-                    raise MaintenanceClaimError("维护事务不可认领")
-                try:
-                    applying = current.transition("applying", task_id=task_id)
-                except MaintenanceChangeError as error:
-                    raise MaintenanceClaimError("维护事务状态不允许认领") from error
-                self._store.save(applying)
-                return applying
+                return self.claim_held(change_id, task_id)
         except MaintenanceClaimError:
             raise
         except MaintenanceLockError:
             raise
         except Exception as error:
             raise MaintenanceClaimError("维护事务认领失败") from error
+
+    def claim_held(self, change_id: str, task_id: str) -> MaintenanceChange:
+        """在调用方已持有同一全局锁时认领，避免释放锁后再执行产生竞态。"""
+        try:
+            self._lock.assert_held_by_current_thread()
+        except MaintenanceLockError as error:
+            raise MaintenanceClaimError("维护事务认领必须在持锁线程内") from error
+        change_id = _validate_id(change_id, "change_id")
+        task_id = _validate_id(task_id, "task_id")
+        current = self._store.load(change_id)
+        if not isinstance(current, MaintenanceChange):
+            raise MaintenanceClaimError("维护事务不存在")
+        if current.status != "prepared" or current.task_id is not None:
+            raise MaintenanceClaimError("维护事务不可认领")
+        try:
+            applying = current.transition("applying", task_id=task_id)
+        except MaintenanceChangeError as error:
+            raise MaintenanceClaimError("维护事务状态不允许认领") from error
+        self._store.save(applying)
+        return applying
 
 
 MaintenanceTransactionClaimCoordinator = MaintenanceClaimCoordinator
