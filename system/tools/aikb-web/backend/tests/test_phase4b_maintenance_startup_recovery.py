@@ -122,7 +122,7 @@ class _Audit:
             transaction = self.transaction
             return MaintenanceTerminalEvidence(
                 self.evidence, transaction.change_id, transaction.target_id,
-                transaction.preview_digest, transaction.task_id,
+                transaction.before_fingerprint, transaction.after_fingerprint, transaction.task_id,
             )
         return MaintenanceTerminalEvidence(self.evidence)
 

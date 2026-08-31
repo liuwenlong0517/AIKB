@@ -83,6 +83,14 @@ class MaintenanceRecoveryGate:
             if self._blocked:
                 raise MaintenanceRecoveryGateError("维护恢复门禁仍阻断")
 
+    def block(self) -> None:
+        """以固定原因码保持启动恢复阻断，不接受自由文本。"""
+        with self._lock:
+            self._blocked = True
+            self._reason_code = "recovery_failed"
+            self._scan_complete = False
+            self._rescan_required = True
+
     @property
     def blocked(self) -> bool:
         """返回当前阻断状态。"""

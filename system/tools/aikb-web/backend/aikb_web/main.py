@@ -31,6 +31,9 @@ from aikb_web.core.windows_actions import WindowsActionsExecutor, WindowsActions
 from aikb_web.core.rule_preview import RulePreviewService, RuleServiceError
 from aikb_web.core.rule_task import RuleChangeTaskCoordinator
 from aikb_web.core.rule_transaction import RuleTransactionExecutor
+from aikb_web.core.maintenance_recovery_gate import MaintenanceRecoveryGate
+from aikb_web.core.maintenance_lock import MaintenanceWriteLock
+from aikb_web.core.maintenance_bootstrap import build_default_maintenance_recovery
 from aikb_web.platform import platform_state
 from aikb_web.platform.windows.maintenance_readonly import build_windows_readonly_adapter
 
@@ -137,6 +140,9 @@ def create_app(
     rule_task_coordinator: RuleChangeTaskCoordinator | None = None,
     maintenance_adapter: Any | None = None,
     maintenance_platform_adapter: Any | None = None,
+    maintenance_startup_recovery: Any | None = None,
+    maintenance_recovery_gate: MaintenanceRecoveryGate | None = None,
+    maintenance_write_lock: MaintenanceWriteLock | None = None,
 ) -> FastAPI:
     """创建可注入网关/任务/规则/维护适配器的 FastAPI 应用，便于契约测试和平台替换。"""
     gateway_was_default = gateway is None
@@ -167,6 +173,18 @@ def create_app(
         if rule_tasks is not None and not app.state.rule_tasks_recovered:
             rule_tasks.recover()
             app.state.rule_tasks_recovered = True
+        recovery = app.state.maintenance_startup_recovery
+        if recovery is not None and not app.state.maintenance_recovery_started:
+            try:
+                recovery.recover_all()
+            except Exception:
+                # 启动恢复失败时只阻断维护写入；只读路由和页面继续可用。
+                app.state.maintenance_recovery_error = True
+                gate = app.state.maintenance_recovery_gate
+                if callable(getattr(gate, "block", None)):
+                    gate.block()
+            finally:
+                app.state.maintenance_recovery_started = True
         if app.state.task_orchestrator is None and app.state.task_settings is not None:
             current_platform = platform_state()
             if current_platform.platform == "windows" and current_platform.supported:
@@ -249,6 +267,32 @@ def create_app(
     # 兼容已有状态接口名称；值实际是新协调器，而非 queued 即成功的 submitter。
     app.state.rule_apply_service = coordinator
     app.state.rule_tasks_recovered = False
+    injected_gate = getattr(maintenance_startup_recovery, "_gate", None)
+    injected_lock = getattr(maintenance_startup_recovery, "_lock", None)
+    if (
+        maintenance_recovery_gate is not None
+        and injected_gate is not None
+        and maintenance_recovery_gate is not injected_gate
+    ):
+        raise ValueError("维护恢复门禁依赖不一致")
+    if (
+        maintenance_write_lock is not None
+        and injected_lock is not None
+        and maintenance_write_lock is not injected_lock
+    ):
+        raise ValueError("维护恢复锁依赖不一致")
+    app.state.maintenance_startup_recovery = maintenance_startup_recovery
+    app.state.maintenance_recovery_gate = maintenance_recovery_gate or injected_gate or MaintenanceRecoveryGate()
+    app.state.maintenance_write_lock = maintenance_write_lock or injected_lock
+    if app.state.maintenance_write_lock is None and app.state.rule_preview_service is not None:
+        try:
+            app.state.maintenance_write_lock = MaintenanceWriteLock(
+                app.state.rule_preview_service._workspace_root
+            )
+        except Exception:
+            app.state.maintenance_write_lock = None
+    app.state.maintenance_recovery_started = False
+    app.state.maintenance_recovery_error = False
     # 显式注入优先；生产默认只在 Windows 且 settings 已验证时构造只读适配器。
     # 工厂只解析固定用户边界并延迟文件检查到 inspect，构造阶段不扫描、写入或
     # 创建运行材料；任何边界失败均安全降级为 None。
@@ -263,6 +307,16 @@ def create_app(
             app.state.maintenance_adapter = None
     else:
         app.state.maintenance_adapter = None
+    if app.state.maintenance_startup_recovery is None and app.state.maintenance_write_lock is not None:
+        # 默认恢复器只在已验证的 Windows 只读适配器和可信 settings 下装配；无事务
+        # 目录由工厂提交内存空扫描，依赖异常则返回 fail-closed 占位。
+        app.state.maintenance_startup_recovery = build_default_maintenance_recovery(
+            app.state.task_settings,
+            app.state.maintenance_adapter,
+            app.state.knowledge_gateway,
+            app.state.maintenance_recovery_gate,
+            app.state.maintenance_write_lock,
+        )
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:

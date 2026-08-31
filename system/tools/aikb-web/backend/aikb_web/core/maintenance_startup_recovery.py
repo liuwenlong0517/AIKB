@@ -49,7 +49,8 @@ class MaintenanceTerminalEvidence:
     state: str
     change_id: str | None = None
     target_id: str | None = None
-    preview_digest: str | None = None
+    before_fingerprint: str | None = None
+    after_fingerprint: str | None = None
     task_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -57,7 +58,7 @@ class MaintenanceTerminalEvidence:
         states = {"none", "unique_succeeded", "unique_rolled_back", "duplicate", "conflict", "binding_mismatch"}
         if self.state not in states:
             raise MaintenanceStartupRecoveryError("终态审计证据无效")
-        values = (self.change_id, self.target_id, self.preview_digest, self.task_id)
+        values = (self.change_id, self.target_id, self.before_fingerprint, self.after_fingerprint, self.task_id)
         if self.state.startswith("unique_") and not all(isinstance(item, str) and item for item in values):
             raise MaintenanceStartupRecoveryError("终态审计绑定缺失")
         if self.state.startswith("unique_"):
@@ -66,7 +67,7 @@ class MaintenanceTerminalEvidence:
                 validate_logical_id(self.task_id, "task_id")
             except Exception as error:
                 raise MaintenanceStartupRecoveryError("终态审计逻辑绑定无效") from error
-            if MAINTENANCE_TARGET_REGISTRY.get(self.target_id) is None or _SHA256_RE.fullmatch(self.preview_digest) is None:
+            if MAINTENANCE_TARGET_REGISTRY.get(self.target_id) is None or not all(_SHA256_RE.fullmatch(item) for item in (self.before_fingerprint, self.after_fingerprint)):
                 raise MaintenanceStartupRecoveryError("终态审计目标绑定无效")
         if not self.state.startswith("unique_") and any(item is not None for item in values):
             raise MaintenanceStartupRecoveryError("终态审计非唯一证据不得携带绑定")
@@ -188,7 +189,8 @@ class MaintenanceStartupRecovery:
             if evidence.state.startswith("unique_") and (
                 evidence.change_id != transaction.change_id
                 or evidence.target_id != transaction.target_id
-                or evidence.preview_digest != transaction.preview_digest
+                or evidence.before_fingerprint != transaction.before_fingerprint
+                or evidence.after_fingerprint != transaction.after_fingerprint
                 or evidence.task_id != transaction.task_id
             ):
                 self._mark_recovery(transaction)
