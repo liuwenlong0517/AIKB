@@ -48,4 +48,12 @@ describe('RuntimePage', () => {
     await waitFor(() => expect(mocks.checkpoints).toHaveBeenLastCalledWith('demo-task', { page: 2, page_size: 20 }));
     expect(await screen.findByText('cp-21')).toBeInTheDocument();
   });
+
+  it('分开展示 owner、最新作者并标记旧数据归属状态', () => {
+    mocks.list.mockReturnValue(result({ items: [{ work_id: 'legacy-task', status: 'active', ownership_mode: 'legacy-unbound', owner_agent: null, author_agent: 'claude-code', agent: 'claude-code', participant_count: 0 }], pagination: { page: 1, page_size: 20, total: 1, has_next: false } }));
+    render(<MemoryRouter initialEntries={['/runtime']}><Routes><Route path="/runtime" element={<RuntimePage />} /></Routes></MemoryRouter>);
+    expect(screen.getByText('旧数据·未认领')).toBeInTheDocument();
+    expect(screen.getByText('Owner：—')).toBeInTheDocument();
+    expect(screen.getByText('最新作者：claude-code')).toBeInTheDocument();
+  });
 });

@@ -241,7 +241,8 @@ try {
     $codexSettings = Get-Content -Raw -LiteralPath (Join-Path $codexHome 'hooks.json') | ConvertFrom-Json
     $codexSessionHook = @($codexSettings.hooks.SessionStart)[-1].hooks[0]
     $encodingRepo = Join-Path $resolvedTestRoot '中文AIKB'
-    $encodingProject = Join-Path $encodingRepo '中文项目'
+    $encodingProject = Join-Path $encodingRepo '中文项目-codex'
+    $encodingClaudeProject = Join-Path $encodingRepo '中文项目-claude'
     $encodingToolRoot = Join-Path $encodingRepo 'system\tools\aikb-mcp'
     $previousEncodingAikbHome = $env:AIKB_HOME
     $previousEncodingKnowledgeHome = $env:AIKB_KNOWLEDGE_HOME
@@ -253,6 +254,7 @@ try {
         New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'system\tools') -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $encodingRepo 'system\adapters\shared') -Force | Out-Null
         New-Item -ItemType Directory -Path $encodingProject -Force | Out-Null
+        New-Item -ItemType Directory -Path $encodingClaudeProject -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $repoRoot 'ENTRY_RULES.md') -Destination (Join-Path $encodingRepo 'ENTRY_RULES.md')
         Copy-Item -LiteralPath (Join-Path $repoRoot 'content\.aikb-knowledge.json') -Destination (Join-Path $encodingRepo 'content\.aikb-knowledge.json')
         Copy-Item -LiteralPath (Join-Path $repoRoot 'system\tools\aikb-mcp') -Destination (Join-Path $encodingRepo 'system\tools') -Recurse
@@ -262,9 +264,11 @@ try {
         $env:AIKB_KNOWLEDGE_HOME = Join-Path $encodingRepo 'content'
         Push-Location -LiteralPath $encodingToolRoot
         try {
-            $checkpointCode = "import sys; from aikb.config import Settings; from aikb.workstate import WorkStateStore; WorkStateStore(Settings.load()).checkpoint({'project_path': sys.argv[1], 'goal': sys.argv[2], 'agent': 'adapter-test', 'session_id': 'utf8'})"
-            & python -c $checkpointCode $encodingProject '编码边界验证'
-            if ($LASTEXITCODE -ne 0) { throw '无法建立 UTF-8 hook 测试状态' }
+            $checkpointCode = "import sys; from aikb.config import Settings; from aikb.workstate import WorkStateStore; WorkStateStore(Settings.load()).checkpoint({'project_path': sys.argv[1], 'goal': sys.argv[2], 'agent': sys.argv[3], 'session_id': 'utf8'})"
+            & python -c $checkpointCode $encodingProject 'Codex 编码边界验证' 'codex'
+            if ($LASTEXITCODE -ne 0) { throw '无法建立 Codex UTF-8 hook 测试状态' }
+            & python -c $checkpointCode $encodingClaudeProject 'Claude 编码边界验证' 'claude-code'
+            if ($LASTEXITCODE -ne 0) { throw '无法建立 Claude Code UTF-8 hook 测试状态' }
         }
         finally {
             Pop-Location
@@ -273,11 +277,13 @@ try {
         # 主动模拟曾把 Python GBK 输出转换为 Unicode 替换字符的冲突 Windows 默认值。
         $env:PYTHONUTF8 = '0'
         $env:PYTHONIOENCODING = 'cp936'
-        $unicodePayload = @{ cwd = $encodingProject; prompt = '中文输入' } | ConvertTo-Json -Compress
+        # Working State owner 绑定到 checkpoint 使用的精确 session_id；生命周期
+        # payload 必须携带同一值，否则安全策略会按 foreign 会话拒绝注入。
         foreach ($case in @(
-            @{ Agent = 'Codex'; Shell = 'pwsh'; Command = $codexSessionHook.command },
-            @{ Agent = 'Claude Code'; Shell = 'powershell.exe'; Command = $claudeSessionHook.command }
+            @{ Agent = 'Codex'; Project = $encodingProject; Shell = 'pwsh'; Command = $codexSessionHook.command },
+            @{ Agent = 'Claude Code'; Project = $encodingClaudeProject; Shell = 'powershell.exe'; Command = $claudeSessionHook.command }
         )) {
+            $unicodePayload = @{ cwd = $case.Project; session_id = 'utf8'; prompt = '中文输入' } | ConvertTo-Json -Compress
             $outputSegments = $unicodePayload | & $case.Shell -NoProfile -ExecutionPolicy Bypass -Command $case.Command
             if ($LASTEXITCODE -ne 0) { throw "$($case.Agent) UTF-8 hook 执行失败" }
             $response = ConvertFrom-HookResponse -OutputSegments @($outputSegments) -Agent $case.Agent
@@ -287,6 +293,22 @@ try {
             }
             if ($context.Contains([char]0xFFFD)) {
                 throw "$($case.Agent) hook 中文反馈包含 Unicode 替换字符"
+            }
+        }
+
+        # 缺失或不匹配的会话只能安全降级；即使 Agent 名称相同，也不得注入
+        # 另一会话的任务正文，防止项目级唯一任务误归属。
+        foreach ($foreignPayload in @(
+            (@{ cwd = $encodingProject; prompt = '缺失会话' } | ConvertTo-Json -Compress),
+            (@{ cwd = $encodingProject; session_id = 'other-session'; prompt = '错误会话' } | ConvertTo-Json -Compress)
+        )) {
+            $foreignResponse = $foreignPayload | & pwsh -NoProfile -ExecutionPolicy Bypass -Command $codexSessionHook.command | ConvertFrom-Json
+            $foreignContext = [string]$foreignResponse.hookSpecificOutput.additionalContext
+            if ($foreignContext -match '编码边界验证') {
+                throw '缺失或不匹配 session_id 时 hook 错误注入活动任务正文'
+            }
+            if ($foreignContext -notmatch 'binding_strength=agent\+exact-session-required') {
+                throw '缺失或不匹配 session_id 时 hook 未返回明确的安全降级提示'
             }
         }
     }

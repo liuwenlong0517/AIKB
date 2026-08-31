@@ -16,7 +16,9 @@ from typing import Mapping
 
 MAX_LINE_BYTES = 4 * 1024
 MAX_CONTENT_BYTES = 64 * 1024
-VALIDATOR_VERSION = "phase4-rules-v1"
+# 预算字段和 warning 语义在 v2 中固定；预览令牌也会绑定该版本，避免旧校验
+# 结果在规则约束升级后被误用于正式应用。
+VALIDATOR_VERSION = "phase4-rules-v2"
 
 
 class RuleValidationError(ValueError):
@@ -34,6 +36,7 @@ class RuleSpec:
     readable: bool
     writable: bool
     risk: str
+    recommended_chars: int
     max_chars: int
     required_terms: tuple[str, ...] = ()
     forbidden_terms: tuple[str, ...] = ()
@@ -47,6 +50,7 @@ class RuleValidationResult:
     valid: bool
     normalized_content: str
     errors: tuple[str, ...]
+    warnings: tuple[str, ...]
     char_count: int
     byte_count: int
     line_count: int
@@ -58,6 +62,7 @@ class RuleValidationResult:
             "rule_id": self.rule_id,
             "valid": self.valid,
             "errors": list(self.errors),
+            "warnings": list(self.warnings),
             "char_count": self.char_count,
             "byte_count": self.byte_count,
             "line_count": self.line_count,
@@ -151,19 +156,19 @@ _AUXILIARY_CONSTRAINTS: Mapping[str, tuple[int, tuple[str, ...], tuple[str, ...]
 # 该映射是唯一静态规则注册表。新增可写规则必须同时更新验证器、文档和回归测试。
 _RULES: Mapping[str, RuleSpec] = {
     "entry": RuleSpec(
-        "entry", "ENTRY_RULES.md", "入口规则", "Agent 接入引导，只提供审阅", True, False, "high", 800,
+        "entry", "ENTRY_RULES.md", "入口规则", "Agent 接入引导，只提供审阅", True, False, "high", 800, 1200,
         _ROLE_REQUIREMENTS["entry"], _FORBIDDEN_TERMS["entry"],
     ),
     "user": RuleSpec(
-        "user", "system/rules/USER_RULES.md", "个人使用规则", "跨 Agent 的个人偏好，首批唯一可修改规则", True, True, "high", 800,
+        "user", "system/rules/USER_RULES.md", "个人使用规则", "跨 Agent 的个人偏好，首批唯一可修改规则", True, True, "high", 1000, 1600,
         _ROLE_REQUIREMENTS["user"], _FORBIDDEN_TERMS["user"],
     ),
     "agent": RuleSpec(
-        "agent", "system/rules/AI_RULES.md", "AIKB Agent 规则", "AIKB 工作协议，只提供审阅", True, False, "high", 2100,
+        "agent", "system/rules/AI_RULES.md", "AIKB Agent 规则", "AIKB 工作协议，只提供审阅", True, False, "high", 6000, 10000,
         _ROLE_REQUIREMENTS["agent"], _FORBIDDEN_TERMS["agent"],
     ),
     "contributing": RuleSpec(
-        "contributing", "system/rules/CONTRIBUTING.md", "贡献规则", "正式知识贡献规范，只提供审阅", True, False, "high", 3200,
+        "contributing", "system/rules/CONTRIBUTING.md", "贡献规则", "正式知识贡献规范，只提供审阅", True, False, "high", 9000, 14000,
         _ROLE_REQUIREMENTS["contributing"], _FORBIDDEN_TERMS["contributing"],
     ),
 }
@@ -240,14 +245,17 @@ def validate_content(rule_id: str, raw: str | bytes) -> RuleValidationResult:
     except (TypeError, ValueError, RuleValidationError) as exc:
         message = str(exc) or "规则正文无效"
         return RuleValidationResult(
-            rule_id, False, "", (message,), 0, 0, 0, hashlib.sha256(data).hexdigest()
+            rule_id, False, "", (message,), (), 0, 0, 0, hashlib.sha256(data).hexdigest()
         )
 
     errors: list[str] = []
+    warnings: list[str] = []
     char_count = len(normalized)
     byte_count = len(normalized.encode("utf-8"))
     if char_count > spec.max_chars:
         errors.append(f"核心规则超过字符预算：{spec.relative_path} = {char_count} > {spec.max_chars}")
+    elif char_count > spec.recommended_chars:
+        warnings.append(f"核心规则超过推荐字符预算：{spec.relative_path} = {char_count} > {spec.recommended_chars}")
     for required in spec.required_terms:
         if required not in normalized:
             errors.append(f"{spec.relative_path} 缺少职责闭环：{required}")
@@ -260,7 +268,7 @@ def validate_content(rule_id: str, raw: str | bytes) -> RuleValidationResult:
             break
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     return RuleValidationResult(
-        rule_id, not errors, normalized, tuple(errors), char_count, byte_count,
+        rule_id, not errors, normalized, tuple(errors), tuple(warnings), char_count, byte_count,
         normalized.count("\n") + 1, digest,
     )
 
@@ -275,7 +283,7 @@ def validate_rule_file(rule_id: str, file_path: Path) -> RuleValidationResult:
         raw = path.read_bytes()
     except (OSError, RuleValidationError) as exc:
         return RuleValidationResult(
-            rule_id, False, "", (str(exc),), 0, 0, 0, hashlib.sha256(b"").hexdigest()
+            rule_id, False, "", (str(exc),), (), 0, 0, 0, hashlib.sha256(b"").hexdigest()
         )
     return validate_content(rule_id, raw)
 
@@ -306,7 +314,7 @@ def validate_auxiliary_file(relative_path: str, file_path: Path) -> RuleValidati
         normalized = _decode_and_normalize(raw)
     except (OSError, RuleValidationError) as exc:
         return RuleValidationResult(
-            relative_path, False, "", (str(exc),), 0, 0, 0, hashlib.sha256(b"").hexdigest()
+            relative_path, False, "", (str(exc),), (), 0, 0, 0, hashlib.sha256(b"").hexdigest()
         )
     errors: list[str] = []
     if len(normalized) > max_chars:
@@ -321,7 +329,7 @@ def validate_auxiliary_file(relative_path: str, file_path: Path) -> RuleValidati
         errors.append(f"{relative_path} 不得包含机器绝对路径")
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     return RuleValidationResult(
-        relative_path, not errors, normalized, tuple(errors), len(normalized),
+        relative_path, not errors, normalized, tuple(errors), (), len(normalized),
         len(normalized.encode("utf-8")), normalized.count("\n") + 1, digest,
     )
 
@@ -342,5 +350,5 @@ def validate_candidate_file(rule_id: str, candidate_file: Path) -> RuleValidatio
     """执行候选覆盖校验；候选只读，正式规则目标不会被触碰。"""
     spec = get_rule(rule_id)
     if not spec.writable:
-        return RuleValidationResult(rule_id, False, "", ("该规则只读，不允许候选覆盖",), 0, 0, 0, hashlib.sha256(b"").hexdigest())
+        return RuleValidationResult(rule_id, False, "", ("该规则只读，不允许候选覆盖",), (), 0, 0, 0, hashlib.sha256(b"").hexdigest())
     return validate_rule_file(rule_id, candidate_file)

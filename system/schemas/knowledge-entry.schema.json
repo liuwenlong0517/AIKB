@@ -13,6 +13,51 @@
     "last_verified": {"type": ["string", "null"]},
     "review_when": {"type": ["string", "array"]},
     "supersedes": {"type": "array", "items": {"type": "string", "pattern": "^aikb:"}},
+    "governance_version": {"type": "integer", "enum": [2]},
+    "change_class": {"enum": ["factual-update", "operational-solution", "decision-record", "decision-proposal", "supersession", "taxonomy-change", "sensitive-change", "candidate"]},
+    "authority": {"type": "string", "minLength": 1},
+    "approval_status": {"enum": ["approved", "pending", "rejected", "not-required"]},
+    "approved_by": {"type": "string", "minLength": 1},
+    "approved_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "preparer": {"type": "string", "minLength": 1},
+    "reviewer": {"type": "string", "minLength": 1},
+    "reviewed_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind", "ref", "result", "date"],
+        "properties": {
+          "kind": {"enum": ["command", "test", "url", "commit", "file", "user-confirmation"]},
+          "ref": {"type": "string", "minLength": 1},
+          "result": {"type": "string", "minLength": 1},
+          "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}
+        },
+        "allOf": [
+          {
+            "if": {"required": ["kind"], "properties": {"kind": {"const": "commit"}}},
+            "then": {"properties": {"ref": {"pattern": "^[0-9a-fA-F]{7,40}$"}}}
+          },
+          {
+            "if": {"required": ["kind"], "properties": {"kind": {"const": "file"}}},
+            "then": {"properties": {"ref": {"pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))(?:content/|[^:]+$)"}}}
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    "duplicate_check_statuses": {
+      "type": "array",
+      "items": {"enum": ["verified", "candidate", "deprecated"]},
+      "uniqueItems": true
+    },
+    "owner": {"type": "string", "minLength": 1},
+    "captured_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "next_action_due": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "review_state": {"enum": ["open", "in-review", "blocked", "ready", "accepted", "rejected", "closed"]},
+    "blocking_reason": {"type": "string"},
+    "possible_duplicates": {"type": "array", "items": {"type": "string", "pattern": "^aikb:"}, "uniqueItems": true},
     "relations": {
       "type": "array",
       "items": {
@@ -30,6 +75,62 @@
     {
       "if": {"properties": {"status": {"const": "candidate"}}},
       "else": {"required": ["applicable_versions", "last_verified", "review_when"]}
+    },
+    {
+      "if": {"required": ["governance_version"], "properties": {"governance_version": {"const": 2}}},
+      "then": {
+        "required": ["change_class", "authority", "preparer", "evidence"],
+        "properties": {
+          "evidence": {"minItems": 1},
+          "preparer": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "if": {"required": ["governance_version", "status"], "properties": {"governance_version": {"const": 2}, "status": {"enum": ["verified", "deprecated"]}}},
+      "then": {"required": ["reviewer", "reviewed_at"]}
+    },
+    {
+      "if": {"required": ["governance_version", "status", "review_state"], "properties": {"governance_version": {"const": 2}, "status": {"const": "candidate"}, "review_state": {"enum": ["accepted", "rejected", "closed"]}}},
+      "then": {"required": ["reviewer", "reviewed_at"]}
+    },
+    {
+      "if": {"required": ["governance_version", "type"], "properties": {"governance_version": {"const": 2}, "type": {"const": "decision"}}},
+      "then": {"properties": {"change_class": {"enum": ["decision-record", "decision-proposal"]}}}
+    },
+    {
+      "if": {"required": ["governance_version", "type"], "properties": {"governance_version": {"const": 2}, "type": {"const": "candidate"}}},
+      "then": {"required": ["change_class"], "properties": {"change_class": {"enum": ["candidate", "decision-proposal"]}}}
+    },
+    {
+      "if": {"required": ["governance_version", "supersedes"], "properties": {"governance_version": {"const": 2}, "supersedes": {"minItems": 1}}},
+      "then": {"required": ["change_class"], "properties": {"change_class": {"const": "supersession"}}}
+    },
+    {
+      "if": {"required": ["governance_version", "change_class"], "properties": {"governance_version": {"const": 2}, "change_class": {"enum": ["decision-record", "decision-proposal", "supersession", "taxonomy-change", "sensitive-change"]}}},
+      "then": {
+        "required": ["authority", "approval_status", "preparer"],
+        "properties": {"approval_status": {"enum": ["approved", "pending", "rejected"]}}
+      }
+    },
+    {
+      "if": {"required": ["governance_version", "status", "change_class"], "properties": {"governance_version": {"const": 2}, "status": {"const": "verified"}, "change_class": {"enum": ["decision-record", "decision-proposal", "supersession", "taxonomy-change", "sensitive-change"]}}},
+      "then": {"properties": {"approval_status": {"const": "approved"}, "approved_by": {"type": "string", "minLength": 1}, "approved_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}}, "required": ["approved_by", "approved_at"]}
+    },
+    {
+      "if": {"required": ["governance_version", "change_class"], "properties": {"governance_version": {"const": 2}, "change_class": {"const": "decision-proposal"}}},
+      "then": {"required": ["status", "type"], "properties": {"status": {"const": "candidate"}, "type": {"const": "candidate"}}}
+    },
+    {
+      "if": {"required": ["governance_version", "change_class"], "properties": {"governance_version": {"const": 2}, "change_class": {"const": "supersession"}}},
+      "then": {"required": ["duplicate_check_statuses"], "properties": {"duplicate_check_statuses": {"contains": {"const": "verified"}, "minItems": 3}}}
+    },
+    {
+      "if": {"required": ["status", "governance_version"], "properties": {"status": {"const": "candidate"}, "governance_version": {"const": 2}}},
+      "then": {
+        "required": ["owner", "captured_at", "next_action_due", "review_state"],
+        "anyOf": [{"required": ["blocking_reason"]}, {"required": ["possible_duplicates"]}]
+      }
     }
   ],
   "additionalProperties": true

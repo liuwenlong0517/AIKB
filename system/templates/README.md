@@ -2,6 +2,11 @@
 
 本目录提供 AIKB 接入和内容写入模板。新增内容时选择最接近的模板，不加载无关模板。
 
+知识条目模板以治理 v2 为默认：正式新增或修订应声明 `change_class`、`authority`、
+结构化 `evidence` 及必要的独立审查/审批字段；Inbox candidate 还应维护 owner、
+captured_at、next_action_due 和 review_state。无治理版本的既有 legacy 条目仍可被
+索引和 Web 只读读取，但不代表已经完成 v2 审查；迁移时需补齐字段并保留可复核依据。
+
 正式知识模板遵循 `system/schemas/knowledge-entry.schema.json`，必须为条目分配长期稳定的 `id`、受控 `type` 和显式 `relations`。文件移动时不得修改稳定 ID。
 
 ## 模板索引

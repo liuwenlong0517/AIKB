@@ -193,10 +193,13 @@
 
 ## 场景十六：跨 Agent 工作状态继承
 
-操作：Codex 为未完成任务写入检查点，随后由 Claude Code 在同一项目中执行互补检查。
+操作：Codex 为未完成任务写入检查点，随后由 Claude Code 在同一项目执行不相关任务，再分别验证未授权、显式交接和撤销路径。
 
-- [ ] 两个 Agent 使用同一个 `work_id`，分别记录自己的 `agent`、`session_id` 和 `role`。
-- [ ] Claude Code 只加载紧凑恢复胶囊，并在继续前复核 Git 分支、revision 和工作区。
+- [ ] Codex 的 `owner_agent`/`owner_session_id` 与检查点 `author_agent`/`author_session_id` 分开；最近作者不会覆盖 owner。
+- [ ] Claude Code 的不相关 SessionStart 不注入 Codex 的任务正文，Stop 不因 Codex 的陈旧检查点阻断，并记录 `foreign_active_work`。
+- [ ] Claude Code 只有在 owner 通过 `authorize_work_participant` 以 `shared` 或 `handed-off` 登记精确 Agent/Hook `session_id` 后，才加载紧凑恢复胶囊并追加检查点；继续前复核 Git 分支、revision 和工作区。
+- [ ] owner 使用 `mode=revoke` 撤销精确 participant 后，该会话不再注入或阻断；owner 仍可继续。
+- [ ] 旧格式没有 owner 时显示 `legacy-unbound`，不能自动恢复或阻断；显式 `claim_work_state` 后才建立归属。
 - [ ] 工作状态没有进入 `content/`、`CATALOG.md` 或 Git。
 - [ ] 检查点没有聊天全文、隐藏推理、密钥、原始日志或完整 diff。
 
@@ -209,12 +212,25 @@
 - [ ] Git 状态未变化时 Stop hook 不追加模型上下文或检查点。
 - [ ] 状态变化且检查点陈旧时 Stop hook 最多阻止一次，并要求写紧凑检查点。
 - [ ] `stop_hook_active` 为真时不会形成循环。
-- [ ] SessionStart 只有唯一活动任务时才注入不超过预算的恢复胶囊；多个候选时不自动注入。
+- [ ] SessionStart 只有当前 Agent/精确 Hook `session_id` 授权的唯一活动任务时才注入不超过预算的恢复胶囊；多个候选或 foreign 任务时不自动注入。
+- [ ] 每次 SessionStart 都报告 candidate 总数，并突出 overdue、unowned、声明可能重复和 closed-still-in-inbox；不自动删除、晋升或关闭。
 - [ ] SessionEnd 只做轻量收尾，不解析 transcript 或调用模型总结。
 
 通过标准：自动保护只在必要时增加 Token，不依赖不稳定的聊天记录格式。
 
-## 场景十八：新 Agent 适配器扩展
+## 场景十八：知识治理 v2 与 legacy 兼容
+
+操作：分别准备合法 v2 正式条目、`decision-proposal` candidate、缺少结构化 evidence 的条目、未审批的高影响条目和无治理字段的 legacy 条目，运行 `validate`、`rebuild`、`review_knowledge` 和只读 Web 查询。
+
+- [ ] v2 正式条目具有 `change_class`、`authority`、结构化 `evidence`、`preparer` 和独立 `reviewer`；自由文本不能冒充 evidence。
+- [ ] `decision-proposal` 固定为 `type=candidate`、`status=candidate`，不能通过“常规”标记绕过确认；高影响条目未 `approved` 不得变成 `verified`。
+- [ ] v2 Inbox candidate 具有 `owner`、`captured_at`、`next_action_due`、`review_state`，并填写 `blocking_reason` 或 `possible_duplicates`；review 报告能标出逾期、无 owner、重复声明和已结案仍在 Inbox。
+- [ ] `review_when` 仍由人按条件人工判断，系统只提醒，不自动晋升、删除或关闭。
+- [ ] 无治理版本的 legacy 条目仍可通过 `validate`/`rebuild` 并可由 Web 读取 verified 内容；报告明确其 legacy 状态，不能伪装成已完成 v2 审查。
+
+通过标准：v2 的证据、审批和 Inbox 生命周期形成可检查门禁，同时不破坏 legacy 索引和 Web 只读兼容。
+
+## 场景十九：新 Agent 适配器扩展
 
 操作：在隔离测试目录增加一个包含 `adapter.json` 的虚构 Agent 适配器。
 

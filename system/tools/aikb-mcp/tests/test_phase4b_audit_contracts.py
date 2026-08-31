@@ -13,7 +13,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 if str(TOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOL_ROOT))
 
-from aikb.audit import AuditStore, combine_invocations, describe_action, describe_result, web_audit_item
+from aikb.audit import AuditStore, combine_invocations, describe_action, describe_result, summarize_tool_action, summarize_tool_result, web_audit_item
 from aikb.config import Settings
 
 
@@ -155,6 +155,43 @@ class Phase4BAuditContractTests(unittest.TestCase):
             "维护失败",
         )
         self.assertNotIn("private", action_text)
+
+    def test_work_ownership_audit_descriptions_are_safe_and_explanatory(self) -> None:
+        """归属治理审计只保留工作 ID/模式，Web 读模型不携带授权 payload。"""
+        action = summarize_tool_action(
+            "authorize_work_participant",
+            {
+                "work_id": "task-1", "mode": "handed-off",
+                "participant_agent": "claude-code", "participant_session_id": "private-session",
+            },
+        )
+        self.assertEqual(action, {"work_id": "task-1", "mode": "handed-off"})
+        self.assertEqual(describe_action("authorize_work_participant", action), "交接工作状态给参与会话：task-1；模式 handed-off")
+        self.assertEqual(describe_result("authorize_work_participant", "succeeded", "handoff_completed", {}), "工作状态已交接给授权会话")
+        self.assertEqual(describe_action("claim_work_state", {"work_id": "task-1"}), "显式认领旧工作状态：task-1")
+        self.assertEqual(describe_result("session-start", "noop", "foreign_active_work", {"candidate_count": 1}), "检测到其他会话的活动任务，未自动接管")
+        self.assertEqual(summarize_tool_result("authorize_work_participant", {"work_id": "task-1", "ownership_mode": "handed-off"}), ("handoff_completed", {"work_id": "task-1"}))
+        self.assertEqual(summarize_tool_result("authorize_work_participant", {"work_id": "task-1", "revoked": False, "ownership_mode": "shared"}), ("participant_revoke_noop", {"work_id": "task-1"}))
+
+    def test_combine_invocations_preserves_hook_outcome_semantics(self) -> None:
+        """聚合后 foreign_active_work 保持 outcome_code，而不是伪造成 operation。"""
+        items = combine_invocations([
+            {
+                "record_type": "invocation_started", "invocation_id": "invoke-foreign", "event_id": "event-start",
+                "timestamp": "2026-09-01T00:00:00+08:00", "operation": "session-start", "source": "hook",
+                "agent": "claude-code", "action": {"event": "session-start"}, "status": "started",
+            },
+            {
+                "record_type": "invocation_finished", "invocation_id": "invoke-foreign", "event_id": "event-finish",
+                "timestamp": "2026-09-01T00:00:01+08:00", "operation": "session-start", "source": "hook",
+                "agent": "claude-code", "status": "noop", "outcome_code": "foreign_active_work",
+                "result_summary": {"candidate_count": 1},
+            },
+        ])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["operation"], "session-start")
+        self.assertEqual(items[0]["outcome_code"], "foreign_active_work")
+        self.assertEqual(items[0]["result_text"], "检测到其他会话的活动任务，未自动接管")
 
     def test_web_projection_drops_invalid_target_hash_and_boolean(self) -> None:
         """读取历史脏记录时，Web 投影仍只公开静态目标、合法摘要和真 bool。"""

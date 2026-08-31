@@ -119,6 +119,26 @@ class RuntimeAuditApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/audit/events", params={"change_id": r"C:\private\change"}).status_code, 400)
         self.assertEqual(self.client.get("/api/v1/audit/events", params={"change_id": "scope:change"}).status_code, 400)
 
+    def test_audit_web_projection_keeps_foreign_work_as_outcome(self) -> None:
+        """Web API 保持 Hook operation=session-start、outcome_code=foreign_active_work。"""
+        gateway = FakeGateway()
+        gateway.web_audit_query = lambda **kwargs: {
+            "items": [{
+                "invocation_id": "invoke-foreign", "operation": "session-start",
+                "outcome_code": "foreign_active_work", "status": "noop", "source": "hook",
+                "action_text": "处理生命周期事件：session-start",
+                "result_text": "检测到其他会话的活动任务，未自动接管",
+            }],
+            "summary": {"count": 1, "damaged_count": 0},
+            "pagination": {"total": 1},
+        }
+        response = TestClient(create_app(gateway)).get("/api/v1/audit/events")
+        self.assertEqual(response.status_code, 200)
+        event = response.json()["data"]["items"][0]
+        self.assertEqual(event["operation"], "session-start")
+        self.assertEqual(event["outcome_code"], "foreign_active_work")
+        self.assertEqual(event["result_text"], "检测到其他会话的活动任务，未自动接管")
+
     def test_invalid_ids_and_parameter_errors_are_structured(self) -> None:
         for path in (
             "/api/v1/runtime/working-states/C:%5Cprivate",

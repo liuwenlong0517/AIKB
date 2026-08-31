@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -217,6 +218,50 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(report["candidates"][0]["id"], "aikb:experience:inbox:candidate")
         self.assertEqual(len(report["review_items"]), 2)
         self.assertTrue(all(item["review_when"] for item in report["review_items"]))
+
+    def test_review_report_summarizes_v2_inbox_without_leaking_free_text(self) -> None:
+        """确认 v2 Inbox 的逾期、归属、重复和结案计数可注入日期且字段有界。"""
+        inbox = self.fixture.settings.content_root / "experience" / "inbox"
+        base = {
+            "type": "candidate", "status": "candidate", "governance_version": 2,
+            "change_class": "candidate", "authority": "test fixture", "preparer": "agent-a",
+            "tags": ["candidate"], "relations": [], "captured_at": "2026-08-20",
+            "evidence": [{"kind": "test", "ref": "test_core.py", "result": "通过", "date": "2026-08-20"}],
+            "blocking_reason": "自由文本不应出现在报告中",
+        }
+        overdue = dict(base)
+        overdue.update({
+            "id": "aikb:experience:inbox:overdue", "owner": "agent-a", "next_action_due": "2026-08-21",
+            "review_state": "open", "possible_duplicates": ["aikb:knowledge:engineering:cache"],
+        })
+        closed = dict(base)
+        closed.update({
+            "id": "aikb:experience:inbox:closed", "owner": "agent-b", "next_action_due": "2026-08-22",
+            "review_state": "closed", "possible_duplicates": [], "reviewer": "reviewer-b",
+            "reviewed_at": "2026-08-23",
+        })
+        for name, metadata in (("overdue.md", overdue), ("closed.md", closed)):
+            (inbox / name).write_text(
+                render_frontmatter(metadata) + "\n\n# 候选\n\n待人工审查。\n", encoding="utf-8"
+            )
+
+        report = review_report(self.fixture.settings, as_of="2026-09-01")
+        self.assertTrue(report["valid"], report["errors"])
+        self.assertEqual(report["summary"], {
+            "as_of": "2026-09-01", "candidate_count": 3, "overdue_count": 1,
+            "unowned_count": 1, "duplicate_declared_count": 1,
+            "closed_still_in_inbox_count": 1, "legacy_candidate_count": 1,
+        })
+        v2 = next(item for item in report["candidates"] if item["id"].endswith(":overdue"))
+        self.assertEqual(v2["owner"], "agent-a")
+        self.assertEqual(v2["next_action_due"], "2026-08-21")
+        self.assertEqual(v2["review_state"], "open")
+        self.assertEqual(v2["possible_duplicates"], ["aikb:knowledge:engineering:cache"])
+        self.assertNotIn("evidence", v2)
+        self.assertNotIn("blocking_reason", v2)
+        legacy = next(item for item in report["candidates"] if item["id"].endswith(":candidate"))
+        self.assertNotIn("owner", legacy)
+        self.assertNotIn("possible_duplicates", legacy)
 
     def test_missing_front_matter_is_reported_instead_of_skipped(self) -> None:
         """确认分类目录中的无 Front Matter Markdown 会使元数据校验失败。"""
@@ -506,7 +551,7 @@ class WorkStateTests(unittest.TestCase):
         self.fixture.close()
 
     def test_cross_agent_checkpoint_redaction_resume_and_close(self) -> None:
-        """确认跨 Agent 检查点会脱敏、可恢复并能移动到归档。"""
+        """确认跨 Agent 必须显式交接，且续写不会覆盖原 owner。"""
         first = self.store.checkpoint(
             {
                 "project_path": str(self.fixture.root),
@@ -519,6 +564,24 @@ class WorkStateTests(unittest.TestCase):
             }
         )
         self.assertTrue(first["redaction_applied"])
+        with self.assertRaises(PermissionError):
+            self.store.checkpoint(
+                {
+                    "project_path": str(self.fixture.root),
+                    "work_id": first["work_id"],
+                    "agent": "claude-code",
+                    "session_id": "claude-session",
+                    "role": "verify",
+                }
+            )
+        self.store.handoff(
+            first["work_id"], owner_agent="codex", owner_session_id="codex-session",
+            participant_agent="claude-code", participant_session_id="claude-session",
+        )
+        delegated = handle_hook(
+            "claude-code", "session-start", {"cwd": str(self.fixture.root), "session_id": "claude-session"}, self.fixture.settings
+        )
+        self.assertIn("实现知识检索", delegated["hookSpecificOutput"]["additionalContext"])
         second = self.store.checkpoint(
             {
                 "project_path": str(self.fixture.root),
@@ -533,10 +596,14 @@ class WorkStateTests(unittest.TestCase):
         state = self.store.get(project_path=str(self.fixture.root))
         self.assertTrue(state["unique"])
         self.assertEqual(state["items"][0]["agent"], "claude-code")
+        self.assertEqual(state["items"][0]["owner_agent"], "codex")
+        self.assertEqual(state["items"][0]["owner_session_id"], "codex-session")
+        self.assertEqual(state["items"][0]["author_agent"], "claude-code")
+        self.assertEqual(state["items"][0]["ownership_mode"], "handed-off")
         self.assertLessEqual(len(state["items"][0]["resume_capsule"]), 1500)
         checkpoint_dir = Path(second["path"]).parent / "checkpoints"
         self.assertEqual(len(list(checkpoint_dir.glob("*.md"))), 2)
-        closed = self.store.close(first["work_id"], status="completed", agent="codex", session_id="close-session")
+        closed = self.store.close(first["work_id"], status="completed", agent="codex", session_id="codex-session")
         self.assertEqual(closed["status"], "completed")
         archived_work = parse_markdown(Path(closed["archive_path"]) / "work.md")
         self.assertEqual(archived_work.metadata["status"], "completed")
@@ -551,7 +618,7 @@ class WorkStateTests(unittest.TestCase):
         created = self.store.checkpoint(
             {"project_path": str(self.fixture.root), "goal": "归档 ID 防重用", "agent": "codex", "session_id": "s1"}
         )
-        closed = self.store.close(created["work_id"], status="completed", agent="codex", session_id="close")
+        closed = self.store.close(created["work_id"], status="completed", agent="codex", session_id="s1")
 
         with self.assertRaisesRegex(FileExistsError, "已存在于归档"):
             self.store.checkpoint(
@@ -566,6 +633,72 @@ class WorkStateTests(unittest.TestCase):
 
         self.assertEqual(len(list((self.fixture.settings.workspace_root / "active").rglob("work.md"))), 0)
         self.assertTrue((Path(closed["archive_path"]) / "work.md").exists())
+
+    def test_legacy_work_requires_explicit_claim_before_hook_or_checkpoint(self) -> None:
+        """确认旧格式不会猜 owner，认领后才恢复自动路由。"""
+        created = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "旧状态迁移", "agent": "codex", "session_id": "old"}
+        )
+        work_path = Path(created["path"])
+        legacy = work_path.read_text(encoding="utf-8")
+        legacy = re.sub(r'^work_schema_version:.*\n|^author_agent:.*\n|^author_session_id:.*\n|^author_role:.*\n|^owner_agent:.*\n|^owner_session_id:.*\n|^ownership_mode:.*\n|^participants: \[\]\n', '', legacy, flags=re.MULTILINE)
+        work_path.write_text(legacy, encoding="utf-8")
+        self.store.rebuild_index()
+        state = self.store.get(project_path=str(self.fixture.root))
+        self.assertEqual(state["items"][0]["ownership_mode"], "legacy-unbound")
+        foreign_output = handle_hook("codex", "session-start", {"cwd": str(self.fixture.root), "session_id": "old"}, self.fixture.settings)
+        self.assertNotIn("旧状态迁移", json.dumps(foreign_output, ensure_ascii=False))
+        with self.assertRaises(PermissionError):
+            self.store.checkpoint({"project_path": str(self.fixture.root), "work_id": created["work_id"], "agent": "codex", "session_id": "old"})
+        self.store.claim(created["work_id"], agent="codex", session_id="old")
+        resumed = handle_hook("codex", "session-start", {"cwd": str(self.fixture.root), "session_id": "old"}, self.fixture.settings)
+        self.assertIn("旧状态迁移", resumed["hookSpecificOutput"]["additionalContext"])
+
+    def test_owner_can_revoke_participants_precisely_and_hook_then_blocks(self) -> None:
+        """确认撤销只影响精确 participant，最后一项移除后恢复 session-bound。"""
+        created = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "撤销参与者", "agent": "codex", "session_id": "owner"}
+        )
+        work_id = created["work_id"]
+        self.store.authorize_participant(
+            work_id, owner_agent="codex", owner_session_id="owner",
+            participant_agent="claude-code", participant_session_id="claude-1",
+        )
+        self.store.authorize_participant(
+            work_id, owner_agent="codex", owner_session_id="owner",
+            participant_agent="claude-code", participant_session_id="claude-2",
+        )
+        with self.assertRaises(PermissionError):
+            self.store.revoke_participant(
+                work_id, owner_agent="claude-code", owner_session_id="claude-1",
+                participant_agent="claude-code", participant_session_id="claude-2",
+            )
+        revoked = self.store.revoke_participant(
+            work_id, owner_agent="codex", owner_session_id="owner",
+            participant_agent="claude-code", participant_session_id="claude-1",
+        )
+        self.assertTrue(revoked["revoked"])
+        self.assertEqual(revoked["owner_agent"], "codex")
+        self.assertEqual(revoked["ownership_mode"], "shared")
+        remaining = self.store.get(work_id=work_id)["items"][0]["participants"]
+        self.assertEqual([(item["agent"], item["session_id"]) for item in remaining], [("claude-code", "claude-2")])
+        repeated = self.store.revoke_participant(
+            work_id, owner_agent="codex", owner_session_id="owner",
+            participant_agent="claude-code", participant_session_id="claude-1",
+        )
+        self.assertFalse(repeated["revoked"])
+        self.assertEqual(repeated["owner_session_id"], "owner")
+        self.store.revoke_participant(
+            work_id, owner_agent="codex", owner_session_id="owner",
+            participant_agent="claude-code", participant_session_id="claude-2",
+        )
+        final = self.store.get(work_id=work_id)["items"][0]
+        self.assertEqual(final["ownership_mode"], "session-bound")
+        self.assertEqual(final["participants"], [])
+        foreign = handle_hook(
+            "claude-code", "session-start", {"cwd": str(self.fixture.root), "session_id": "claude-2"}, self.fixture.settings
+        )
+        self.assertNotIn("撤销参与者", json.dumps(foreign, ensure_ascii=False))
 
     def test_rebuild_index_keeps_active_copy_when_ids_collide(self) -> None:
         """确认异常重复数据重建索引时活动副本优先于归档副本。"""
@@ -604,14 +737,21 @@ class WorkStateTests(unittest.TestCase):
         self.store.checkpoint(
             {"project_path": str(self.fixture.root), "goal": "恢复测试", "agent": "future-agent", "session_id": "s1"}
         )
-        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root)}, self.fixture.settings)
+        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root), "session_id": "s1"}, self.fixture.settings)
         context = output["hookSpecificOutput"]["additionalContext"]
         self.assertIn("恢复测试", context)
+        self.assertIn("session_id=s1", context)
         self.assertLessEqual(len(context), 1800)
-        handle_hook("future-agent", "stop", {"cwd": str(self.fixture.root), "stop_hook_active": True}, self.fixture.settings)
-        handle_hook("future-agent", "pre-compact", {"cwd": str(self.fixture.root)}, self.fixture.settings)
-        handle_hook("future-agent", "session-end", {"cwd": str(self.fixture.root)}, self.fixture.settings)
-        handle_hook("future-agent", "session-start", {}, self.fixture.settings)
+        mismatched = handle_hook("future-agent", "session-start", {"cwd": str(self.fixture.root), "session_id": "other-session"}, self.fixture.settings)
+        self.assertNotIn("恢复测试", json.dumps(mismatched, ensure_ascii=False))
+        self.assertIn("binding_strength=agent+exact-session-required", json.dumps(mismatched, ensure_ascii=False))
+        mismatch_events = combine_invocations(AuditStore(self.fixture.settings).read_events()["events"])
+        self.assertTrue(any(item.get("outcome_code") == "foreign_active_work" for item in mismatch_events))
+        handle_hook("future-agent", "stop", {"cwd": str(self.fixture.root), "session_id": "s1", "stop_hook_active": True}, self.fixture.settings)
+        handle_hook("future-agent", "pre-compact", {"cwd": str(self.fixture.root), "session_id": "s1"}, self.fixture.settings)
+        handle_hook("future-agent", "session-end", {"cwd": str(self.fixture.root), "session_id": "s1"}, self.fixture.settings)
+        no_project_start = handle_hook("future-agent", "session-start", {}, self.fixture.settings)
+        self.assertIn("candidate 总数 1", no_project_start["hookSpecificOutput"]["additionalContext"])
         items = combine_invocations(AuditStore(self.fixture.settings).read_events()["events"])
         outcomes = {item.get("outcome_code") for item in items}
         self.assertTrue({
@@ -623,11 +763,28 @@ class WorkStateTests(unittest.TestCase):
         """确认没有活动任务时 SessionStart 仍提醒候选和 review_when 审查。"""
         output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root)}, self.fixture.settings)
         context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("未提供 session_id", context)
         self.assertIn("知识审查提醒", context)
+        self.assertIn("candidate 总数 1", context)
         self.assertIn("candidate", context)
         self.assertIn("review_when", context)
         self.assertIn("status=verified", context)
         self.assertIn("status=candidate", context)
+
+    def test_session_start_keeps_candidate_count_when_metadata_is_invalid(self) -> None:
+        """确认元数据失败时仍报告候选总数，但不把底层错误文本注入上下文。"""
+        invalid = self.fixture.settings.content_root / "experience" / "inbox" / "invalid-v2.md"
+        invalid.write_text(
+            render_frontmatter({
+                "id": "aikb:experience:inbox:invalid-v2", "type": "candidate", "status": "candidate",
+                "governance_version": 2, "tags": ["candidate"], "relations": [],
+            }) + "\n\n# 无效候选\n\n待修复。\n", encoding="utf-8"
+        )
+        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root)}, self.fixture.settings)
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("candidate 总数 2", context)
+        self.assertIn("元数据校验未通过", context)
+        self.assertNotIn("experience/inbox/invalid-v2.md", context)
 
     def test_session_start_does_not_inject_when_multiple_items_exist(self) -> None:
         """确认多个活动任务时不注入任一恢复胶囊，并留下可审计结果。"""
@@ -636,10 +793,47 @@ class WorkStateTests(unittest.TestCase):
                 {"project_path": str(self.fixture.root), "goal": goal, "agent": "future-agent", "session_id": session_id}
             )
 
-        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root)}, self.fixture.settings)
-        self.assertEqual(output, {})
+        output = handle_hook("future-agent", "SessionStart", {"cwd": str(self.fixture.root), "session_id": "foreign"}, self.fixture.settings)
+        self.assertNotIn("多候选任务一", json.dumps(output, ensure_ascii=False))
         items = combine_invocations(AuditStore(self.fixture.settings).read_events()["events"])
-        self.assertTrue(any(item.get("outcome_code") == "multiple_active_work" for item in items))
+        self.assertTrue(any(item.get("outcome_code") == "foreign_active_work" for item in items))
+
+    def test_authorized_hook_scans_beyond_limit_and_multiple_authorized_stays_ambiguous(self) -> None:
+        """确认授权过滤先覆盖完整集合，且多个授权任务仍不自动注入。"""
+        owner = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "排序靠后的合法任务", "agent": "codex", "session_id": "owner"}
+        )
+        owner_path = Path(owner["path"])
+        owner_text = owner_path.read_text(encoding="utf-8")
+        owner_text = re.sub(r'^updated_at:.*$', 'updated_at: "2000-01-01T00:00:00+00:00"', owner_text, flags=re.MULTILINE)
+        owner_path.write_text(owner_text, encoding="utf-8")
+        for index in range(21):
+            self.store.checkpoint(
+                {
+                    "project_path": str(self.fixture.root), "goal": f"外来任务-{index}",
+                    "agent": "other-agent", "session_id": f"foreign-{index}",
+                }
+            )
+        self.store.rebuild_index()
+        resumed = handle_hook(
+            "codex", "session-start", {"cwd": str(self.fixture.root), "session_id": "owner"}, self.fixture.settings
+        )
+        resumed_context = resumed["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("排序靠后的合法任务", resumed_context)
+        self.assertNotIn("外来任务-20", resumed_context)
+
+        first = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "授权候选一", "agent": "codex", "session_id": "shared-owner"}
+        )
+        self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "授权候选二", "agent": "codex", "session_id": "shared-owner"}
+        )
+        ambiguous = handle_hook(
+            "codex", "session-start", {"cwd": str(self.fixture.root), "session_id": "shared-owner"}, self.fixture.settings
+        )
+        ambiguous_context = json.dumps(ambiguous, ensure_ascii=False)
+        self.assertNotIn("授权候选一", ambiguous_context)
+        self.assertNotIn("授权候选二", ambiguous_context)
 
     def test_hook_cli_forces_utf8_with_legacy_environment(self) -> None:
         """确认旧代码页环境下 hook CLI 仍能无替换字符地往返中文。"""
@@ -651,7 +845,7 @@ class WorkStateTests(unittest.TestCase):
         environment = os.environ.copy()
         environment["PYTHONUTF8"] = "0"
         environment["PYTHONIOENCODING"] = "cp936"
-        payload = json.dumps({"cwd": str(project), "prompt": "中文输入"}, ensure_ascii=False).encode("utf-8")
+        payload = json.dumps({"cwd": str(project), "session_id": "utf8", "prompt": "中文输入"}, ensure_ascii=False).encode("utf-8")
         completed = subprocess.run(
             [
                 sys.executable,
@@ -768,7 +962,7 @@ class MCPTests(unittest.TestCase):
         )
         self.assertEqual(initialized["result"]["protocolVersion"], "2024-11-05")
         listed = self.server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        self.assertEqual(len(listed["result"]["tools"]), 6)
+        self.assertEqual(len(listed["result"]["tools"]), 8)
         called = self.server.handle(
             {
                 "jsonrpc": "2.0",
@@ -823,16 +1017,36 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(failed_item["status"], "failed")
         self.assertNotIn("must not be logged", json.dumps(loaded, ensure_ascii=False))
 
+    def test_work_write_requires_server_agent_binding(self) -> None:
+        """确认 MCP 服务不会接受 payload 自报的其他 Agent 身份。"""
+        response = self.server.handle({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {
+                "name": "checkpoint_work_state",
+                "arguments": {
+                    "project_path": str(self.fixture.root), "goal": "身份绑定",
+                    "agent": "claude-code", "session_id": "claude-session",
+                },
+            },
+        })
+        self.assertTrue(response["result"]["isError"])
+        self.assertIn("不一致", response["result"]["content"][0]["text"])
+
     def test_client_visible_budget(self) -> None:
         """确认服务说明和工具声明不会超过客户端上下文预算。"""
         self.assertLessEqual(len(SERVER_INSTRUCTIONS), 512)
-        self.assertLessEqual(len(json.dumps(TOOLS, ensure_ascii=False, separators=(",", ":"))), 4000)
+        # Working State v2 增加所有权工具；保留每个工具的安全 annotations 后将
+        # 客户端声明预算提升到 5 KiB，仍远小于常规 MCP 上下文预算。
+        self.assertLessEqual(len(json.dumps(TOOLS, ensure_ascii=False, separators=(",", ":"))), 5000)
         self.assertEqual([tool["name"] for tool in TOOLS], [
-            "search_knowledge", "review_knowledge", "read_knowledge", "get_work_state", "checkpoint_work_state", "close_work_state"
+            "search_knowledge", "review_knowledge", "read_knowledge", "get_work_state", "checkpoint_work_state",
+            "close_work_state", "claim_work_state", "authorize_work_participant",
         ])
         work_tool = next(tool for tool in TOOLS if tool["name"] == "get_work_state")
         self.assertIn("跨项目", work_tool["description"])
         self.assertIn("自行核对项目", work_tool["description"])
+        ownership_tool = next(tool for tool in TOOLS if tool["name"] == "authorize_work_participant")
+        self.assertIn("revoke", ownership_tool["inputSchema"]["properties"]["mode"]["enum"])
 
 
 if __name__ == "__main__":

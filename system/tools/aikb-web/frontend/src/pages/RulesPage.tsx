@@ -196,7 +196,9 @@ export function RulesPage() {
                 {detail && <>
                   <Space wrap className="rules-content-actions">
                     <Tag color={canEdit ? 'orange' : 'default'}>{canEdit ? '唯一可编辑规则' : '只读规则'}</Tag>
-                    <Typography.Text type="secondary">最多 {detail.max_chars.toLocaleString()} 字符</Typography.Text>
+                    <Typography.Text type="secondary">
+                      建议 {(detail.recommended_chars ?? detail.max_chars).toLocaleString()} / 最多 {detail.max_chars.toLocaleString()} 字符
+                    </Typography.Text>
                     {canEdit && !editing && <Button onClick={() => setEditing(true)}>编辑正文</Button>}
                     {canEdit && editing && <Button onClick={() => { setEditing(false); setCandidate(detail.content); setPreview(undefined); previewMutation.reset(); }}>取消编辑</Button>}
                     {canEdit && editing && <Button type="primary" disabled={!candidate || candidate === detail.content} loading={previewMutation.isPending} onClick={requestPreview}>生成完整预览</Button>}

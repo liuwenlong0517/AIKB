@@ -8,9 +8,32 @@
     "work_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
     "project_id": {"type": "string"},
     "status": {"enum": ["planned", "active", "blocked", "completed", "abandoned", "superseded"]},
+    "work_schema_version": {"type": "string", "enum": ["1", "2"]},
     "agent": {"type": "string", "description": "开放的 Agent 标识，不使用封闭枚举"},
     "session_id": {"type": "string"},
     "role": {"type": "string"},
+    "author_agent": {"type": "string"},
+    "author_session_id": {"type": "string"},
+    "author_role": {"type": "string"},
+    "owner_agent": {"type": "string"},
+    "owner_session_id": {"type": "string"},
+    "ownership_mode": {"type": "string", "enum": ["session-bound", "shared", "handed-off", "legacy-unbound"]},
+    "ownership_binding": {"type": "string", "enum": ["", "agent+declared-session"]},
+    "participants": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["agent", "session_id", "role"],
+        "properties": {
+          "agent": {"type": "string"},
+          "session_id": {"type": "string"},
+          "role": {"type": "string"},
+          "authorized_at": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
     "updated_at": {"type": "string"},
     "checkpoint_id": {"type": "string"},
     "project_path": {"type": "string"},
@@ -33,5 +56,16 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"work_schema_version": {"const": "2"}}, "required": ["work_schema_version"]},
+      "then": {
+        "required": [
+          "author_agent", "author_session_id", "author_role", "owner_agent", "owner_session_id",
+          "ownership_mode", "ownership_binding", "participants"
+        ]
+      }
+    }
+  ],
   "additionalProperties": true
 }

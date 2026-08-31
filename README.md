@@ -206,9 +206,9 @@ Codex MCP 使用带有 AIKB 起止标记的受管 TOML 区块；Claude Code MCP 
 
 #### 生命周期事件的当前行为
 
-- `SessionStart`：按当前项目查找活动任务；只有唯一候选时返回紧凑恢复提示，不加载聊天记录。
+- `SessionStart`：按当前项目查找活动任务；只有当前 Agent/精确会话 owner 或 participant 的唯一候选时返回紧凑恢复提示，不加载聊天记录。每次启动还报告 candidate 总数，并突出逾期、无 owner、声明可能重复和已结案仍留 Inbox 的条目；不自动晋升、删除或关闭。
 - `PreCompact`：提供压缩前生命周期接入点；当前保持轻量，不自行解析或总结 transcript。
-- `Stop`：如果 Git 工作区相对最近检查点发生变化，提醒 Agent 先保存一次检查点；同一状态只阻止一次，避免循环。
+- `Stop`：如果 Git 工作区相对当前 owner/participant 的最近检查点发生变化，提醒 Agent 先保存一次检查点；外来会话不注入任务也不阻断当前会话，同一状态只阻止一次，避免循环。
 - `SessionEnd`：使用短超时完成轻量结束处理，不承担长时间总结任务。
 
 ### 5.3 `system/schemas/`：数据契约
@@ -233,7 +233,9 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 定义本机检查点的核心元数据：任务 ID、项目 ID、状态、Agent、Session、角色、更新时间、检查点 ID、项目路径和工作区是否有未提交变化。
 
-`agent` 是开放字符串而不是封闭枚举，因此不同 Agent 可以写入同一个任务，并通过 `agent`、`session_id` 和 `role` 区分来源。任务状态分为：
+`owner_agent`/`owner_session_id` 是不可由普通检查点覆盖的任务归属；每次检查点另记录 `author_agent`/`author_session_id`/`role`。跨 Agent 只有 owner 显式登记 `shared` 或 `handed-off` participant 后才能续写；`revoke` 可撤销精确会话。`agent` 仍是开放字符串而不是封闭枚举。缺少 owner 的旧任务标记为 `legacy-unbound`，必须先显式 claim。会话 ID 由 Hook 提供，是技术关联标签而非密码学凭据。
+
+任务状态分为：
 
 - 进行中：`planned`、`active`、`blocked`；
 - 已关闭：`completed`、`abandoned`、`superseded`。
@@ -296,12 +298,14 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 | `get_work_state` | 只读 | 按项目或 `work_id` 查找活动任务，返回最多 1500 字符的恢复胶囊。 |
 | `checkpoint_work_state` | 本机写入 | 在 `workspace/` 追加结构化检查点，不修改正式知识。 |
 | `close_work_state` | 本机移动/写入 | 将任务标记为完成、放弃或被替代，并移动到本机归档。 |
+| `claim_work_state` | 本机写入 | 显式认领无 owner 的 legacy 活动任务，绑定当前 Agent/Hook 会话。 |
+| `authorize_work_participant` | 本机写入 | owner 为精确 Agent/会话登记 `shared`、`handed-off` 或 `revoke`。 |
 
 单个检查点最大 64 KiB；列表字段和文本字段还有更小的内部截断限制。写入前执行常见密钥和 Token 模式脱敏，并拒绝越过 `workspace/active` 或 `workspace/archive` 的路径。
 
 #### MCP 协议边界
 
-当前服务实现 stdio JSON-RPC，支持初始化、ping、工具列表和工具调用，并声明兼容 MCP `2024-11-05`、`2025-03-26` 和 `2025-06-18` 协议版本。它不暴露资源或 Prompt，也不提供正式知识写入工具。
+当前服务实现 stdio JSON-RPC，支持初始化、ping、工具列表和工具调用，并声明兼容 MCP `2024-11-05`、`2025-03-26` 和 `2025-06-18` 协议版本。写入类 Working State 工具要求服务以 `serve --agent <agent>` 启动，并校验请求中的 Agent；它不能替代操作系统权限。它不暴露资源或 Prompt，也不提供正式知识写入工具。
 
 ### 5.5 `system/templates/`
 
@@ -561,7 +565,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 search "检索缓�
 3. 工程任务需要未知知识时能够看到并调用 `aikb` MCP。
 4. 搜索只返回少量候选，读取时只加载目标条目或章节。
 5. 形成实际工作状态后可以创建检查点；普通问答不会写 `workspace/`。
-6. 关闭任务后，工作项从 `workspace/active/` 移入 `workspace/archive/`。
+6. 关闭任务后，工作项从 `workspace/active/` 移入 `workspace/archive/`；跨 Agent 续写前必须由 owner 显式授权 participant，legacy 工作项先 claim。
 
 更完整的场景见 `system/tests/agent-behavior-checklist.md`。
 
@@ -582,7 +586,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 search "检索缓�
 
 ### 9.2 Agent 续接未完成任务
 
-SessionStart 可以发现当前项目唯一活动任务并提供紧凑恢复胶囊。Agent 继续工作前仍需要核对当前分支、revision 和工作区状态。
+SessionStart 只会为当前 Agent/精确 Hook `session_id` 已授权的唯一活动任务提供紧凑恢复胶囊；发现外来会话任务时不注入正文、不阻断当前会话。每次 SessionStart 同时报告 candidate 总数及逾期、无 owner、声明可能重复、已结案仍留 Inbox 的计数。Agent 继续工作前仍需要核对当前分支、revision 和工作区状态。
 
 在以下节点写检查点最有价值：
 
@@ -729,7 +733,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 
 ### hooks 故障是否会阻断 Agent
 
-公共 hook 包装器采用 fail-open：Python 不存在或处理异常时返回成功，不阻断普通会话，并在仍能定位控制仓时写入独立 fallback JSON。Stop 的检查点提醒是唯一可能暂缓结束的行为，并且同一工作状态只阻止一次。`AIKB_HOME` 完全无效时无法定位审计目录，这一到达前故障只能由 Agent 自身日志或 doctor 诊断发现。
+公共 hook 包装器采用 fail-open：Python 不存在或处理异常时返回成功，不阻断普通会话，并在仍能定位控制仓时写入独立 fallback JSON。Stop 的检查点提醒只适用于当前 owner/participant 的精确会话，外来会话不阻断；同一工作状态只阻止一次。SessionStart 的知识提醒只做数量和人工复核提示，不自动删除、晋升或关闭。`session_id` 由 Hook 提供且只是技术关联标签，不是密码学凭据；`AIKB_HOME` 完全无效时无法定位审计目录，这一到达前故障只能由 Agent 自身日志或 doctor 诊断发现。
 
 ### 可以删除 `workspace/db` 吗
 

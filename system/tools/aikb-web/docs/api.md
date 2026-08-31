@@ -123,7 +123,7 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
 
 ### GET /runtime/working-states
 
-查询参数：project_id（逻辑 ID，最长 120）、status（可重复或逗号分隔，枚举见上）、agent（最长 120）、page（1..100000，默认 1）、page_size（1..50，默认 20）。列表默认按 updated_at 最新时间倒序，排序相同的记录按 work_id 稳定打散。
+查询参数：project_id（逻辑 ID，最长 120）、status（可重复或逗号分隔，枚举见上）、agent（最长 120）、page（1..100000，默认 1）、page_size（1..50，默认 20）。`agent` 为兼容筛选，匹配最新检查点作者（等价于旧 `agent` 字段），不是 owner；服务端不得静默改成 owner 筛选。列表默认按 updated_at 最新时间倒序，排序相同的记录按 work_id 稳定打散。
 
 返回 WorkingStateSummary 分页：
 
@@ -132,7 +132,16 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
         "work_id": "webui-phase-2",
         "project_id": "aikb-...",
         "status": "active",
-        "agent": "codex",
+        "work_schema_version": "2",
+        "owner_agent": "codex",
+        "owner_session_id": "owner-session",
+        "author_agent": "codex",
+        "author_session_id": "author-session",
+        "author_role": "implement",
+        "ownership_mode": "session-bound",
+        "ownership_binding": "agent+declared-session",
+        "participants": [],
+        "participant_count": 0,
         "session_id": null,
         "role": "implement",
         "updated_at": "2026-08-29T10:00:00+08:00",
@@ -149,7 +158,7 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
       "pagination": { "page": 1, "page_size": 20, "total": 1, "has_next": false }
     }
 
-session_id 没有可靠来源时必须为 null，不得以 Agent、连接 ID 或时间戳冒充。repositories 每项最多 8 项，只允许 role、available、branch、revision、dirty；去除底层 path 和内部 signature。正文型章节在共享读模型中限长。第一小版本只查询活动 Working State，不提供归档或关闭任务搜索。
+`work_schema_version` 是 Markdown 工作元数据版本（当前为 v2）；SQLite 只是可重建派生索引，当前内部索引版本为 v3，不应与该字段混用。`agent`、`session_id`、`role` 是保留的 latest-author 兼容字段；正式字段是 `author_*`。Owner 使用 `owner_agent`/`owner_session_id`，不能由 latest author 推断。`ownership_mode` 为 `session-bound`、`shared`、`handed-off` 或 `legacy-unbound`；旧文档使用 `legacy-unbound` 且 owner 字段为 null。`participants` 最多 16 项，只含有界 agent/session_id/role。session_id 没有可靠来源时必须为 null，不得以 Agent、连接 ID 或时间戳冒充。repositories 每项最多 8 项，只允许 role、available、branch、revision、dirty；去除底层 path 和内部 signature。正文型章节在共享读模型中限长。第一小版本只查询活动 Working State，不提供归档或关闭任务搜索。
 
 ### GET /runtime/working-states/{work_id}
 
@@ -157,7 +166,7 @@ session_id 没有可靠来源时必须为 null，不得以 Agent、连接 ID 或
 
 ### GET /runtime/working-states/{work_id}/checkpoints
 
-查询参数：page（1..100000，默认 1）、page_size（1..50，默认 20）。返回检查点摘要 `{checkpoint_id, based_on, status, agent, session_id, role, updated_at, workspace_dirty, repositories, truncated, detail_status}` 及分页信息。session_id 缺失仍为 null，repositories 继续使用安全公共投影。
+查询参数：page（1..100000，默认 1）、page_size（1..50，默认 20）。返回检查点摘要 `{checkpoint_id, based_on, status, author_agent, author_session_id, author_role, agent, session_id, role, updated_at, workspace_dirty, repositories, truncated, detail_status}` 及分页信息。检查点按 author 展示，旧字段仍保留但不得在 UI 中称作 owner。session_id 缺失仍为 null，repositories 继续使用安全公共投影。
 
 ### GET /runtime/working-states/{work_id}/checkpoints/{checkpoint_id}
 
@@ -183,7 +192,7 @@ session_id 没有可靠来源时必须为 null，不得以 Agent、连接 ID 或
       "last_activity": "2026-08-29T10:00:00+08:00"
     }
 
-status 枚举为 started、succeeded、failed、noop、blocked、incomplete；summary 允许计数为 0。损坏记录只公开数量，不公开文件名、行号或物理路径。无任何记录是 200 加全零摘要。
+status 枚举为 started、succeeded、failed、noop、blocked、incomplete；`foreign_active_work` 是 Hook 的 `outcome_code`（不是 operation），用于表示检测到其他会话任务但未自动接管。`claim_work_state`、`authorize_work_participant`（含 `shared`/`handed-off`/`revoke` mode）等归属治理 operation 也会按同一安全投影展示。summary 允许计数为 0。损坏记录只公开数量，不公开文件名、行号或物理路径。无任何记录是 200 加全零摘要。
 
 ### GET /audit/events
 

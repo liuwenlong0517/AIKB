@@ -79,7 +79,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "checkpoint_work_state",
-        "description": "为任务追加结构化本机检查点；只写 workspace/，不会写正式知识。",
+        "description": "owner/participant 追加检查点；只写 workspace/。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -115,7 +115,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "close_work_state",
-        "description": "完成、放弃或替代一个活动任务，并将其移入本机归档。",
+        "description": "owner/participant 关闭活动任务并归档。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -124,6 +124,32 @@ TOOLS: list[dict[str, Any]] = [
                 "agent": {"type": "string"}, "session_id": {"type": "string"}, "note": {"type": "string"},
             },
             "required": ["work_id", "status", "agent", "session_id"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "claim_work_state",
+        "description": "显式认领无 owner 的旧活动任务。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"work_id": {"type": "string"}, "agent": {"type": "string"}, "session_id": {"type": "string"}},
+            "required": ["work_id", "agent", "session_id"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "authorize_work_participant",
+        "description": "owner 管理精确 Agent/会话续写；mode 支持 shared/handed-off/revoke。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "work_id": {"type": "string"}, "owner_agent": {"type": "string"}, "owner_session_id": {"type": "string"},
+                "participant_agent": {"type": "string"}, "participant_session_id": {"type": "string"}, "role": {"type": "string"},
+                "mode": {"type": "string", "enum": ["shared", "handed-off", "revoke"], "default": "shared"},
+            },
+            "required": ["work_id", "owner_agent", "owner_session_id", "participant_agent", "participant_session_id"],
             "additionalProperties": False,
         },
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
@@ -143,6 +169,21 @@ class MCPServer:
         self.audit = AuditStore(settings)
         self.knowledge = KnowledgeService(settings)
         self.work = WorkStateStore(settings)
+
+    def _validate_work_actor(self, name: str, arguments: dict[str, Any]) -> None:
+        """校验写入 payload 与 MCP ``serve --agent`` 一致，拒绝自报他方身份。"""
+        if name not in {
+            "checkpoint_work_state", "close_work_state", "claim_work_state",
+            "authorize_work_participant",
+        }:
+            return
+        field = "owner_agent" if name == "authorize_work_participant" else "agent"
+        declared = str(arguments.get(field) or "").strip().lower()
+        bound = str(self.agent or "").strip().lower()
+        if not bound or bound == "unknown":
+            raise PermissionError("MCP 服务未绑定 Agent；请使用 serve --agent codex|claude-code")
+        if not declared or declared != bound:
+            raise PermissionError(f"{field} 与 MCP 服务绑定 Agent 不一致，拒绝 Working State 写入")
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
         """处理一个 JSON-RPC 请求；通知类消息无 ID 时不返回响应。"""
@@ -211,6 +252,7 @@ class MCPServer:
         except Exception:
             pass
         try:
+            self._validate_work_actor(name, arguments)
             if name == "search_knowledge":
                 value = self.knowledge.search(
                     str(arguments.get("query") or ""), entry_type=arguments.get("type"),
@@ -238,6 +280,32 @@ class MCPServer:
                     agent=str(arguments.get("agent") or "unknown"), session_id=str(arguments.get("session_id") or ""),
                     note=str(arguments.get("note") or ""),
                 )
+            elif name == "claim_work_state":
+                value = self.work.claim(
+                    str(arguments.get("work_id") or ""),
+                    agent=str(arguments.get("agent") or ""),
+                    session_id=str(arguments.get("session_id") or ""),
+                )
+            elif name == "authorize_work_participant":
+                mode = str(arguments.get("mode") or "shared")
+                if mode not in {"shared", "handed-off", "revoke"}:
+                    raise ValueError("mode 必须是 shared、handed-off 或 revoke")
+                method = {
+                    "shared": self.work.authorize_participant,
+                    "handed-off": self.work.handoff,
+                    "revoke": self.work.revoke_participant,
+                }[mode]
+                ownership_arguments = {
+                    "owner_agent": str(arguments.get("owner_agent") or ""),
+                    "owner_session_id": str(arguments.get("owner_session_id") or ""),
+                    "participant_agent": str(arguments.get("participant_agent") or ""),
+                    "participant_session_id": str(arguments.get("participant_session_id") or ""),
+                }
+                if mode != "revoke":
+                    ownership_arguments["role"] = str(
+                        arguments.get("role") or ("handoff" if mode == "handed-off" else "participant")
+                    )
+                value = method(str(arguments.get("work_id") or ""), **ownership_arguments)
             else:
                 raise KeyError(f"未知工具：{name}")
             if invocation:

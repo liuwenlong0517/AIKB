@@ -2,11 +2,23 @@
 id: aikb:workflows:workflow-topic
 type: workflow
 status: verified
+governance_version: 2
+change_class: operational-solution
+authority: "填写运行结果、测试或权威来源"
+preparer: "填写准备人"
+reviewer: "填写独立复核人"
+reviewed_at: YYYY-MM-DD
+approval_status: not-required
 tags: []
 applicable_versions: ""
 last_verified: YYYY-MM-DD
 review_when: ""
 supersedes: []
+evidence:
+  - kind: test
+    ref: "填写验证命令或测试名称"
+    result: "填写实际结果"
+    date: YYYY-MM-DD
 relations: []
 ---
 

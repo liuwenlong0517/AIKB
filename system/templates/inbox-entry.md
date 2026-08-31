@@ -2,11 +2,25 @@
 id: aikb:experience:inbox:candidate-topic
 type: candidate
 status: candidate
+governance_version: 2
+change_class: candidate
+authority: "填写候选来源"
+preparer: "填写捕获人"
+approval_status: pending
 tags: []
 captured_at: YYYY-MM-DD
 source_type: ""
 expected_scope: ""
-next_action_due: ""
+next_action_due: YYYY-MM-DD
+owner: "填写负责人"
+review_state: open
+blocking_reason: "填写尚未验证或归类的阻塞原因"
+possible_duplicates: []
+evidence:
+  - kind: file
+    ref: "填写来源文件、命令或测试"
+    result: "填写当前观察，不代表已证明"
+    date: YYYY-MM-DD
 relations: []
 ---
 

@@ -28,7 +28,7 @@
 - 审计诊断正文、原始诊断附件路径、知识正文（搜索和审计响应中）；
 - cookie、password、private key、会话/访问令牌及其他未脱敏秘密。只有动作或规则预览契约明确返回的五分钟进程内确认令牌例外；页面不得展示或记录该字段。
 
-Working State 列表和详情只返回紧凑恢复信息；session_id 没有可靠来源时必须为 null，session_label 同样没有可靠来源时必须为 null，不可用 Agent、connection ID、时间戳或人工标签伪造。审计优先显示真实 session_label；技术字段仍保持原值或 null，三者不得混称。
+Working State 列表和详情只返回紧凑恢复信息。工作元数据版本为 v2，SQLite 派生索引版本独立维护。owner 与 latest author 是两套独立字段：`owner_*` 只能来自持久授权元数据，缺失时返回 null；`author_*` 表示最新检查点作者，旧 `agent/session_id/role` 仅为其兼容别名。`legacy-unbound` 不得猜测 owner，`shared`/`handed-off` 必须明确展示授权模式。session_id 没有可靠来源时必须为 null，session_label 同样没有可靠来源时必须为 null，不可用 Agent、connection ID、时间戳或人工标签伪造。审计优先显示真实 session_label；技术字段仍保持原值或 null，三者不得混称。
 
 ## 审计读取安全
 
@@ -75,7 +75,7 @@ workspace/audit/ 是独立本机操作面，不属于知识和 Working State。J
 - 分页硬上限：Working State page_size<=50，审计 page_size<=100；阶段 1 搜索继续使用 limit<=20，文档正文 max_chars<=500000，检查点每个章节值 <=4000，搜索摘要 <=1600。
 - 查询长度、标签数、标识长度和详情深度必须在 HTTP 层和读模型层双重限制。
 - 索引不可用、审计全不可读或核心未初始化时，按资源可信度返回 503；不能用空数据掩盖故障。局部损坏使用 200 + degraded 并说明安全警告。
-- 审计读取必须 fail-open 于 Agent/hook 写入语义：Web 查询失败不能阻断宿主 Agent，也不能为了展示而修改事实源。任务执行的审计写入同样是旁路安全记录，审计故障不能把原始异常传播到浏览器。
+- 审计读取必须 fail-open 于 Agent/hook 写入语义：Web 查询失败不能阻断宿主 Agent，也不能为了展示而修改事实源。归属治理事件中 `foreign_active_work` 是 outcome_code，`claim_work_state`、`authorize_work_participant` 是 operation；它们仅公开安全 operation/action_text/result_text，不公开 payload、本地路径或授权原文。任务执行的审计写入同样是旁路安全记录，审计故障不能把原始异常传播到浏览器。
 
 ## 发布前安全验收
 

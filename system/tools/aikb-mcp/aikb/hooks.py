@@ -57,42 +57,110 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
             pass
 
     def knowledge_review_reminder() -> str:
-        """把审查队列压缩为 SessionStart 提醒；校验或读取失败时保持 hook fail-open。"""
+        """把审查队列压缩为可观察的 SessionStart 节奏；失败时保持 hook fail-open。
+
+        这里只报告数量和有限状态，不自动晋升、关闭、删除或修改候选条目；正式
+        ``review_when`` 仍需维护者按自然语言条件人工判断。
+        """
         try:
             report = review_report(resolved_settings)
         except Exception:
             return ""
-        if not report["valid"]:
-            return "AIKB 知识审查提醒：知识元数据校验未通过，请运行 `aikb validate` 后再写入或晋升。"
         candidates = report["candidates"]
         review_items = report["review_items"]
+        summary = report.get("summary", {})
         messages: list[str] = []
+        # 每次 SessionStart 都报告总数，即使当前队列为空，避免“没有提醒”被误解
+        # 为没有审查机制；其余计数只在命中时突出显示，保持上下文紧凑。
+        messages.append(
+            f"candidate 总数 {summary.get('candidate_count', len(candidates))}（截至 {summary.get('as_of', '未知')}）。"
+        )
+        if not report["valid"]:
+            # 校验失败时仍保留总数，让 SessionStart 具备稳定节奏；不把底层错误文本
+            # 直接拼入上下文，维护者可通过 validate 命令查看完整定位。
+            messages.append("知识元数据校验未通过，请运行 `aikb validate` 后再写入或晋升。")
+            return "AIKB 知识审查提醒：" + "".join(messages)
+        if summary.get("overdue_count"):
+            messages.append(f"逾期 {summary['overdue_count']} 个。")
+        if summary.get("unowned_count"):
+            messages.append(f"无 owner {summary['unowned_count']} 个。")
+        if summary.get("duplicate_declared_count"):
+            messages.append(f"声明可能重复 {summary['duplicate_declared_count']} 个。")
+        if summary.get("closed_still_in_inbox_count"):
+            messages.append(f"已结案但仍留在 Inbox {summary['closed_still_in_inbox_count']} 个。")
         if candidates:
-            messages.append(
-                f"有 {len(candidates)} 个 candidate 条目待查重或晋升；查重需显式搜索 status=verified 和 status=candidate。"
-            )
+            messages.append("查重需显式搜索 status=verified 和 status=candidate。")
         if review_items:
             messages.append(
                 f"有 {len(review_items)} 个正式条目记录 review_when 条件；请按条件人工复核，系统不自动判断自然语言条件是否满足。"
             )
-        return "AIKB 知识审查提醒：" + "".join(messages) if messages else ""
+        return "AIKB 知识审查提醒：" + "".join(messages)
+
+    def session_binding_hint() -> str:
+        """向 Agent 暴露本次 Hook 观测到的会话绑定；缺失时明确安全降级。"""
+        if session_id:
+            safe_session = session_id.replace("\r", " ").replace("\n", " ")[:120]
+            return (
+                f"AIKB 当前会话绑定：agent={agent}，session_id={safe_session}。"
+                "创建或续写 checkpoint 时请原样传递该 session_id。"
+            )
+        return (
+            "AIKB 当前 Hook 未提供 session_id，已降级为不自动注入/不执行任务归属门禁；"
+            "不会按 Agent 单独接管 Working State。"
+        )
 
     try:
         if not project_path:
             finish("noop", "invalid_project")
+            if normalized_event == "session-start":
+                # SessionStart 仍应保持审查节奏；缺少项目路径时不能恢复任务，
+                # 但全局知识队列摘要不依赖项目路径，继续安全返回固定提醒。
+                reminder = knowledge_review_reminder()
+                if reminder:
+                    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": reminder[:1800]}}
             return {}
         store = WorkStateStore(resolved_settings)
-        state = store.get(project_path=project_path, limit=2)
+        # 项目级唯一任务不等于当前会话所属任务：先读取有限候选，再按持久
+        # owner/participant 过滤，避免无关 Agent 被 SessionStart/Stop 牵连。
+        all_state = store.get(project_path=project_path, limit=20)
+        state = store.get(
+            project_path=project_path, limit=20, actor_agent=agent,
+            actor_session_id=session_id, authorized_only=True,
+        )
         reminder = knowledge_review_reminder() if normalized_event == "session-start" else ""
+        if all_state["count"] and not state["count"]:
+            finish(
+                "noop", "foreign_active_work",
+                {
+                    "candidate_count": all_state["count"],
+                    "knowledge_review_reminder": bool(reminder),
+                    # Hook 与 MCP 可能拿到不同会话标识；没有精确会话匹配时
+                    # 只能降级为不触碰，绝不退化为 agent-only 自动接管。
+                    "binding_strength": "agent+exact-session-required",
+                    "session_observed": bool(session_id),
+                },
+            )
+            if normalized_event == "session-start":
+                context = (
+                    session_binding_hint() + "\n"
+                    "AIKB 检测到项目存在其他会话的活动任务，未自动恢复（binding_strength="
+                    "agent+exact-session-required）。如需继续请先显式认领或交接。\n" + reminder
+                )
+                return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context[:1800]}}
+            return {}
         if not state["unique"]:
             outcome = "no_active_work" if state["count"] == 0 else "multiple_active_work"
             finish("noop", outcome, {"candidate_count": state["count"], "knowledge_review_reminder": bool(reminder)})
-            if state["count"] == 0 and reminder:
-                return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": reminder[:1800]}}
+            if normalized_event == "session-start":
+                context = session_binding_hint()
+                if reminder:
+                    context += "\n" + reminder
+                return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context[:1800]}}
             return {}
         item = state["items"][0]
         if normalized_event == "session-start":
             base_context = (
+                session_binding_hint() + "\n"
                 "AIKB 发现一个本机活动任务。仅当用户当前请求是在继续该任务时使用；继续前核对 Git 分支、revision 和工作区。\n"
                 + item["resume_capsule"]
             )

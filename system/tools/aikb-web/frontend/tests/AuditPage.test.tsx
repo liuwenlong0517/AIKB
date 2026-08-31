@@ -57,4 +57,13 @@ describe('AuditPage', () => {
       expect(mocks.events).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'web', status: 'cancelled' }));
     });
   });
+
+  it('解释归属治理事件而不展示原始 payload', () => {
+    mocks.summary.mockReturnValue(result({ count: 1, statuses: { noop: 1 }, agents: { claude: 1 }, sources: { hook: 1 }, operations: { 'session-start': 1 }, fallback_records: 0, damaged_count: 0 }));
+    mocks.events.mockReturnValue(result({ items: [{ invocation_id: 'invoke-foreign', operation: 'session-start', outcome_code: 'foreign_active_work', status: 'noop', source: 'hook', action_text: '处理生命周期事件：session-start', result_text: '检测到其他会话的活动任务，未自动接管' }], pagination: { page: 1, page_size: 50, total: 1, has_next: false } }));
+    render(<MemoryRouter initialEntries={['/audit']}><Routes><Route path="/audit" element={<AuditPage />} /></Routes></MemoryRouter>);
+    expect(screen.getByText('session-start')).toBeInTheDocument();
+    expect(screen.getByText(/检测到其他会话的活动任务，未自动接管/)).toBeInTheDocument();
+    expect(screen.queryByText('foreign_active_work')).not.toBeInTheDocument();
+  });
 });

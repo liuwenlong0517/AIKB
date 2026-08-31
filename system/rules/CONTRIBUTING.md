@@ -21,7 +21,7 @@
 
 有潜在价值但证据、范围或归类不足的内容进入知识仓 `experience/inbox/`（逻辑路径 `content/experience/inbox/`），使用控制仓 `system/templates/inbox-entry.md`，记录来源、当前假设、待验证项、预期范围和下一步动作。候选使用 `status: candidate`，不得伪造验证日期；验证完成后晋升，确认重复、错误或无价值后删除。
 
-常规且满足本指南的知识写入无需逐次确认。涉及敏感信息、争议结论、分类或迁移范围存在明显争议，或需要替用户作出新的长期决策时，先使用 Inbox 保存非敏感候选并请求用户决定。
+低风险且证据完整的 `factual-update` 或 `operational-solution` 符合条件时无需逐次确认，可按项目授权自动处理；涉及敏感信息、decision、supersession、分类或迁移、或需要替用户作出新的长期决策时，先使用 Inbox 保存非敏感候选并请求用户决定。分类边界不能由 Agent 以“常规”或“无争议”自行放宽，具体枚举和审批状态见第 7 节。
 
 ## 3. 归档位置
 
@@ -74,3 +74,25 @@ Front Matter 必须符合 `system/schemas/knowledge-entry.schema.json`：
 7. 向用户报告写入位置、验证依据、适用边界、提交和校验结果。
 
 发现既有条目过期或被推翻时，更新并记录验证依据；具有历史决策价值的旧结论标记为已废弃并关联替代条目，否则删除。定期清理 Inbox、过期和重复知识。
+
+## 7. 客观变更分类与审批
+
+每次新增或修改先声明一个 `change_class`，只使用以下枚举：`factual-update`（当前事实）、`operational-solution`（可复现解决方案）、`decision-record`（记录已有决定）、`decision-proposal`（提出新取舍）、`supersession`（替代旧条目）、`taxonomy-change`（分类或迁移）和 `sensitive-change`（敏感边界）。分类由变更内容和影响决定，不能由 Agent 以“常规”“已验证”自行降低风险。
+
+`decision-proposal` 必须保持 `status: candidate`，直到获得用户确认、项目既有决策记录或其他明确权威来源；新的技术栈、架构、接口、安全边界和长期流程选择均属于该类。`supersession` 指向仍在使用的正式条目、`taxonomy-change`、`sensitive-change` 和改变未来 Agent 行为的规则，必须先请求用户决定或通过独立审查。正式 `decision-record` 必须记录其 `authority`，不能仅凭 Agent 的判断写成 `verified`。
+
+审批结果使用固定状态：`auto-eligible`、`user-approval-required`、`independent-review-required` 或 `candidate-only`。高风险审批须绑定本次候选正文的内容哈希、目标 ID 和范围；批准后正文或范围发生变化必须重新审批。提交者不得把自己同时当作高风险变更的唯一审查者。
+
+## 8. 结构化验证证据
+
+正式条目的“验证”章节必须同时提供结构化证据：`kind`、`locator`、`observed_at`，并按类型补充 `result`、`revision`、适用版本或审批引用。`kind` 只能是 `test`、`command`、`runtime-observation`、`source-code`、`configuration`、`commit`、`official-documentation`、`user-confirmation` 或 `existing-decision-record`。例如命令应记录可复现命令、工作范围和结果；测试应记录测试名和通过/失败；代码或配置应记录逻辑路径及 revision；权威文档应记录 URL、访问日期和适用版本。
+
+验证依据不得只写“已依据官方文档验证”、模型知识或无法定位的自由文本，不得伪造日期、提交号、测试结果或用户确认。validator 可以检查字段、格式、日期、逻辑路径边界、提交可解析性和证据是否留痕，但不能声称机器已经证明命令执行过、URL 支持全部结论或自然语言结论必然正确；无法复核的内容必须进入 Inbox。
+
+## 9. 查重、Inbox 生命周期与提交门
+
+每次新增或修订固定检查 `verified`、`candidate` 和 `deprecated` 三类状态；尤其是 decision、pitfall、solution，以及可能恢复、改名、迁移或替代旧条目的变更，不得省略 deprecated。查重结果记录在本次变更清单中，不能只在回复里口头声称已检查。
+
+候选必须记录 `owner`、`captured_at`、`next_action_due`、`review_state`、阻塞原因和可能重复项。review 至少覆盖逾期、无 owner、重复候选、已被替代或关联入口仍在引用的条目；清理节奏由定期 review 任务执行，不以 Agent 的“必要时”判断代替。证据或归类不足时进入 Inbox，不能为了绕过复核宣布“证据充分”。
+
+每次正式提交前向用户或独立 reviewer 暴露文件清单、变更结论、`change_class`、证据摘要、查重结果、索引影响和内容哈希。低风险且结构完整的 factual/operational 变更可按项目授权自动提交；decision、supersession、taxonomy、sensitive 和规则边界变更必须经过用户确认或独立审查。validator 通过不等于获得审批，也不等于允许替用户作长期决定。

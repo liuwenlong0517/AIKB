@@ -2,11 +2,23 @@
 id: aikb:experience:solutions:troubleshooting-topic
 type: solution
 status: verified
+governance_version: 2
+change_class: operational-solution
+authority: "填写代码、配置、测试或权威来源"
+preparer: "填写准备人"
+reviewer: "填写独立复核人"
+reviewed_at: YYYY-MM-DD
+approval_status: not-required
 tags: []
 applicable_versions: ""
 last_verified: YYYY-MM-DD
 review_when: ""
 supersedes: []
+evidence:
+  - kind: test
+    ref: "填写回归测试名称或命令"
+    result: "填写实际结果"
+    date: YYYY-MM-DD
 relations: []
 ---
 

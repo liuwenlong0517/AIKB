@@ -227,6 +227,12 @@ def summarize_tool_action(name: str, arguments: dict[str, Any]) -> dict[str, Any
         })
     if name == "close_work_state":
         return _sanitize({"work_id": arguments.get("work_id"), "status": arguments.get("status")})
+    if name == "claim_work_state":
+        return _sanitize({"work_id": arguments.get("work_id")})
+    if name in {"authorize_work_participant", "revoke_work_participant"}:
+        # 只记录治理动作和模式，不落 participant/session payload；后续审计仍可
+        # 由安全 operation/result 判断发生过授权或撤销，而不会成为身份通讯录。
+        return _sanitize({"work_id": arguments.get("work_id"), "mode": arguments.get("mode", "shared")})
     return {"tool": _redact_text(name, 120)}
 
 
@@ -259,6 +265,18 @@ def describe_action(operation: str, action: dict[str, Any] | None) -> str:
         return f"为任务 {action.get('work_id') or '新任务'} 写入 {action.get('status') or 'active'} 检查点；变更文件 {action.get('changed_files_count', 0)} 个"
     if operation == "close_work_state":
         return f"关闭任务 {action.get('work_id') or '未知任务'}；状态 {action.get('status') or '未知'}"
+    if operation == "claim_work_state":
+        return f"显式认领旧工作状态：{action.get('work_id') or '未知任务'}"
+    if operation in {"authorize_work_participant", "revoke_work_participant"}:
+        mode = action.get("mode") or "shared"
+        verb = (
+            "撤销工作状态参与授权"
+            if operation == "revoke_work_participant" or mode == "revoke"
+            else "交接工作状态给参与会话"
+            if mode == "handed-off"
+            else "授权工作状态参与会话"
+        )
+        return f"{verb}：{action.get('work_id') or '未知任务'}；模式 {mode}"
     if operation == "initialize":
         return "初始化 MCP 连接"
     event = action.get("event") or operation
@@ -292,6 +310,12 @@ def describe_result(operation: str, status: str, outcome_code: str | None, resul
         "work_state_returned": f"找到 {result.get('count', 0)} 个活动任务" + ("（唯一候选）" if result.get("unique") else ""),
         "checkpoint_created": "检查点已创建",
         "work_state_closed": "任务已关闭",
+        "claim_completed": "旧工作状态已显式认领",
+        "participant_authorized": "工作状态参与会话已授权",
+        "handoff_completed": "工作状态已交接给授权会话",
+        "participant_revoked": "工作状态参与授权已撤销",
+        "participant_revoke_noop": "未找到指定参与授权，未作变更",
+        "foreign_active_work": "检测到其他会话的活动任务，未自动接管",
         "connection_initialized": "MCP 连接已初始化",
         "resume_context_injected": "已注入唯一活动任务的恢复信息",
         "no_active_work": "没有活动任务，无需处理",
@@ -325,6 +349,25 @@ def summarize_tool_result(name: str, value: Any) -> tuple[str, dict[str, Any]]:
         return "checkpoint_created", {"work_id": _redact_text(str(value.get("work_id") or ""), 120)}
     if name == "close_work_state":
         return "work_state_closed", {"work_id": _redact_text(str(value.get("work_id") or ""), 120)}
+    if name == "claim_work_state":
+        return "claim_completed", {"work_id": _redact_text(str(value.get("work_id") or ""), 120)}
+    if name == "authorize_work_participant":
+        work_id = _redact_text(str(value.get("work_id") or ""), 120)
+        # 同一 MCP 工具通过 mode 复用授权/交接/撤销；撤销结果带 revoked
+        # 布尔值，不能仅凭工具名把它记录成“已授权”。
+        if "revoked" in value:
+            return (
+                "participant_revoked" if bool(value.get("revoked")) else "participant_revoke_noop",
+                {"work_id": work_id},
+            )
+        if value.get("ownership_mode") == "handed-off":
+            return "handoff_completed", {"work_id": work_id}
+        return "participant_authorized", {"work_id": work_id}
+    if name == "revoke_work_participant":
+        return (
+            "participant_revoked" if bool(value.get("revoked")) else "participant_revoke_noop",
+            {"work_id": _redact_text(str(value.get("work_id") or ""), 120)},
+        )
     return "completed", {}
 
 

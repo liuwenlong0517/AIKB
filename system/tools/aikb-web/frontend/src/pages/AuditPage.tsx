@@ -8,6 +8,10 @@ import type { ApiMeta, AuditEvent, AuditStatus } from '../types/api';
 
 const STATUS_LABELS: Record<AuditStatus, string> = { started: '已开始', succeeded: '成功', failed: '失败', noop: '无操作', blocked: '已阻止', incomplete: '未完成', cancelled: '已取消', timed_out: '已超时', interrupted: '已中断' };
 const STATUS_COLORS: Record<AuditStatus, string> = { started: 'blue', succeeded: 'green', failed: 'red', noop: 'default', blocked: 'orange', incomplete: 'gold', cancelled: 'default', timed_out: 'orange', interrupted: 'purple' };
+const OPERATION_LABELS: Record<string, string> = {
+  claim_work_state: '显式认领旧工作状态',
+  authorize_work_participant: 'Owner 管理参与会话（授权/交接/撤销）',
+};
 
 /** 审计降级提示只映射固定 warning 枚举，避免把 JSONL 路径或异常正文带到浏览器。 */
 function WarningBar({ meta }: { meta?: ApiMeta }) {
@@ -30,6 +34,8 @@ function mergeMeta(...metas: Array<ApiMeta | undefined>): ApiMeta | undefined {
 
 function statusTag(status?: string | null) { const typed = status as AuditStatus; return <Tag color={STATUS_COLORS[typed] ?? 'default'}>{STATUS_LABELS[typed] ?? status ?? '未知状态'}</Tag>; }
 function value(input: unknown): string { return input === undefined || input === null || input === '' ? '—' : String(input); }
+/** 对归属治理事件使用固定中文解释；未知 operation 仍保留安全原值便于审计。 */
+function operationLabel(operation?: string | null): string { return OPERATION_LABELS[operation ?? ''] ?? value(operation); }
 function session(valueInput?: string | null): string { return valueInput ?? '未提供会话 ID'; }
 function date(input?: string | null): string { if (!input) return '—'; const parsed = new Date(input); return Number.isNaN(parsed.getTime()) ? input : parsed.toLocaleString('zh-CN'); }
 /** 普通调用使用 invocation_id；连接初始化等独立事件安全回退到 event_id。 */
@@ -85,7 +91,7 @@ function AuditList() {
       {events && <Card title={<span>调用列表 <Typography.Text type="secondary">{events.pagination.total ?? events.items.length} 项</Typography.Text></span>}>
         {events.items.length === 0 ? <Empty description="没有匹配的审计调用。" /> : <List itemLayout="vertical" dataSource={events.items} renderItem={(item) => {
           const identifier = auditIdentifier(item);
-          const title = <Space>{identifier ? <Link to={`/audit/${encodeURIComponent(identifier)}`}>{value(item.operation)}</Link> : <Typography.Text>{value(item.operation)}</Typography.Text>}{statusTag(item.status)}</Space>;
+          const title = <Space>{identifier ? <Link to={`/audit/${encodeURIComponent(identifier)}`}>{operationLabel(item.operation)}</Link> : <Typography.Text>{operationLabel(item.operation)}</Typography.Text>}{statusTag(item.status)}</Space>;
           return <List.Item actions={identifier ? [<Link key="detail" to={`/audit/${encodeURIComponent(identifier)}`}>查看详情</Link>] : []}><List.Item.Meta title={title} description={<Space wrap><Typography.Text type="secondary">会话：{item.session_label ?? '未提供会话标签'}</Typography.Text><Typography.Text type="secondary">Agent：{value(item.agent)}</Typography.Text><Typography.Text type="secondary">来源：{value(item.source)}</Typography.Text><Typography.Text type="secondary">开始：{date(item.started_at)}</Typography.Text></Space>} /><Typography.Paragraph ellipsis={{ rows: 2 }}>{value(item.action_text)}{item.result_text ? ` · ${item.result_text}` : ''}</Typography.Paragraph><Space wrap><Typography.Text type="secondary">耗时：{item.duration_ms == null ? '—' : `${item.duration_ms} ms`}</Typography.Text>{item.fallback && <Tag color="orange">fallback</Tag>}<Typography.Text type="secondary">会话 ID：{session(item.session_id)}</Typography.Text></Space></List.Item>;
         }} />}
         {events.pagination.total !== null && events.pagination.total > pageSize && <AntPagination className="section-gap" current={page} pageSize={pageSize} total={events.pagination.total} showSizeChanger={false} onChange={setPage} />}
@@ -107,5 +113,5 @@ function AuditDetail({ invocationId }: { invocationId: string }) {
 }
 
 function AuditEventCard({ item }: { item: AuditEvent }) {
-  return <Card title={<Space>{value(item.operation)} {statusTag(item.status)}</Space>}><Descriptions column={1} size="small"><Descriptions.Item label="调用 ID">{value(item.invocation_id)}</Descriptions.Item><Descriptions.Item label="事件 ID">{value(item.event_id)}</Descriptions.Item><Descriptions.Item label="开始时间">{date(item.started_at)}</Descriptions.Item><Descriptions.Item label="结束时间">{date(item.finished_at)}</Descriptions.Item><Descriptions.Item label="来源 / Agent">{value(item.source)} / {value(item.agent)}</Descriptions.Item><Descriptions.Item label="会话标签">{item.session_label ?? '未提供会话标签'}</Descriptions.Item><Descriptions.Item label="会话 ID">{session(item.session_id)}</Descriptions.Item><Descriptions.Item label="项目逻辑 ID">{value(item.project_id)}</Descriptions.Item><Descriptions.Item label="动作说明">{value(item.action_text)}</Descriptions.Item><Descriptions.Item label="结果说明">{value(item.result_text)}</Descriptions.Item><Descriptions.Item label="结果代码">{value(item.outcome_code)}</Descriptions.Item><Descriptions.Item label="错误类型">{value(item.error_type)}</Descriptions.Item><Descriptions.Item label="捕获级别">{value(item.capture_level)}</Descriptions.Item><Descriptions.Item label="耗时">{item.duration_ms == null ? '—' : `${item.duration_ms} ms`}</Descriptions.Item><Descriptions.Item label="降级记录">{item.fallback ? <Tag color="orange">是</Tag> : '否'}</Descriptions.Item></Descriptions></Card>;
+  return <Card title={<Space>{operationLabel(item.operation)} {statusTag(item.status)}</Space>}><Descriptions column={1} size="small"><Descriptions.Item label="调用 ID">{value(item.invocation_id)}</Descriptions.Item><Descriptions.Item label="事件 ID">{value(item.event_id)}</Descriptions.Item><Descriptions.Item label="开始时间">{date(item.started_at)}</Descriptions.Item><Descriptions.Item label="结束时间">{date(item.finished_at)}</Descriptions.Item><Descriptions.Item label="来源 / Agent">{value(item.source)} / {value(item.agent)}</Descriptions.Item><Descriptions.Item label="会话标签">{item.session_label ?? '未提供会话标签'}</Descriptions.Item><Descriptions.Item label="会话 ID">{session(item.session_id)}</Descriptions.Item><Descriptions.Item label="项目逻辑 ID">{value(item.project_id)}</Descriptions.Item><Descriptions.Item label="动作说明">{value(item.action_text)}</Descriptions.Item><Descriptions.Item label="结果说明">{value(item.result_text)}</Descriptions.Item><Descriptions.Item label="结果代码">{value(item.outcome_code)}</Descriptions.Item><Descriptions.Item label="错误类型">{value(item.error_type)}</Descriptions.Item><Descriptions.Item label="捕获级别">{value(item.capture_level)}</Descriptions.Item><Descriptions.Item label="耗时">{item.duration_ms == null ? '—' : `${item.duration_ms} ms`}</Descriptions.Item><Descriptions.Item label="降级记录">{item.fallback ? <Tag color="orange">是</Tag> : '否'}</Descriptions.Item></Descriptions></Card>;
 }

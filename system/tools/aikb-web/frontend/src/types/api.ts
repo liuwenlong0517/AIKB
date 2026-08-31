@@ -111,9 +111,20 @@ export interface WorkingStateSummary {
   work_id: string;
   project_id?: string | null;
   status: WorkingStateStatus;
+  work_schema_version?: string | null;
+  /** 兼容字段：始终表示最新检查点作者，不表示 owner。 */
   agent?: string | null;
   session_id?: string | null;
   role?: string | null;
+  author_agent?: string | null;
+  author_session_id?: string | null;
+  author_role?: string | null;
+  owner_agent?: string | null;
+  owner_session_id?: string | null;
+  ownership_mode?: 'session-bound' | 'shared' | 'handed-off' | 'legacy-unbound' | string | null;
+  ownership_binding?: string | null;
+  participants?: WorkStateParticipant[];
+  participant_count?: number;
   updated_at?: string | null;
   checkpoint_id?: string | null;
   goal?: string | null;
@@ -139,14 +150,25 @@ export interface CheckpointSummary {
   checkpoint_id: string;
   based_on?: string | null;
   status?: WorkingStateStatus | string | null;
+  work_schema_version?: string | null;
+  /** 检查点的事实作者；不能称为 owner。 */
   agent?: string | null;
   session_id?: string | null;
   role?: string | null;
+  author_agent?: string | null;
+  author_session_id?: string | null;
+  author_role?: string | null;
   updated_at?: string | null;
   workspace_dirty?: boolean | null;
   repositories?: RuntimeRepositorySummary[];
   truncated?: boolean;
   detail_status?: string | null;
+}
+
+export interface WorkStateParticipant {
+  agent: string;
+  session_id: string;
+  role?: string | null;
 }
 
 export interface CheckpointDetail extends CheckpointSummary {
@@ -304,6 +326,8 @@ export interface RuleSummary {
   readable: boolean;
   writable: boolean;
   risk_level: string;
+  /** 超过该值仅提示；超过 max_chars 才会阻断候选。 */
+  recommended_chars?: number;
   max_chars: number;
   content_hash?: string;
   revision?: string;

@@ -47,6 +47,16 @@ class RuleRegistryTests(unittest.TestCase):
         self.assertTrue(report["valid"], report)
         self.assertEqual({item["rule_id"] for item in report["rules"]}, {"entry", "user", "agent", "contributing"})
 
+    def test_work_ownership_documents_process_and_session_trust_boundary(self) -> None:
+        """规则明确区分 Agent 进程绑定、Hook 会话关联和密码学认证边界。"""
+        rule_file = self.root / "system" / "rules" / "AI_RULES.md"
+        text = rule_file.read_text(encoding="utf-8")
+        self.assertIn("`--agent` 必须与请求中的 Agent 身份一致", text)
+        self.assertIn("`session_id` 必须原样使用当前 Hook 观测到的值", text)
+        self.assertIn("不是密码学凭据", text)
+        self.assertIn("OS ACL、可信 broker", text)
+        self.assertIn("不得把 Agent-only 匹配伪装成 `session-bound`", text)
+
     def test_missing_duty_and_forbidden_terms_are_rejected(self) -> None:
         """职责词缺失或混入其他层禁止词时，候选只返回失败不触碰文件。"""
         missing = validate_content("user", "# 个人规则\n\n普通正文\n")
@@ -58,7 +68,7 @@ class RuleRegistryTests(unittest.TestCase):
 
     def test_budget_absolute_path_and_bad_unicode_are_rejected(self) -> None:
         """验证字符/字节预算、绝对路径、U+FFFD、NUL、BOM 和超长行边界。"""
-        self.assertFalse(validate_content("user", self.user_text + "x" * 200).valid)
+        self.assertFalse(validate_content("user", self.user_text + "x" * 1000).valid)
         for path in ("C:\\secret\\rule.md", "\\\\server\\share\\rule.md", "/etc/passwd"):
             result = validate_content("user", self.user_text + "\n" + path)
             self.assertFalse(result.valid, path)
@@ -67,6 +77,15 @@ class RuleRegistryTests(unittest.TestCase):
             self.assertFalse(validate_content("user", bad).valid)
         self.assertFalse(validate_content("user", b"\xef\xbb\xbf" + self.user_text.encode()).valid)
         self.assertFalse(validate_content("user", self.user_text + "\n" + "a" * 4097).valid)
+
+    def test_recommended_budget_is_warning_and_hard_budget_is_error(self) -> None:
+        """推荐预算只提示，硬预算仍阻断，确保扩容不会取消安全上限。"""
+        warning = validate_content("user", self.user_text + "x" * 350)
+        self.assertTrue(warning.valid, warning.errors)
+        self.assertTrue(any("推荐字符预算" in item for item in warning.warnings))
+        hard = validate_content("user", self.user_text + "x" * 1000)
+        self.assertFalse(hard.valid)
+        self.assertTrue(any("字符预算" in item for item in hard.errors))
 
     def test_readonly_rule_and_candidate_do_not_modify_formal_file(self) -> None:
         """只读规则拒绝覆盖；合法 user 候选规范化后仍不写正式文件。"""

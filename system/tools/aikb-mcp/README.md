@@ -4,7 +4,7 @@
 
 - Markdown Front Matter 验证与 SQLite FTS5/trigram 知识索引；
 - `search_knowledge`、`read_knowledge` 两个只读知识工具；
-- `get_work_state`、`checkpoint_work_state`、`close_work_state` 三个本机任务状态工具；
+- `get_work_state`、`checkpoint_work_state`、`close_work_state`、`claim_work_state`、`authorize_work_participant` 五个本机任务状态工具（连同三个知识工具共 8 个 MCP 工具）；
 - Codex、Claude Code 和未来 Agent 共用的 stdio MCP 协议入口。
 - 按日 JSONL 的 MCP/hook 本机审计，以及按需 Excel 汇总报告。
 
@@ -18,6 +18,7 @@
 python -m aikb validate
 python -m aikb rebuild
 python -m aikb search "检索缓存"
+python -m aikb review
 python -m aikb serve --agent codex
 python -m aikb audit list --since 24h
 python -m aikb audit summary --since 7d
@@ -30,6 +31,23 @@ python -m aikb audit report-md --date 2026-08-27
 # 读取诊断输入输出（需在服务启动前设置 AIKB_AUDIT_CAPTURE_LEVEL）
 python -m aikb audit diagnostic <调用ID>
 ```
+
+`serve --agent` 是 Working State 写入的服务端 Agent 边界：必须显式绑定当前进程
+的 Agent，不能由请求参数自报另一身份。`session_id` 是 Hook 提供的会话关联标签，
+命令示例和 MCP 调用必须原样传递该值；它不是密码学凭据，无法抵御同一用户下能
+直接读写 `workspace/` 的恶意进程。平台 Hook 没有提供会话 ID 时，系统宁可不自动
+恢复、不执行归属门禁，也不会退化成仅按 Agent 接管。
+
+Working State v2 把 `owner_agent/owner_session_id` 与每次检查点的
+`author_agent/author_session_id/role` 分开。跨 Agent 续写必须由 owner 显式授权
+`shared` 或 `handed-off` participant；可用 `revoke` 撤销精确的 Agent/会话。缺少
+owner 的 legacy 工作项标记为 `legacy-unbound`，需要先由当前会话显式
+`claim_work_state`，不会自动注入或阻断。
+
+`review`/`review_knowledge` 是只读审查入口：返回 candidate 总数、逾期、无 owner、
+声明可能重复和已结案仍留 Inbox 的摘要；v2 candidate 只投影有限生命周期字段，
+legacy candidate 仍可见但不因缺少治理字段硬失败。它不会自动晋升、删除、关闭或
+判断自然语言 `review_when` 是否满足。
 
 审计默认级别为 `safe`：只保存工具/事件白名单字段的脱敏摘要、可读会话标签及中文动作/结果说明。把 `AIKB_AUDIT_CAPTURE_LEVEL` 设为 `diagnostic` 或 `full-local` 后，MCP/hook 的输入输出会以同一调用 ID 保存至独立 `workspace/audit/diagnostic/`；两个级别都会脱敏常见密钥、移除 NUL 并限制大小，`full-local` 仅提高预算，不记录隐藏推理或二进制附件。`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，提供概览、可筛选调用明细和损坏记录；`audit report-md` 暂时弃用，但会继续生成兼容的 Markdown 报告。审计历史不会自动清理。
 

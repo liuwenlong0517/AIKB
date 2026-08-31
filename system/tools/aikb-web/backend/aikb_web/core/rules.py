@@ -38,6 +38,7 @@ class RuleSpec:
     readable: bool
     writable: bool
     risk_level: str
+    recommended_chars: int
     max_chars: int
 
     def public_dict(
@@ -58,6 +59,7 @@ class RuleSpec:
             "readable": self.readable,
             "writable": self.writable,
             "risk_level": self.risk_level,
+            "recommended_chars": self.recommended_chars,
             "max_chars": self.max_chars,
         }
         if content_hash is not None:
@@ -150,6 +152,7 @@ _RULE_SPECS: tuple[RuleSpec, ...] = tuple(
         item.readable,
         item.writable,
         RULE_RISK_LEVEL if item.writable else "read_only",
+        item.recommended_chars,
         item.max_chars,
     )
     for item in (_SHARED_RULES[key] for key in RULE_IDS)

@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import tempfile
+from datetime import date
 from urllib.parse import quote
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,19 @@ TYPE_DIRECTORY_PREFIXES = {
     "project-memory": ("projects/",),
     "candidate": ("experience/inbox/",),
 }
+GOVERNANCE_VERSION = 2
+ALLOWED_CHANGE_CLASSES = {
+    "factual-update", "operational-solution", "decision-record", "decision-proposal",
+    "supersession", "taxonomy-change", "sensitive-change", "candidate",
+}
+HIGH_IMPACT_CHANGE_CLASSES = {
+    "decision-record", "decision-proposal", "supersession", "taxonomy-change", "sensitive-change",
+}
+ALLOWED_EVIDENCE_KINDS = {"command", "test", "url", "commit", "file", "user-confirmation"}
+ALLOWED_APPROVAL_STATUSES = {"approved", "pending", "rejected", "not-required"}
+ALLOWED_REVIEW_STATES = {"open", "in-review", "blocked", "ready", "accepted", "rejected", "closed"}
+REVIEWED_STATES = {"accepted", "rejected", "closed"}
+ALLOWED_DUPLICATE_STATUSES = {"verified", "candidate", "deprecated"}
 
 
 @dataclass(frozen=True)
@@ -125,6 +139,133 @@ def _list_of_strings(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
 
 
+def _iso_date(value: Any) -> bool:
+    """验证日期既是 ISO ``YYYY-MM-DD`` 形状，也是真实日历日期。"""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _nonempty_text(value: Any) -> bool:
+    """判断元数据字段是否为可用于审计定位的非空文本。"""
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_v2_metadata(metadata: dict[str, Any], relative: str, errors: list[str]) -> None:
+    """校验 v2 治理门禁；只验证结构和留痕，不宣称证据内容真实。"""
+    if "governance_version" not in metadata:
+        # 无版本文档是受支持的 legacy 格式，不能因新门禁阻断旧索引。
+        return
+    if metadata.get("governance_version") != GOVERNANCE_VERSION:
+        errors.append(f"{relative}: governance_version 目前只支持 2")
+        return
+
+    change_class = metadata.get("change_class")
+    if change_class not in ALLOWED_CHANGE_CLASSES:
+        errors.append(f"{relative}: change_class 不受支持：{change_class}")
+    if not _nonempty_text(metadata.get("authority")):
+        errors.append(f"{relative}: v2 条目必须填写非空 authority")
+    if not _nonempty_text(metadata.get("preparer")):
+        errors.append(f"{relative}: v2 条目必须填写非空 preparer")
+    status = metadata.get("status")
+    review_state = metadata.get("review_state")
+    needs_review_identity = status in {"verified", "deprecated"} or review_state in REVIEWED_STATES
+    if needs_review_identity:
+        for field in ("reviewer", "reviewed_at"):
+            if field == "reviewer" and not _nonempty_text(metadata.get(field)):
+                errors.append(f"{relative}: 已正式/已结案条目必须填写非空 reviewer")
+            elif field == "reviewed_at" and not _iso_date(metadata.get(field)):
+                errors.append(f"{relative}: 已正式/已结案条目必须填写有效 reviewed_at")
+    if _nonempty_text(metadata.get("preparer")) and _nonempty_text(metadata.get("reviewer")):
+        if metadata["preparer"].strip().casefold() == metadata["reviewer"].strip().casefold():
+            errors.append(f"{relative}: preparer 与 reviewer 不得为同一人")
+
+    evidence = metadata.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        errors.append(f"{relative}: v2 正式/候选条目必须至少有一项结构化 evidence")
+    else:
+        for index, item in enumerate(evidence, start=1):
+            if not isinstance(item, dict):
+                errors.append(f"{relative}: evidence[{index}] 必须是对象，不能是自由文本")
+                continue
+            missing = [field for field in ("kind", "ref", "result", "date") if field not in item]
+            if missing:
+                errors.append(f"{relative}: evidence[{index}] 缺少字段 {', '.join(missing)}")
+            if item.get("kind") not in ALLOWED_EVIDENCE_KINDS:
+                errors.append(f"{relative}: evidence[{index}].kind 不受支持：{item.get('kind')}")
+            if not _nonempty_text(item.get("ref")):
+                errors.append(f"{relative}: evidence[{index}].ref 必须是非空文本")
+            if not _nonempty_text(item.get("result")):
+                errors.append(f"{relative}: evidence[{index}].result 必须是非空文本")
+            if not _iso_date(item.get("date")):
+                errors.append(f"{relative}: evidence[{index}].date 必须是有效 YYYY-MM-DD")
+            ref = item.get("ref", "").strip() if _nonempty_text(item.get("ref")) else ""
+            if item.get("kind") == "url" and ref and not re.match(r"^https?://\S+$", ref, re.I):
+                errors.append(f"{relative}: evidence[{index}].ref 在 kind=url 时必须是 http(s) URL")
+            if item.get("kind") == "commit" and ref and not re.fullmatch(r"[0-9a-fA-F]{7,40}", ref):
+                errors.append(f"{relative}: evidence[{index}].ref 在 kind=commit 时必须是 7-40 位十六进制提交号")
+            if item.get("kind") == "file" and ref:
+                # 只接受 content/ 或项目逻辑相对路径，避免证据泄露本机物理路径。
+                if re.match(r"^[A-Za-z]:[\\/]", ref) or ref.startswith(("/", "\\")) or re.search(r"(?:^|[/\\])\.\.(?:[/\\]|$)", ref):
+                    errors.append(f"{relative}: evidence[{index}].ref 在 kind=file 时必须是安全的项目相对路径")
+            unknown = sorted(set(item) - {"kind", "ref", "result", "date"})
+            if unknown:
+                errors.append(f"{relative}: evidence[{index}] 存在未允许字段 {', '.join(unknown)}")
+
+    if change_class == "decision-proposal" and (status != "candidate" or metadata.get("type") != "candidate"):
+        errors.append(f"{relative}: decision-proposal 只能使用 type=candidate、status=candidate 的 Inbox 表示")
+    if metadata.get("type") == "decision" and change_class not in {"decision-record", "decision-proposal"}:
+        errors.append(f"{relative}: type=decision 必须使用 decision-record 或 decision-proposal")
+    if metadata.get("type") == "candidate":
+        if metadata.get("status") != "candidate":
+            errors.append(f"{relative}: type=candidate 必须使用 candidate 状态")
+        if change_class not in {"candidate", "decision-proposal"}:
+            errors.append(f"{relative}: Inbox type=candidate 只能使用 candidate 或 decision-proposal change_class")
+    supersedes = metadata.get("supersedes", [])
+    if isinstance(supersedes, list) and supersedes and change_class != "supersession":
+        errors.append(f"{relative}: 非空 supersedes 必须使用 supersession change_class")
+
+    if change_class in HIGH_IMPACT_CHANGE_CLASSES:
+        approval_status = metadata.get("approval_status")
+        if approval_status not in ALLOWED_APPROVAL_STATUSES - {"not-required"}:
+            errors.append(f"{relative}: 高影响条目必须填写 approval_status=approved/pending/rejected")
+        if metadata.get("status") == "verified":
+            if approval_status != "approved":
+                errors.append(f"{relative}: 高影响条目未经 approved 不得标记 verified")
+            if not _nonempty_text(metadata.get("approved_by")):
+                errors.append(f"{relative}: verified 高影响条目必须填写 approved_by")
+            if not _iso_date(metadata.get("approved_at")):
+                errors.append(f"{relative}: verified 高影响条目必须填写有效 approved_at")
+
+    if status == "candidate":
+        lifecycle_required = ("owner", "captured_at", "next_action_due", "review_state")
+        missing = [field for field in lifecycle_required if not _nonempty_text(metadata.get(field))]
+        if missing:
+            errors.append(f"{relative}: v2 Inbox 缺少字段 {', '.join(missing)}")
+        for field in ("captured_at", "next_action_due"):
+            if field in metadata and not _iso_date(metadata.get(field)):
+                errors.append(f"{relative}: {field} 必须是有效 YYYY-MM-DD")
+        if _iso_date(metadata.get("captured_at")) and _iso_date(metadata.get("next_action_due")):
+            if metadata["next_action_due"] < metadata["captured_at"]:
+                errors.append(f"{relative}: next_action_due 不得早于 captured_at")
+        if metadata.get("review_state") not in ALLOWED_REVIEW_STATES:
+            errors.append(f"{relative}: review_state 不受支持：{metadata.get('review_state')}")
+        blocking = _nonempty_text(metadata.get("blocking_reason"))
+        duplicates = metadata.get("possible_duplicates")
+        duplicate_list = isinstance(duplicates, list) and all(_nonempty_text(item) for item in duplicates)
+        if not blocking and not duplicate_list:
+            errors.append(f"{relative}: v2 Inbox 至少填写 blocking_reason 或 possible_duplicates")
+
+    if change_class == "supersession":
+        checked = metadata.get("duplicate_check_statuses")
+        if not isinstance(checked, list) or set(checked) != ALLOWED_DUPLICATE_STATUSES:
+            errors.append(f"{relative}: supersession 必须声明已查重 verified/candidate/deprecated")
+
+
 def validate_document(document: MarkdownDocument, content_root: Path) -> list[str]:
     """校验单篇知识的元数据、目录归类、关系格式和正式条目字段，返回全部错误。"""
     metadata = document.metadata
@@ -175,8 +316,9 @@ def validate_document(document: MarkdownDocument, content_root: Path) -> list[st
             if not isinstance(target, str) or not target.startswith("aikb:"):
                 errors.append(f"{relative}: supersedes target 必须是 aikb: 标识")
     last_verified = metadata.get("last_verified")
-    if status != "candidate" and (not isinstance(last_verified, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", last_verified)):
-        errors.append(f"{relative}: 正式条目的 last_verified 必须是 YYYY-MM-DD")
+    if status != "candidate" and not _iso_date(last_verified):
+        errors.append(f"{relative}: 正式条目的 last_verified 必须是有效 YYYY-MM-DD")
+    _validate_v2_metadata(metadata, relative, errors)
     return errors
 
 
@@ -439,11 +581,56 @@ def metadata_report(settings: Settings) -> dict[str, Any]:
     }
 
 
-def review_report(settings: Settings) -> dict[str, Any]:
-    """生成候选晋升和正式知识复核条件报告；只读 Markdown，不自动改变状态。"""
+def _review_report_date(value: date | str | None) -> date:
+    """解析审查报告的基准日期；允许测试注入日期，默认使用本机当前日期。"""
+    if value is None:
+        return date.today()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("review report 的 as_of 必须是有效 YYYY-MM-DD") from exc
+    raise TypeError("review report 的 as_of 必须是 date、YYYY-MM-DD 或 None")
+
+
+def _safe_candidate_fields(metadata: dict[str, Any], governance_version: int | None) -> dict[str, Any]:
+    """只投影审查所需字段，避免把证据正文、阻塞原因等自由文本带入提醒链路。"""
+    if governance_version != GOVERNANCE_VERSION:
+        return {}
+    duplicates = metadata.get("possible_duplicates")
+    # 即使 legacy 文档携带异常值也不能让报告抛错或泄露任意对象；v2 只保留
+    # 可定位的 aikb ID，并限制数量，报告仍通过 duplicate_declared_count 反映声明。
+    safe_duplicates = [
+        item for item in duplicates[:20]
+        if isinstance(item, str) and re.fullmatch(r"aikb:[a-z0-9][a-z0-9:-]*", item)
+    ] if isinstance(duplicates, list) else []
+    return {
+        "governance_version": governance_version,
+        "owner": metadata.get("owner") if _nonempty_text(metadata.get("owner")) else None,
+        "next_action_due": metadata.get("next_action_due") if _iso_date(metadata.get("next_action_due")) else None,
+        "review_state": metadata.get("review_state") if metadata.get("review_state") in ALLOWED_REVIEW_STATES else None,
+        "possible_duplicates": safe_duplicates,
+    }
+
+
+def review_report(settings: Settings, as_of: date | str | None = None) -> dict[str, Any]:
+    """生成候选晋升和正式知识复核条件报告；只读 Markdown，不自动改变状态。
+
+    ``as_of`` 只用于判断 v2 Inbox 的 ``next_action_due`` 是否已经逾期，生产调用
+    默认采用本机日期，测试和离线审查可传入固定日期。报告投影有限字段，避免把
+    evidence、blocking_reason 或正文自由文本扩散到 SessionStart 和审计摘要。
+    """
+    report_date = _review_report_date(as_of)
     documents, errors = load_documents(settings)
     candidates: list[dict[str, Any]] = []
     review_items: list[dict[str, Any]] = []
+    overdue_count = 0
+    unowned_count = 0
+    duplicate_declared_count = 0
+    closed_still_in_inbox_count = 0
+    legacy_candidate_count = 0
     for item in documents:
         metadata = item.document.metadata
         common = {
@@ -455,7 +642,28 @@ def review_report(settings: Settings) -> dict[str, Any]:
             "content_hash": item.content_hash,
         }
         if metadata.get("status") == "candidate":
-            candidates.append({**common, "review_when": metadata.get("review_when", "")})
+            governance_version = metadata.get("governance_version")
+            candidate = {**common, "review_when": metadata.get("review_when", "")}
+            candidate.update(_safe_candidate_fields(metadata, governance_version))
+            if governance_version != GOVERNANCE_VERSION:
+                legacy_candidate_count += 1
+            owner = metadata.get("owner")
+            if not _nonempty_text(owner):
+                unowned_count += 1
+            due = metadata.get("next_action_due")
+            review_state = metadata.get("review_state")
+            # 已接受、拒绝或关闭的条目虽仍暂留 Inbox，但不再进入“逾期待处理”
+            # 计数；否则同一条目会同时被误报为逾期和已结案。legacy 无状态仍按
+            # 到期日期提示，提醒维护者先完成迁移或人工判断。
+            actionable = review_state not in REVIEWED_STATES
+            if actionable and _iso_date(due) and due < report_date.isoformat():
+                overdue_count += 1
+            duplicates = metadata.get("possible_duplicates")
+            if isinstance(duplicates, list) and duplicates:
+                duplicate_declared_count += 1
+            if metadata.get("review_state") in REVIEWED_STATES:
+                closed_still_in_inbox_count += 1
+            candidates.append(candidate)
         elif metadata.get("review_when"):
             review_items.append({
                 **common,
@@ -464,6 +672,15 @@ def review_report(settings: Settings) -> dict[str, Any]:
             })
     return {
         "valid": not errors,
+        "summary": {
+            "as_of": report_date.isoformat(),
+            "candidate_count": len(candidates),
+            "overdue_count": overdue_count,
+            "unowned_count": unowned_count,
+            "duplicate_declared_count": duplicate_declared_count,
+            "closed_still_in_inbox_count": closed_still_in_inbox_count,
+            "legacy_candidate_count": legacy_candidate_count,
+        },
         "candidates": candidates,
         "review_items": review_items,
         "errors": errors,

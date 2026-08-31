@@ -36,7 +36,9 @@ class RuleRegistryTests(unittest.TestCase):
         model = registry.read_model("user", "# 用户规则\r\n", "a" * 40)
         public = model.public_dict()
         self.assertEqual(public["content"], "# 用户规则\n")
-        self.assertEqual(public["content_hash"], rule_content_hash("# 用户规则\n", max_chars=800))
+        self.assertEqual(public["content_hash"], rule_content_hash("# 用户规则\n", max_chars=1600))
+        self.assertEqual(public["recommended_chars"], 1000)
+        self.assertEqual(public["max_chars"], 1600)
         self.assertNotIn("path", public)
         self.assertNotIn("physical_path", public)
 
@@ -45,7 +47,7 @@ class RuleRegistryTests(unittest.TestCase):
         with self.assertRaises(RuleError):
             registry.read_model("user", "\x00", "a" * 40)
         with self.assertRaises(RuleError):
-            registry.read_model("user", "x" * 801, "a" * 40)
+            registry.read_model("user", "x" * 1601, "a" * 40)
         with self.assertRaises(RuleError):
             registry.read_model("user", "x" * 4097 + "\n", "a" * 40)
 

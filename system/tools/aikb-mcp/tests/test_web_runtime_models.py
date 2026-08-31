@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,7 @@ class WebRuntimeModelTests(unittest.TestCase):
                 "next_steps": ["检查公共字段", "确认索引状态"],
                 "changed_files": [str(self.root / "secret.txt"), "system/tools/aikb-mcp/aikb/workstate.py"],
                 "verification": "password=do-not-return",
+                "agent": "codex",
                 "session_id": "session-visible-for-correlation",
             }
         )
@@ -92,6 +94,35 @@ class WebRuntimeModelTests(unittest.TestCase):
         self.assertNotIn("do-not-return", json.dumps(detail, ensure_ascii=False))
         self.assertEqual(before, work_file.read_bytes())
 
+        item = detail["item"]
+        self.assertEqual(item["work_schema_version"], "2")
+        self.assertEqual(item["owner_agent"], "codex")
+        self.assertEqual(item["author_agent"], "codex")
+        self.assertEqual(item["agent"], item["author_agent"])
+        self.assertEqual(item["ownership_mode"], "session-bound")
+        self.assertEqual(item["participant_count"], 0)
+
+    def test_legacy_work_has_no_guessed_owner_and_latest_author_is_explicit(self) -> None:
+        """旧 v1 文档保留兼容作者字段，但 owner 必须为空且标记未认领。"""
+        work_file = next((self.settings.workspace_root / "active").rglob("work.md"))
+        source = work_file.read_text(encoding="utf-8")
+        # 删除 v2 owner 元数据，模拟升级前事实源；不改变正文或最新作者。
+        source = re.sub(
+            r"^(?:work_schema_version|owner_agent|owner_session_id|ownership_mode|ownership_binding|participants):.*\r?\n?",
+            "",
+            source,
+            flags=re.MULTILINE,
+        )
+        work_file.write_text(source, encoding="utf-8")
+        self.settings.work_db.unlink()
+        item = self.store.web_active_work_states()["items"][0]
+        self.assertEqual(item["work_schema_version"], "1")
+        self.assertIsNone(item["owner_agent"])
+        self.assertIsNone(item["owner_session_id"])
+        self.assertEqual(item["ownership_mode"], "legacy-unbound")
+        self.assertEqual(item["author_agent"], "codex")
+        self.assertEqual(item["agent"], "codex")
+
     def test_checkpoint_list_and_limited_detail(self) -> None:
         """检查点只暴露有限元数据和裁剪后的章节，不回传源文件路径。"""
         checkpoints = self.store.web_checkpoints(self.created["work_id"])
@@ -103,6 +134,8 @@ class WebRuntimeModelTests(unittest.TestCase):
         self.assertNotIn("project_path", _keys(checkpoints))
         self.assertNotIn("path", _keys(detail))
         self.assertNotIn(str(self.root), json.dumps(detail, ensure_ascii=False))
+        self.assertEqual(detail["item"]["author_agent"], "codex")
+        self.assertEqual(detail["item"]["author_session_id"], "session-visible-for-correlation")
 
     def test_repository_summary_is_semantic_and_short(self) -> None:
         """双仓摘要返回角色、分支、短 revision 和脏状态，不返回 Git 原文。"""
@@ -122,6 +155,7 @@ class WebRuntimeModelTests(unittest.TestCase):
                 "goal": "第二个活动任务",
                 "status": "blocked",
                 "agent": "luna",
+                "session_id": "luna-second",
             }
         )
         project = self.store.web_active_work_states()["items"][0]["project_id"]
@@ -153,7 +187,8 @@ class WebRuntimeModelTests(unittest.TestCase):
                 "project_path": str(self.root),
                 "work_id": self.created["work_id"],
                 "goal": "追加检查点",
-                "session_id": "",
+                "agent": "codex",
+                "session_id": "session-visible-for-correlation",
             }
         )
         result = self.store.web_checkpoints(self.created["work_id"], page=1, page_size=1)

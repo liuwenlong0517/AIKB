@@ -2,11 +2,23 @@
 id: aikb:knowledge:category:topic
 type: knowledge
 status: verified
+governance_version: 2
+change_class: factual-update
+authority: "填写权威来源、项目负责人或用户确认引用"
+preparer: "填写准备人"
+reviewer: "填写独立复核人"
+reviewed_at: YYYY-MM-DD
+approval_status: not-required
 tags: []
 applicable_versions: ""
 last_verified: YYYY-MM-DD
 review_when: ""
 supersedes: []
+evidence:
+  - kind: test
+    ref: "填写测试名称或命令"
+    result: "填写实际结果"
+    date: YYYY-MM-DD
 relations: []
 ---
 

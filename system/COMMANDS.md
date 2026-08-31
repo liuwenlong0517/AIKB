@@ -236,7 +236,7 @@ PowerShell 脚本推荐使用以下形式启动，以避免当前 PowerShell 配
 
 场景：由 Codex/Claude Code 配置直接调用；也可人工模拟 hook 输入，验证真实 stdin/stdout、UTF-8 和 fail-open 行为。它接收 stdin 中的 JSON，不应把普通日志写到 stdout。
 
-    '{"cwd":"E:\\CodeSpace\\AIKB","prompt":"检查任务"}' | pwsh -NoProfile -ExecutionPolicy Bypass -File system/adapters/shared/aikb-hook.ps1 -Agent codex -Event session-start
+    '{"cwd":"E:\\CodeSpace\\AIKB","session_id":"<Hook 提供的精确 session_id>","prompt":"检查任务"}' | pwsh -NoProfile -ExecutionPolicy Bypass -File system/adapters/shared/aikb-hook.ps1 -Agent codex -Event session-start
 
 参数：
 
@@ -250,10 +250,11 @@ stdin payload 常用字段：`cwd` 或 `project_path`（项目路径）、`sessi
 结果：
 
 - 唯一活动任务 + `session-start`：返回 `hookSpecificOutput.additionalContext` 恢复胶囊；
-- 无活动任务：通常返回 `{}`；若是 `session-start` 且知识审查队列非空，则返回仅含知识审查提醒的 `hookSpecificOutput.additionalContext`；
-- 多个活动任务：返回 `{}`，不注入恢复胶囊，并记录 `multiple_active_work`；这不表示没有活动任务；
-- `session-start` 会汇总提醒 `candidate` 晋升队列和带 `review_when` 的正式条目；`review_when` 是自然语言条件，系统不会自动判定是否到期；
-- `stop` 且检查点后 Git 状态变化：返回 `decision=block`，要求先写检查点；
+- 非 `session-start` 且无匹配活动任务：返回 `{}`；`session-start` 即使没有活动任务也返回会话绑定提示和 candidate 审查摘要；
+- `session-start` 有多个活动任务或仅发现 foreign 任务：不注入恢复胶囊，记录 `multiple_active_work` 或 `foreign_active_work`，但仍返回会话绑定提示和 candidate 审查摘要；这不表示没有活动任务；
+- `session-start` 每次都会报告 candidate 总数，并突出逾期、无 owner、声明可能重复和已结案仍留 Inbox；同时汇总带 `review_when` 的正式条目。`review_when` 是自然语言条件，系统不会自动判定是否满足；提醒不自动删除、晋升或关闭；
+- 活动任务只有当前 Agent/精确 `session_id` 为 owner 或已登记 participant 时才会注入或参与 Stop 门禁；检测到外来任务时不注入、不阻断，并记录 `foreign_active_work`；
+- `stop` 且当前 owner/participant 的检查点后 Git 状态变化：返回 `decision=block`，要求先写检查点；外来会话不会因该任务被阻断；
 - `stop_hook_active=true` 或 Git 未变化：返回 `{}`；
 - `pre-compact`/`session-end`：正常记录事件并返回 `{}`；
 - wrapper 正常调用 Python 时输出紧凑 JSON；Python 不存在、双仓无效、handler 非零或启动失败时 wrapper 仍返回退出码 `0`，必要时写入 `workspace/audit/fallback/`，不阻断宿主 Agent。
@@ -329,7 +330,7 @@ PowerShell 启动器自身只有一个参数：`AikbArguments`，类型为字符
 
     python -m aikb review
 
-无命令专属参数。结果为 JSON：列出所有 `candidate` 条目及其晋升前查重信息，并列出记录了 `review_when` 的正式条目。该命令只读 Markdown，不自动晋升、修改状态或判断自然语言复核条件是否已满足；校验错误会随报告返回并使命令以非零退出。
+无命令专属参数。结果为 JSON：列出所有 `candidate` 条目及其晋升前查重信息，并列出记录了 `review_when` 的正式条目；同时返回基准日期和候选总数、逾期、无 owner、声明可能重复、已结案仍留 Inbox 的摘要计数。v2 candidate 只返回有限生命周期字段，legacy candidate 可见但不硬失败。该命令只读 Markdown，不自动晋升、修改状态或判断自然语言复核条件是否已满足；校验错误会随报告返回并使命令以非零退出。
 
 ### 4.4 `rebuild`：重建全部派生索引
 
@@ -402,7 +403,7 @@ PowerShell 启动器自身只有一个参数：`AikbArguments`，类型为字符
 
 ### 4.8 `hook`：直接运行 Python hook handler
 
-    '{"cwd":"E:\\CodeSpace\\AIKB"}' | python -m aikb hook --agent codex --event session-start
+    '{"cwd":"E:\\CodeSpace\\AIKB","session_id":"<本次 Hook 提供的精确 session_id>"}' | python -m aikb hook --agent codex --event session-start
 
 参数：
 
@@ -412,6 +413,8 @@ PowerShell 启动器自身只有一个参数：`AikbArguments`，类型为字符
 | `--event EVENT` | 是 | 生命周期事件；可用 `session-start`/`sessionstart`、`pre-compact`/`precompact`、`stop`、`session-end`/`sessionend`，未知值会记录 unsupported 并返回空对象。 |
 
 stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-hook.ps1` 相同，但这是底层 handler：JSON 无效或业务异常会非零退出，不具备 wrapper 的 fail-open 退出策略。
+
+工作状态相关 MCP 写入必须从 `python -m aikb serve --agent codex`（或实际 Agent 标识）建立服务端边界；`session_id` 只能原样使用 Hook payload 提供的值，不是可用于认证的密码。没有精确会话匹配时 Hook 不注入、不 Stop 阻断；跨 Agent 续写应先调用 `authorize_work_participant`，旧任务先调用 `claim_work_state`。
 
 ### 4.9 `audit`：查询本机审计
 
@@ -589,7 +592,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 场景：查看候选晋升队列和正式知识的人工复核条件；只读，不改变知识状态。
 
-参数：无。结果包含 `valid`、`candidates`、`review_items` 和 `errors`；`candidates` 用于先查重再决定是否晋升，`review_items` 用于人工按 `review_when` 复核。`review_when` 保留原始自然语言，系统不自动判断条件是否满足。
+参数：无。结果包含 `valid`、`summary`、`candidates`、`review_items` 和 `errors`；`summary` 报告基准日期、候选总数、逾期、无 owner、声明可能重复和已结案仍留 Inbox 的计数。v2 candidate 仅投影 owner、next_action_due、review_state、possible_duplicates 等有限字段，legacy candidate 仍可见但不因缺少 v2 字段硬失败。`candidates` 用于先查重再决定是否晋升，`review_items` 用于人工按 `review_when` 复核。`review_when` 保留原始自然语言，系统不自动判断条件是否满足。
 
     {"name":"review_knowledge","arguments":{}}
 
@@ -607,7 +610,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 场景：恢复本机未完成任务；只返回紧凑胶囊，不读取聊天记录。
 
-参数：`project_path`（可选）、`work_id`（可选）、`limit`（整数 `1..20`，默认 `5`）。省略 `project_path` 时会跨项目返回全部活动任务，调用方必须自行核对项目；不要把跨项目的唯一结果当作当前项目确认。
+参数：`project_path`（可选）、`work_id`（可选）、`limit`（整数 `1..20`，默认 `5`）。省略 `project_path` 时会跨项目返回全部活动任务，调用方必须自行核对项目；不要把跨项目的唯一结果当作当前项目确认。Hook 自动恢复还会按当前 Agent 和精确 `session_id` 过滤，MCP 查询本身不会替调用方作归属授权。
 
     {"name":"get_work_state","arguments":{"project_path":"E:\\CodeSpace\\AIKB","limit":5}}
 
@@ -630,7 +633,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 示例：
 
-    {"name":"checkpoint_work_state","arguments":{"project_path":"E:\\CodeSpace\\AIKB","goal":"整理控制层命令手册","status":"active","agent":"codex","session_id":"session-20260827","role":"implement","changed_files":["system/COMMANDS.md"],"verification":["validate-structure.ps1"]}}
+    {"name":"checkpoint_work_state","arguments":{"project_path":"E:\\CodeSpace\\AIKB","goal":"整理控制层命令手册","status":"active","agent":"codex","session_id":"<本次 Hook 原样提供的 session_id>","role":"implement","changed_files":["system/COMMANDS.md"],"verification":["validate-structure.ps1"]}}
 
 结果含 `work_id`、`project_id`、`checkpoint_id`、状态、work.md 路径和是否应用脱敏。异常包括缺少项目路径/新任务 goal、非法 status、仓库列表超过 8 项、单检查点超过 64 KiB、路径越过 workspace 边界或显式 `work_id` 已存在于归档。
 
@@ -640,13 +643,29 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 必填参数：`work_id`、`agent`、`session_id`；`status` 必须是 `completed`、`abandoned` 或 `superseded`；`note` 可选字符串。
 
-    {"name":"close_work_state","arguments":{"work_id":"整理命令手册-a1b2c3d4","status":"completed","agent":"codex","session_id":"session-20260827","note":"已完成校验"}}
+    {"name":"close_work_state","arguments":{"work_id":"整理命令手册-a1b2c3d4","status":"completed","agent":"codex","session_id":"<创建该任务时 Hook 原样提供的 session_id>","note":"已完成校验"}}
 
 结果含工作 ID、最终状态、最后检查点和归档路径。work ID 格式无效、匹配不到唯一活动任务、归档目标已存在或归档路径越界时返回错误；该操作不是幂等删除，重复关闭同一工作项不会当作成功。
 
+### 6.6 `claim_work_state`
+
+场景：旧格式活动任务缺少可靠 owner 时，当前会话显式认领后才允许恢复、检查点和 Stop 门禁。
+
+必填参数：`work_id`、`agent`、`session_id`。`session_id` 必须使用当前 Hook 提供的精确值，不要自行生成或借用其他会话标签。
+
+    {"name":"claim_work_state","arguments":{"work_id":"legacy-task-a1b2c3d4","agent":"codex","session_id":"<本次 Hook 原样提供的 session_id>"}}
+
+### 6.7 `authorize_work_participant`
+
+场景：任务 owner 显式管理跨 Agent 续写。`mode=shared` 保留 owner 并增加 participant；`mode=handed-off` 将任务交接给 participant；`mode=revoke` 撤销精确 participant。owner、participant 的 Agent 和会话均必须显式填写。
+
+    {"name":"authorize_work_participant","arguments":{"work_id":"task-a1b2c3d4","owner_agent":"codex","owner_session_id":"<owner Hook 原样提供的 session_id>","participant_agent":"claude-code","participant_session_id":"<participant Hook 原样提供的 session_id>","role":"verify","mode":"handed-off"}}
+
+MCP 服务必须以 `python -m aikb serve --agent codex` 或对应 Agent 标识启动；服务端会拒绝请求参数自报的其他 Agent。`session_id` 是 Hook 的技术关联标签而非密码学凭据；同一 Windows 用户下具有 `workspace/` 文件权限的恶意进程仍可篡改状态，若需强制隔离必须增加操作系统权限或受保护 broker。
+
 ## 7. AIKB WebUI 命令
 
-WebUI 当前在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读、活动 Working State、检查点、脱敏审计查询和系统状态。服务固定绑定 `127.0.0.1`，不提供知识修改、Shell 执行、规则治理、归档任务搜索或原始诊断下载；macOS 仅保留扩展位置，尚未实现或验证。
+WebUI 当前在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读、活动 Working State、检查点、脱敏审计查询、系统状态，以及规则读取和 USER_RULES.md 的受控预览/确认应用。AI_RULES.md 与 CONTRIBUTING.md 在 Web 中只读；服务不提供知识正文修改、Working State 写入、Shell 执行、归档任务搜索或原始诊断下载。规则 apply 只接受短期确认凭据并由服务端校验基线，macOS 仅保留扩展位置，尚未实现或验证。
 
 ### 7.1 构建：`build-aikb-web.ps1`
 

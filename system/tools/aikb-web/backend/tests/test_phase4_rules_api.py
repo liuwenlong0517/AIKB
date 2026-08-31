@@ -73,7 +73,8 @@ class Phase4RulesApiTests(unittest.TestCase):
         self.assertIn("@@", data["diff"])
         self.assertIn("# 预览测试", data["diff"])
         self.assertEqual(data["expires_in_seconds"], 300)
-        self.assertEqual(data["validator_version"], "phase4-rules-v1")
+        self.assertEqual(data["validator_version"], "phase4-rules-v2")
+        self.assertEqual(data["validation"]["warnings"], [])
         change_dir = Path(self.temp.name) / "runtime" / "web" / "rule-changes" / data["expires_at"][0:4] / data["expires_at"][5:7] / data["change_id"]
         transaction = json.loads((change_dir / "transaction.json").read_text(encoding="utf-8"))
         self.assertEqual(transaction["status"], "prepared")
