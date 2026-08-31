@@ -10,6 +10,7 @@ import { RuntimePage } from '../pages/RuntimePage';
 import { AuditPage } from '../pages/AuditPage';
 import { TasksPage } from '../pages/TasksPage';
 import { RulesPage } from '../pages/RulesPage';
+import { MaintenancePage } from '../pages/MaintenancePage';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
@@ -27,6 +28,7 @@ export function App() {
             <Route path="/knowledge/view" element={<DocumentPage />} />
             <Route path="/rules" element={<RulesPage />} />
             <Route path="/rules/:ruleId" element={<RulesPage />} />
+            <Route path="/maintenance" element={<MaintenancePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/system" element={<SystemPage />} />
             <Route path="/runtime" element={<RuntimePage />} />

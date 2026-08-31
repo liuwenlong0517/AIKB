@@ -23,6 +23,7 @@ from aikb_web.api.v1.actions import router as actions_router
 from aikb_web.api.v1.tasks import router as tasks_router
 from aikb_web.api.v1.system import router as system_router
 from aikb_web.api.v1.rules import router as rules_router
+from aikb_web.api.v1.maintenance import router as maintenance_router
 from aikb_web.core.actions import ActionRegistry, ConfirmationTokenService
 from aikb_web.core.gateway import GatewayError, KnowledgeNotFound, KnowledgeGateway, CoreKnowledgeGateway
 from aikb_web.core.orchestrator import TaskOrchestrator
@@ -31,6 +32,7 @@ from aikb_web.core.rule_preview import RulePreviewService, RuleServiceError
 from aikb_web.core.rule_task import RuleChangeTaskCoordinator
 from aikb_web.core.rule_transaction import RuleTransactionExecutor
 from aikb_web.platform import platform_state
+from aikb_web.platform.windows.maintenance_readonly import build_windows_readonly_adapter
 
 
 LOGGER = logging.getLogger("aikb_web")
@@ -133,8 +135,10 @@ def create_app(
     orchestrator: TaskOrchestrator | None = None,
     rule_change_executor: Any | None = None,
     rule_task_coordinator: RuleChangeTaskCoordinator | None = None,
+    maintenance_adapter: Any | None = None,
+    maintenance_platform_adapter: Any | None = None,
 ) -> FastAPI:
-    """创建可注入网关/任务/规则执行器的 FastAPI 应用，便于契约测试和平台替换。"""
+    """创建可注入网关/任务/规则/维护适配器的 FastAPI 应用，便于契约测试和平台替换。"""
     gateway_was_default = gateway is None
 
     @asynccontextmanager
@@ -245,6 +249,20 @@ def create_app(
     # 兼容已有状态接口名称；值实际是新协调器，而非 queued 即成功的 submitter。
     app.state.rule_apply_service = coordinator
     app.state.rule_tasks_recovered = False
+    # 显式注入优先；生产默认只在 Windows 且 settings 已验证时构造只读适配器。
+    # 工厂只解析固定用户边界并延迟文件检查到 inspect，构造阶段不扫描、写入或
+    # 创建运行材料；任何边界失败均安全降级为 None。
+    if maintenance_adapter is not None:
+        app.state.maintenance_adapter = maintenance_adapter
+    elif maintenance_platform_adapter is not None:
+        app.state.maintenance_adapter = maintenance_platform_adapter
+    elif app.state.task_settings is not None and platform_state().platform == "windows":
+        try:
+            app.state.maintenance_adapter = build_windows_readonly_adapter(app.state.task_settings)
+        except Exception:
+            app.state.maintenance_adapter = None
+    else:
+        app.state.maintenance_adapter = None
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:
@@ -322,6 +340,7 @@ def create_app(
     app.include_router(actions_router, prefix="/api/v1")
     app.include_router(tasks_router, prefix="/api/v1")
     app.include_router(rules_router, prefix="/api/v1")
+    app.include_router(maintenance_router, prefix="/api/v1")
 
     @app.api_route("/api/{path:path}", methods=["GET"])
     def unknown_api(path: str) -> None:

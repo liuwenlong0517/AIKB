@@ -14,6 +14,7 @@ from typing import Protocol, runtime_checkable
 
 from ..core.maintenance_targets import (
     MAINTENANCE_TARGET_REGISTRY,
+    MaintenanceManagedDifference,
     MAINTENANCE_STEP_IDS,
     MAINTENANCE_STATUSES,
     MaintenanceStatus,
@@ -35,6 +36,13 @@ MAINTENANCE_PLATFORM_REASON_CODES = (
     "unsupported_platform",
 )
 MAINTENANCE_ADAPTER_IDS = ("windows-maintenance", "macos-maintenance")
+MAINTENANCE_PLAN_SUMMARY_CODES = (
+    "no_change",
+    "repair_available",
+    "blocked_conflict",
+    "invalid_target",
+    "unsupported_platform",
+)
 _SAFE_PLATFORM_TOKEN_RE = re.compile(r"^[a-z][a-z0-9._-]{0,31}$")
 _SAFE_ARCHITECTURE_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 
@@ -75,6 +83,8 @@ class MaintenancePlan:
     before_fingerprint: str | None = None
     after_fingerprint: str | None = None
     preview_digest: str | None = None
+    differences: tuple[MaintenanceManagedDifference, ...] = ()
+    summary_code: str = "no_change"
 
     def __post_init__(self) -> None:
         """校验规划模型不含物理定位和非安全自由参数。"""
@@ -88,6 +98,22 @@ class MaintenancePlan:
             raise MaintenanceTargetError("维护规划步骤必须与目标静态定义完全一致")
         if tuple(self.logical_leaves) != target.logical_leaves:
             raise MaintenanceTargetError("维护规划叶子必须与目标静态定义完全一致")
+        if self.summary_code not in MAINTENANCE_PLAN_SUMMARY_CODES:
+            raise MaintenanceTargetError("维护规划摘要代码未声明")
+        if any(not isinstance(item, MaintenanceManagedDifference) for item in self.differences):
+            raise MaintenanceTargetError("维护规划差异类型无效")
+        if self.differences and tuple(item.leaf_id for item in self.differences) != target.logical_leaves:
+            raise MaintenanceTargetError("维护规划差异必须与目标静态叶子完全一致")
+        if self.differences:
+            codes = {item.difference_code for item in self.differences}
+            expected_summary = (
+                "no_change" if codes == {"unchanged"} else
+                "invalid_target" if "invalid" in codes else
+                "blocked_conflict" if "conflict" in codes else
+                "repair_available"
+            )
+            if self.summary_code != expected_summary:
+                raise MaintenanceTargetError("维护规划摘要与差异代码不一致")
         for field_name in ("before_fingerprint", "after_fingerprint", "preview_digest"):
             fingerprint = getattr(self, field_name)
             if fingerprint is None or _SHA256_RE.fullmatch(fingerprint) is None:
@@ -103,6 +129,8 @@ class MaintenancePlan:
             "before_fingerprint": self.before_fingerprint,
             "after_fingerprint": self.after_fingerprint,
             "preview_digest": self.preview_digest,
+            "differences": [item.public_dict() for item in self.differences],
+            "summary_code": self.summary_code,
         }
 
 
@@ -332,6 +360,7 @@ __all__ = [
     "MaintenancePlatformCapabilities",
     "MAINTENANCE_ADAPTER_IDS",
     "MAINTENANCE_OUTCOME_CODES",
+    "MAINTENANCE_PLAN_SUMMARY_CODES",
     "MAINTENANCE_PLATFORM_REASON_CODES",
     "MaintenancePlan",
     "MaintenanceRecoveryResult",

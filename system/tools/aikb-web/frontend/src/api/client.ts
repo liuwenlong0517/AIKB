@@ -25,6 +25,9 @@ import type {
   RulesData,
   RuleApplyData,
   RuleChangeEnvelope,
+  MaintenanceTargetsData,
+  MaintenanceTargetDetail,
+  MaintenancePreviewData,
 } from '../types/api';
 
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
@@ -176,6 +179,13 @@ export const api = {
   /** 读取规则事务安全状态，供应用后展示校验、回滚和人工恢复结果。 */
   ruleChange: (changeId: string): Promise<ApiResponse<RuleChangeEnvelope>> =>
     apiClient.getEnvelope<RuleChangeEnvelope>(`/rules/changes/${encodeURIComponent(changeId)}`),
+  /** 阶段 4B 只读维护资源；目标 ID 来自服务端静态注册表，浏览器不提交路径或正文。 */
+  maintenance: {
+    targets: () => apiClient.getEnvelope<MaintenanceTargetsData>('/maintenance/targets'),
+    target: (targetId: string) => apiClient.getEnvelope<MaintenanceTargetDetail>(`/maintenance/targets/${encodeURIComponent(targetId)}`),
+    preview: (targetId: string, body: { base_fingerprint: string }) =>
+      apiClient.postEnvelope<MaintenancePreviewData>(`/maintenance/targets/${encodeURIComponent(targetId)}/preview`, body),
+  },
 };
 
 /** 共享核心的详情读模型包含 item 包装；在 API 客户端边界统一摊平，页面不感知后端适配层形状。 */

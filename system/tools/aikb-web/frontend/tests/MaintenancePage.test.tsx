@@ -1,0 +1,102 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { describe, expect, it, vi } from 'vitest';
+import { MaintenancePage } from '../src/pages/MaintenancePage';
+import { api } from '../src/api/client';
+
+const mocks = vi.hoisted(() => ({ targets: vi.fn(), target: vi.fn(), statuses: vi.fn(), preview: vi.fn() }));
+vi.mock('../src/hooks/useApi', () => ({
+  useMaintenanceTargets: mocks.targets,
+  useMaintenanceTarget: mocks.target,
+  useMaintenanceTargetStatuses: mocks.statuses,
+  usePreviewMaintenance: mocks.preview,
+}));
+
+const query = <T,>(data: T) => ({ data: { data, meta: {} }, isLoading: false, error: null, refetch: vi.fn() });
+const mutation = (mutate = vi.fn()) => ({ data: undefined, isPending: false, error: null, mutate, reset: vi.fn() });
+
+const targetItems = [
+  { target_id: 'environment', title: 'AIKB 用户环境', description: '固定环境', risk_level: 'user_config_write', action_id: 'maintenance.environment.update', status: 'missing', base_fingerprint: 'a'.repeat(64) },
+  { target_id: 'agent.codex', title: 'Codex 安装修复', description: '固定 Codex', risk_level: 'user_config_write', action_id: 'maintenance.agent.codex.repair', status: 'drifted', base_fingerprint: 'b'.repeat(64) },
+  { target_id: 'agent.claude-code', title: 'Claude Code 安装修复', description: '固定 Claude', risk_level: 'user_config_write', action_id: 'maintenance.agent.claude-code.repair', status: 'unsupported' },
+];
+const statusQuery = (item: typeof targetItems[number]) => query({
+  target: item,
+  platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false },
+  status: { target_id: item.target_id, status: item.status, logical_leaves: [], steps: [], base_fingerprint: item.base_fingerprint },
+});
+
+function renderPage() {
+  return render(<MemoryRouter initialEntries={['/maintenance']}><Routes><Route path="/maintenance" element={<MaintenancePage />} /></Routes></MemoryRouter>);
+}
+
+describe('MaintenancePage', () => {
+  it('维护请求只使用固定逻辑目标和基线指纹，并复用安全 POST 头', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [], platform: { platform: 'windows', supported: false } }, meta: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { target: {}, platform: {}, status: {} }, meta: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { target: {}, platform: {}, inspection: {}, plan: {} }, meta: {} }), { status: 200 }));
+    await api.maintenance.targets();
+    await api.maintenance.target('agent.codex');
+    await api.maintenance.preview('agent.codex', { base_fingerprint: 'a'.repeat(64) });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/v1/maintenance/targets', '/api/v1/maintenance/targets/agent.codex', '/api/v1/maintenance/targets/agent.codex/preview']);
+    expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'Content-Type': 'application/json', 'X-AIKB-Request': '1' }), body: JSON.stringify({ base_fingerprint: 'a'.repeat(64) }) }));
+    fetchMock.mockRestore();
+  });
+
+  it('显示三个固定目标、状态和只读边界，不显示应用或任意配置输入', () => {
+    mocks.targets.mockReturnValue(query({ items: targetItems, platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false } }));
+    mocks.statuses.mockReturnValue(targetItems.map(statusQuery));
+    mocks.target.mockReturnValue(query({ target: targetItems[0], platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false }, status: { target_id: 'environment', status: 'missing', logical_leaves: ['user_environment.aikb_home', 'user_environment.aikb_knowledge_home'], steps: [], base_fingerprint: 'a'.repeat(64) }, leaves: [{ leaf_id: 'user_environment.aikb_home', existence: 'missing' }, { leaf_id: 'user_environment.aikb_knowledge_home', existence: 'present' }] }));
+    mocks.preview.mockReturnValue(mutation());
+    renderPage();
+    expect(screen.getByRole('navigation', { name: '维护目标目录' })).toBeInTheDocument();
+    expect(screen.getByText('环境')).toBeInTheDocument();
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+    expect(screen.getByText('Claude Code')).toBeInTheDocument();
+    expect(screen.getAllByText('尚未安装').length).toBeGreaterThan(0);
+    expect(screen.getByText('检测到漂移')).toBeInTheDocument();
+    expect(screen.getByText('当前平台不支持')).toBeInTheDocument();
+    expect(screen.getByText('当前仅开放状态查看和结构化预览')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /应用|修复|卸载/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('只用详情基线指纹请求结构化预览，并只渲染受管叶子摘要', async () => {
+    const mutate = vi.fn((_input: unknown, options: { onSuccess: (response: { data: object }) => void }) => options.onSuccess({ data: {
+    target: targetItems[0], platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false }, inspection: { target_id: 'environment', status: 'missing', logical_leaves: ['user_environment.aikb_home', 'user_environment.aikb_knowledge_home'], steps: [], base_fingerprint: 'a'.repeat(64) }, plan: { target_id: 'environment', preview_digest: 'c'.repeat(64), before_fingerprint: 'a'.repeat(64), after_fingerprint: 'b'.repeat(64), steps: [{ step_id: 'preflight' }, { step_id: 'backup' }, { step_id: 'write_environment' }, { step_id: 'verify' }], logical_leaves: ['user_environment.aikb_home', 'user_environment.aikb_knowledge_home'], differences: [{ leaf_id: 'user_environment.aikb_home', difference_code: 'drifted' }] },
+    } }));
+    mocks.targets.mockReturnValue(query({ items: targetItems, platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false } }));
+    mocks.statuses.mockReturnValue(targetItems.map(statusQuery));
+    mocks.target.mockReturnValue(query({ target: targetItems[0], platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false }, status: { target_id: 'environment', status: 'missing', logical_leaves: ['user_environment.aikb_home', 'user_environment.aikb_knowledge_home'], steps: [], base_fingerprint: 'a'.repeat(64) }, leaves: [{ leaf_id: 'user_environment.aikb_home', existence: 'present', progress: 'verified' }, { leaf_id: 'user_environment.aikb_knowledge_home', existence: 'present', progress: 'verified' }] }));
+    mocks.preview.mockReturnValue(mutation(mutate));
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: '查看结构化预览' }));
+    await waitFor(() => expect(mutate).toHaveBeenCalledWith({ targetId: 'environment', base_fingerprint: 'a'.repeat(64) }, expect.anything()));
+    expect(await screen.findByText('结构化预览已生成')).toBeInTheDocument();
+    expect(screen.getByText('受管内容将更新')).toBeInTheDocument();
+    expect(screen.queryByText(/C:\\|\/Users\\|备份路径|环境变量值/)).not.toBeInTheDocument();
+  });
+
+  it('冲突和损坏目标不提供预览按钮', () => {
+    const items = targetItems.map((item) => item.target_id === 'environment' ? { ...item, status: 'conflict' } : item);
+    mocks.targets.mockReturnValue(query({ items, platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false } }));
+    mocks.statuses.mockReturnValue(items.map(statusQuery));
+    mocks.target.mockReturnValue(query({ target: items[0], platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false }, status: { target_id: 'environment', status: 'conflict', logical_leaves: ['user_environment.aikb_home', 'user_environment.aikb_knowledge_home'], steps: [], base_fingerprint: 'a'.repeat(64) } }));
+    mocks.preview.mockReturnValue(mutation());
+    renderPage();
+    expect(screen.getByRole('button', { name: '查看结构化预览' })).toBeDisabled();
+    expect(screen.getByText('当前状态不具备安全预览条件。')).toBeInTheDocument();
+  });
+
+  it('macOS inspection_supported=false 时明确不支持只读检查', () => {
+    mocks.targets.mockReturnValue(query({ items: targetItems, platform: { platform: 'macos', supported: false, inspection_supported: false, preview_supported: false, apply_supported: false } }));
+    mocks.statuses.mockReturnValue(targetItems.map((item) => query({ target: item, platform: { platform: 'macos', supported: false, inspection_supported: false, preview_supported: false, apply_supported: false }, status: { target_id: item.target_id, status: 'unsupported', logical_leaves: [], steps: [] } })));
+    mocks.target.mockReturnValue(query({ target: targetItems[0], platform: { platform: 'macos', supported: false, inspection_supported: false, preview_supported: false, apply_supported: false }, status: { target_id: 'environment', status: 'unsupported', logical_leaves: [], steps: [] } }));
+    mocks.preview.mockReturnValue(mutation());
+    renderPage();
+    expect(screen.getByText('当前平台不支持安装与修复检查')).toBeInTheDocument();
+    expect(screen.getByText('当前平台不支持只读检查。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看结构化预览' })).toBeDisabled();
+  });
+});

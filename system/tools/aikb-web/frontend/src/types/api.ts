@@ -382,3 +382,89 @@ export interface RuleApplyData {
   task?: TaskSnapshot;
   [key: string]: unknown;
 }
+
+/** 阶段 4B 固定维护目标的公开摘要；只包含逻辑 ID 和安全状态。 */
+export type MaintenanceTargetStatus = 'ready' | 'missing' | 'drifted' | 'conflict' | 'invalid' | 'unsupported' | 'restart_required';
+
+export interface MaintenancePlatformData {
+  platform: string;
+  architecture?: string;
+  supported: boolean;
+  inspection_supported?: boolean;
+  preview_supported?: boolean;
+  apply_supported?: boolean;
+  reason_code?: string | null;
+}
+
+/** 阶段 4B 只允许服务端声明的固定维护目标，避免未知目标进入页面分支。 */
+export type MaintenanceTargetId = 'environment' | 'agent.codex' | 'agent.claude-code';
+
+export interface MaintenanceLeafData {
+  leaf_id: string;
+  existence?: 'present' | 'missing' | string;
+  progress?: string;
+  before_hash?: string | null;
+  expected_hash?: string;
+}
+
+export interface MaintenanceTargetSummary {
+  target_id: MaintenanceTargetId;
+  title: string;
+  description: string;
+  risk_level: string;
+  action_id: string;
+  status?: MaintenanceTargetStatus;
+  reason_code?: string | null;
+  logical_leaves?: string[];
+  steps?: string[];
+  base_fingerprint?: string | null;
+  restart_required?: boolean;
+  supported_platforms?: string[];
+}
+
+export interface MaintenanceTargetsData {
+  items: MaintenanceTargetSummary[];
+  platform: MaintenancePlatformData;
+}
+
+export interface MaintenanceTargetStateData {
+  target_id: MaintenanceTargetId;
+  status: MaintenanceTargetStatus;
+  reason_code?: string | null;
+  logical_leaves: string[];
+  steps: string[];
+  base_fingerprint?: string | null;
+  restart_required?: boolean;
+}
+
+/** GET 目标详情的安全包络；状态与静态目标定义分开，便于服务端保持字段边界。 */
+export interface MaintenanceTargetDetail {
+  target: MaintenanceTargetSummary;
+  platform: MaintenancePlatformData;
+  status: MaintenanceTargetStateData;
+  leaves?: MaintenanceLeafData[];
+}
+
+/** 只读结构化差异：页面只渲染服务端允许的语义字段，不回显配置正文或路径。 */
+export interface MaintenanceDiffData {
+  leaf_id: string;
+  difference_code?: 'unchanged' | 'missing' | 'drifted' | 'conflict' | 'invalid';
+  before_hash?: string | null;
+  after_hash?: string | null;
+}
+
+export interface MaintenancePreviewData {
+  target: MaintenanceTargetSummary;
+  platform: MaintenancePlatformData;
+  inspection: MaintenanceTargetStateData;
+  plan: {
+    target_id: string;
+    steps: Array<{ step_id: string }>;
+    logical_leaves: string[];
+    before_fingerprint: string;
+    after_fingerprint: string;
+    preview_digest: string;
+    differences?: MaintenanceDiffData[];
+    summary_code?: string;
+  };
+}

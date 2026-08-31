@@ -71,6 +71,13 @@ MAINTENANCE_REASON_CODES = (
     "unsupported_platform",
     "restart_required",
 )
+MAINTENANCE_DIFFERENCE_CODES = (
+    "unchanged",
+    "missing",
+    "drifted",
+    "conflict",
+    "invalid",
+)
 _REASON_BY_STATUS: Mapping[str, str] = MappingProxyType(
     {
         "ready": "none",
@@ -236,6 +243,7 @@ class MaintenanceTargetStatus:
     reason_code: str = "none"
     base_fingerprint: str | None = None
     restart_required: bool = False
+    differences: tuple["MaintenanceManagedDifference", ...] = ()
 
     def __post_init__(self) -> None:
         """校验状态、逻辑叶子和哈希，确保公开响应不可能回显路径类字段。"""
@@ -266,6 +274,21 @@ class MaintenanceTargetStatus:
             raise MaintenanceTargetError("该状态必须提供 base_fingerprint")
         if status == "unsupported" and self.base_fingerprint is not None:
             raise MaintenanceTargetError("unsupported 状态不得提供 base_fingerprint")
+        if any(not isinstance(item, MaintenanceManagedDifference) for item in self.differences):
+            raise MaintenanceTargetError("状态差异类型无效")
+        if self.differences and tuple(item.leaf_id for item in self.differences) != target.logical_leaves:
+            raise MaintenanceTargetError("状态差异必须与目标静态叶子完全一致")
+        if self.differences:
+            codes = {item.difference_code for item in self.differences}
+            derived_status = (
+                "invalid" if "invalid" in codes else
+                "conflict" if "conflict" in codes else
+                "ready" if codes == {"unchanged"} else
+                "missing" if codes == {"missing"} else
+                "drifted"
+            )
+            if status != derived_status:
+                raise MaintenanceTargetError("状态与受管差异代码不一致")
         object.__setattr__(self, "status", status)
 
     def public_dict(self) -> dict[str, Any]:
@@ -279,6 +302,45 @@ class MaintenanceTargetStatus:
             "steps": list(self.steps),
             "base_fingerprint": self.base_fingerprint,
             "restart_required": self.restart_required,
+            "differences": [item.public_dict() for item in self.differences],
+        }
+
+    to_public_dict = public_dict
+
+
+@dataclass(frozen=True)
+class MaintenanceManagedDifference:
+    """单个受管逻辑叶子的摘要差异，只允许固定代码和可选 SHA-256。
+
+    该模型故意不携带整段 Markdown/TOML/JSON、非受管正文、环境值或路径；
+    ``before_hash``/``after_hash`` 只用于让用户确认受管片段确实发生了什么
+    语义变化，后续 API 可直接使用其公开投影。
+    """
+
+    leaf_id: str
+    difference_code: str
+    before_hash: str | None = None
+    after_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        """校验逻辑叶子、差异枚举和摘要格式，拒绝正文伪装输入。"""
+
+        validate_logical_id(self.leaf_id, "leaf_id")
+        if self.difference_code not in MAINTENANCE_DIFFERENCE_CODES:
+            raise MaintenanceTargetError("受管差异代码未声明")
+        for field_name in ("before_hash", "after_hash"):
+            value = getattr(self, field_name)
+            if value is not None and _HASH_RE.fullmatch(value) is None:
+                raise MaintenanceTargetError(f"{field_name} 必须是 SHA-256")
+
+    def public_dict(self) -> dict[str, Any]:
+        """返回受管片段的最小结构化差异，不回显片段正文。"""
+
+        return {
+            "leaf_id": self.leaf_id,
+            "difference_code": self.difference_code,
+            "before_hash": self.before_hash,
+            "after_hash": self.after_hash,
         }
 
     to_public_dict = public_dict
@@ -350,6 +412,7 @@ __all__ = [
     "MAINTENANCE_RISK_LEVEL",
     "MAINTENANCE_ACTION_BY_TARGET",
     "MAINTENANCE_ACTION_IDS",
+    "MAINTENANCE_DIFFERENCE_CODES",
     "MAINTENANCE_LEAF_IDS",
     "MAINTENANCE_LEAVES_BY_TARGET",
     "MAINTENANCE_REASON_CODES",
@@ -358,6 +421,7 @@ __all__ = [
     "MAINTENANCE_TARGET_IDS",
     "MAINTENANCE_TARGET_REGISTRY",
     "MaintenanceStatus",
+    "MaintenanceManagedDifference",
     "MaintenanceTargetError",
     "MaintenanceTargetRegistry",
     "MaintenanceTargetSpec",

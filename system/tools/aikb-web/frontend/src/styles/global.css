@@ -60,6 +60,24 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .rules-confirmation-zone { display: grid; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid #ffd591; border-radius: 8px; background: #fffaf0; }
 .rules-confirmation-checkbox { line-height: 1.6; }
 .rules-apply-result { padding-top: 4px; }
+.maintenance-platform-alert { margin-bottom: 16px; }
+.maintenance-notice { margin-bottom: 16px; }
+.maintenance-layout { align-items: stretch; }
+.maintenance-target-list-card, .maintenance-detail-card { height: 100%; }
+.maintenance-target-list { display: grid; gap: 8px; }
+.maintenance-target-item { display: grid; gap: 4px; width: 100%; padding: 12px; text-align: left; border: 1px solid #edf0f5; border-radius: 8px; background: #fff; color: #172033; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.maintenance-target-item:hover, .maintenance-target-item.is-selected { border-color: #69b1ff; background: #f5f9ff; }
+.maintenance-target-item-title { color: #14213d; font-weight: 600; }
+.maintenance-target-item-id, .maintenance-target-item-status { color: #68758a; font-size: 12px; overflow-wrap: anywhere; }
+.maintenance-detail-heading { margin-bottom: 8px; }
+.maintenance-leaf-list { border: 1px solid #f0f0f0; border-radius: 8px; }
+.maintenance-leaf-id { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+.maintenance-preview-action { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+.maintenance-detail-loading { display: grid; min-height: 220px; place-items: center; }
+.maintenance-preview-panel { margin-top: 20px; padding-top: 16px; border-top: 1px solid #edf0f5; }
+.maintenance-diff-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; width: 100%; }
+.maintenance-diff-status { display: block; margin-top: 3px; font-size: 12px; }
+.maintenance-diff-hash { max-width: 100%; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .markdown-body { color: #293448; line-height: 1.8; overflow-wrap: anywhere; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #14213d; line-height: 1.35; margin: 1.5em 0 0.7em; }
 .markdown-body h1:first-child { margin-top: 0; }

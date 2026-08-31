@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData } from '../types/api';
 import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
+import { useQueries } from '@tanstack/react-query';
 
 export const useOverview = () => useQuery({ queryKey: ['knowledge-overview'], queryFn: api.overview });
 export const useKnowledgeTree = () => useQuery({ queryKey: ['knowledge-tree'], queryFn: api.tree });
@@ -50,6 +51,29 @@ export const useRuleChange = (changeId: string | undefined, enabled = true): Use
       const status = query.state.data?.data.change.status;
       return status && ['succeeded', 'expired', 'rejected', 'rolled_back', 'recovery_required'].includes(status) ? false : 2_000;
     },
+  });
+
+/** 读取阶段 4B 三个静态维护目标；列表响应不含物理路径或配置正文。 */
+export const useMaintenanceTargets = (): UseQueryResult<ApiResponse<MaintenanceTargetsData>> =>
+  useQuery({ queryKey: ['maintenance-targets'], queryFn: api.maintenance.targets });
+
+/** 读取单个维护目标的状态和逻辑叶子，页面不会自行推导配置位置。 */
+export const useMaintenanceTarget = (targetId: string | undefined): UseQueryResult<ApiResponse<MaintenanceTargetDetail>> =>
+  useQuery({ queryKey: ['maintenance-target', targetId], queryFn: () => api.maintenance.target(targetId as string), enabled: Boolean(targetId) });
+
+/** 并行读取三个固定目标的状态，让目录在首屏即可展示环境、Codex、Claude Code 的状态。 */
+export const useMaintenanceTargetStatuses = () => useQueries({
+  queries: ['environment', 'agent.codex', 'agent.claude-code'].map((targetId) => ({
+    queryKey: ['maintenance-target', targetId],
+    queryFn: () => api.maintenance.target(targetId),
+  })),
+});
+
+/** 生成服务端只读结构化差异；请求只携带服务端返回的基线指纹。 */
+export const usePreviewMaintenance = () =>
+  useMutation({
+    mutationFn: (input: { targetId: string; base_fingerprint: string }): Promise<ApiResponse<MaintenancePreviewData>> =>
+      api.maintenance.preview(input.targetId, { base_fingerprint: input.base_fingerprint }),
   });
 
 /** 活动 Working State 列表查询；筛选参数进入 query key，保证分页和筛选切换不会复用错误页面。 */
