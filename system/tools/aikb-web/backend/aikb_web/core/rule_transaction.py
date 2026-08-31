@@ -10,12 +10,10 @@
 from __future__ import annotations
 
 import json
-import io
 import os
 import re
 import stat
 import sys
-import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -49,13 +47,12 @@ except ModuleNotFoundError:
 
 from .rule_changes import RuleChangeTransaction
 from .rule_preview import RulePreviewRejected, RulePreviewService, RuleServiceError
+from .maintenance_lock import MaintenanceLockError, MaintenanceWriteLock
 
 
 _CHANGE_ID = re.compile(r"^change-[0-9a-f]{32}$")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_LOCKS: dict[str, threading.Lock] = {}
-_LOCKS_GUARD = threading.Lock()
 _TERMINAL = frozenset({"succeeded", "expired", "rejected", "rolled_back", "recovery_required"})
 
 
@@ -74,69 +71,6 @@ class RuleTransactionScanIssue:
     change_id: str | None
     reason: str = "transaction_material_invalid"
     recovery_required: bool = True
-
-
-class _CrossProcessLock:
-    """使用固定 workspace 锁文件提供跨进程非阻塞排他锁。"""
-
-    def __init__(self, path: Path) -> None:
-        """绑定服务端生成的固定锁文件；路径不来自请求或事务 JSON。"""
-        self._path = path
-        self._handle: io.BufferedRandom | None = None
-
-    def acquire(self) -> None:
-        """创建/打开锁文件并尝试占用首字节；不支持的平台安全拒绝。"""
-        handle: io.BufferedRandom | None = None
-        try:
-            if self._path.is_symlink():
-                raise RuleTransactionError("控制仓锁材料不能是符号链接")
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            handle = open(self._path, "a+b")
-            handle.seek(0)
-            if self._path.stat().st_size == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                try:
-                    import fcntl
-                except ImportError as error:
-                    handle.close()
-                    raise RuleTransactionError("控制仓锁不可用") from error
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._handle = handle
-        except (OSError, ValueError) as error:
-            if handle is not None:
-                try:
-                    handle.close()
-                except OSError:
-                    pass
-            raise RuleTransactionError("控制仓正由其他规则事务占用") from error
-
-    def release(self) -> None:
-        """释放文件锁并关闭句柄；固定锁文件本身不删除以避免竞争窗口。"""
-        handle = self._handle
-        self._handle = None
-        if handle is None:
-            return
-        try:
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except (OSError, ValueError):
-            pass
-        finally:
-            handle.close()
 
 
 def _utc_now() -> str:
@@ -322,28 +256,22 @@ class RuleTransactionExecutor:
         """绑定既有预览服务；目标、令牌和候选位置均由服务端事实源决定。"""
         self._service = preview_service
         self._store = store or RuleChangeStore(preview_service._workspace_root)
-        key = str(preview_service._repo_root)
-        with _LOCKS_GUARD:
-            self._repository_lock = _LOCKS.setdefault(key, threading.Lock())
-        # 锁文件位于固定运行面目录，不与年月/change_id 绑定，避免请求影响锁目标。
-        # 与事务材料使用同一逐级边界检查，锁文件不能因运行面链接而落到外部。
-        runtime_root = self._store._runtime_root()
-        self._process_lock = _CrossProcessLock(runtime_root / ".control-repository.lock")
+        # 规则写与维护写必须使用同一固定语义锁，避免分别在 rule-changes 和
+        # maintenance-transactions 下加锁导致两个写事务并行破坏恢复边界。
+        self._process_lock = MaintenanceWriteLock(preview_service._workspace_root)
 
     @contextmanager
     def _acquire_repository(self, *, blocking: bool = False) -> Iterator[None]:
         """取得全控制仓进程锁；锁冲突不消费令牌，也不改变事务。"""
         # 每次进入临界区都重新检查固定运行面，防止进程启动后目录被替换为链接。
         self._store._runtime_root()
-        acquired = self._repository_lock.acquire(blocking=blocking)
-        if not acquired:
-            raise RuleTransactionError("控制仓正由其他规则事务占用")
         try:
             self._process_lock.acquire()
             yield
+        except MaintenanceLockError as error:
+            raise RuleTransactionError("控制仓正由其他规则事务占用") from error
         finally:
             self._process_lock.release()
-            self._repository_lock.release()
 
     def _target(self) -> Path:
         """通过共享静态注册表取得 user 目标，拒绝符号链接和路径注入。"""
