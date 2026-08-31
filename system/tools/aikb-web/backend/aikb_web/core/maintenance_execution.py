@@ -21,6 +21,7 @@ from ..platform.maintenance import (
 from .maintenance_changes import MaintenanceChange, MaintenanceChangeError
 from .maintenance_lock import MaintenanceClaimCoordinator, MaintenanceLockError, MaintenanceWriteLock
 from .maintenance_materials import MaintenanceMaterialManifest, MaintenanceMaterialStore
+from .maintenance_recovery_gate import MaintenanceRecoveryGate, MaintenanceRecoveryGateError
 from .maintenance_targets import MAINTENANCE_WRITE_LEAVES_BY_TARGET, validate_logical_id
 
 
@@ -70,6 +71,7 @@ class MaintenanceExecutor:
         workspace_root: str,
         material_store: MaintenanceMaterialStore,
         audit: MaintenanceExecutionAudit,
+        recovery_gate: MaintenanceRecoveryGate,
         *,
         lock: MaintenanceWriteLock | None = None,
         now_provider: Callable[[], str] | None = None,
@@ -85,11 +87,14 @@ class MaintenanceExecutor:
             raise MaintenanceExecutionError("维护材料接口无效")
         if not all(callable(getattr(audit, name, None)) for name in ("start", "finish")):
             raise MaintenanceExecutionError("审计门禁接口无效")
+        if not callable(getattr(recovery_gate, "assert_allowed", None)):
+            raise MaintenanceExecutionError("恢复门禁接口无效")
         self._store = store
         self._adapter = adapter
         self._lock = lock or MaintenanceWriteLock(workspace_root)
         self._material_store = material_store
         self._audit = audit
+        self._recovery_gate = recovery_gate
         self._claim_coordinator = MaintenanceClaimCoordinator(store, self._lock)
         self._now_provider = now_provider or _utc_now
 
@@ -97,6 +102,10 @@ class MaintenanceExecutor:
         """认领并执行 prepared 事务；失败时补偿并返回 rolled_back 或恢复态。"""
         try:
             with self._lock.held(timeout=timeout):
+                try:
+                    self._recovery_gate.assert_allowed()
+                except MaintenanceRecoveryGateError as error:
+                    raise MaintenanceExecutionError("维护恢复门禁仍阻断") from error
                 current = self._store.load(change_id)
                 self._validate_material_binding(current)
                 self._validate_before_claim(current, task_id)

@@ -12,6 +12,7 @@ from aikb_web.core.maintenance_changes import MaintenanceChange, MaintenanceLeaf
 from aikb_web.core.maintenance_execution import MaintenanceExecutionError, MaintenanceExecutor
 from aikb_web.core.maintenance_lock import MaintenanceClaimCoordinator, MaintenanceClaimError, MaintenanceWriteLock
 from aikb_web.core.maintenance_materials import MaintenanceMaterialManifest
+from aikb_web.core.maintenance_recovery_gate import MaintenanceRecoveryGate
 from aikb_web.core.maintenance_targets import MAINTENANCE_WRITE_LEAVES_BY_TARGET
 from aikb_web.platform.maintenance import MaintenanceStepResult, MaintenanceVerification
 
@@ -152,7 +153,8 @@ class MaintenanceExecutionTests(unittest.TestCase):
         self.temp.cleanup()
 
     def _executor(self, store: _Store, adapter: _Adapter, audit: _Audit | None = None) -> MaintenanceExecutor:
-        return MaintenanceExecutor(store, adapter, str(self.workspace), _Materials(store.current), audit or _Audit())
+        gate = MaintenanceRecoveryGate(); gate.complete_scan((), ())
+        return MaintenanceExecutor(store, adapter, str(self.workspace), _Materials(store.current), audit or _Audit(), gate)
 
     def test_all_targets_follow_declared_order_and_succeed(self) -> None:
         """环境、Codex、Claude Code 均按静态步骤执行并最终 succeeded。"""
@@ -231,13 +233,15 @@ class MaintenanceExecutionTests(unittest.TestCase):
         for audit in (_Audit(start_ok=False),):
             transaction = _change("environment")
             store = _Store(transaction)
-            executor = MaintenanceExecutor(store, _Adapter(), str(self.workspace), _Materials(transaction), audit)
+            gate = MaintenanceRecoveryGate(); gate.complete_scan((), ())
+            executor = MaintenanceExecutor(store, _Adapter(), str(self.workspace), _Materials(transaction), audit, gate)
             with self.assertRaises(MaintenanceExecutionError):
                 executor.execute(transaction.change_id, "task-exec")
             self.assertEqual(store.current.status, "prepared")
         transaction = _change("environment")
         store = _Store(transaction)
-        executor = MaintenanceExecutor(store, _Adapter(), str(self.workspace), _Materials(transaction, fail=True), _Audit())
+        gate = MaintenanceRecoveryGate(); gate.complete_scan((), ())
+        executor = MaintenanceExecutor(store, _Adapter(), str(self.workspace), _Materials(transaction, fail=True), _Audit(), gate)
         with self.assertRaises(MaintenanceExecutionError):
             executor.execute(transaction.change_id, "task-exec")
         self.assertEqual(store.current.status, "prepared")
@@ -247,7 +251,8 @@ class MaintenanceExecutionTests(unittest.TestCase):
         transaction = _change("environment")
         store = _Store(transaction)
         result_audit = _Audit(finish_ok=False)
-        executor = MaintenanceExecutor(store, _Adapter(fail_step="write_environment"), str(self.workspace), _Materials(transaction), result_audit)
+        gate = MaintenanceRecoveryGate(); gate.complete_scan((), ())
+        executor = MaintenanceExecutor(store, _Adapter(fail_step="write_environment"), str(self.workspace), _Materials(transaction), result_audit, gate)
         with self.assertRaises(MaintenanceExecutionError):
             executor.execute(transaction.change_id, "task-exec")
         self.assertEqual(store.current.status, "rolling_back")
@@ -266,7 +271,8 @@ class MaintenanceExecutionTests(unittest.TestCase):
         """缺失 start/finish 门禁不能构造执行器。"""
         transaction = _change("environment")
         with self.assertRaises(MaintenanceExecutionError):
-            MaintenanceExecutor(_Store(transaction), _Adapter(), str(self.workspace), _Materials(transaction), object())
+            gate = MaintenanceRecoveryGate(); gate.complete_scan((), ())
+            MaintenanceExecutor(_Store(transaction), _Adapter(), str(self.workspace), _Materials(transaction), object(), gate)
 
     def test_preflight_failure_or_exception_stays_prepared_without_audit(self) -> None:
         """预检返回失败或抛异常都不得认领、审计或开始写入。"""

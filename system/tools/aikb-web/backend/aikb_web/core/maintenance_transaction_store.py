@@ -12,6 +12,8 @@ import json
 import os
 import stat
 import threading
+from dataclasses import dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,48 @@ class MaintenanceTransactionStoreError(ValueError):
 
 
 _MAX_TRANSACTION_BYTES = 16 * 1024
+
+
+_SCAN_REASONS = frozenset({"scan_failed", "invalid_change_id", "duplicate_change_id", "invalid_transaction_directory", "invalid_transaction_material"})
+
+
+@dataclass(frozen=True)
+class MaintenanceScanIssue:
+    """全量扫描中的固定安全问题；不携带路径、异常或正文。"""
+
+    change_id: str | None
+    reason_code: str
+
+    def __post_init__(self) -> None:
+        if self.change_id is not None:
+            try:
+                validate_logical_id(self.change_id, "change_id")
+            except Exception as error:
+                raise MaintenanceTransactionStoreError("扫描 change_id 无效") from error
+        if self.reason_code not in _SCAN_REASONS:
+            raise MaintenanceTransactionStoreError("扫描原因码无效")
+
+    def to_dict(self) -> dict[str, str | None]:
+        """生成安全扫描投影。"""
+        return {"change_id": self.change_id, "reason_code": self.reason_code}
+
+
+@dataclass(frozen=True)
+class MaintenanceScanResult:
+    """扫描完成标记、合法事务和结构化问题的不可变安全结果。"""
+
+    transactions: tuple[MaintenanceChange, ...]
+    issues: tuple[MaintenanceScanIssue, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.transactions, tuple) or not all(isinstance(item, MaintenanceChange) for item in self.transactions):
+            raise MaintenanceTransactionStoreError("扫描事务结果无效")
+        if not isinstance(self.issues, tuple) or not all(isinstance(item, MaintenanceScanIssue) for item in self.issues):
+            raise MaintenanceTransactionStoreError("扫描问题结果无效")
+
+    def to_dict(self) -> dict[str, object]:
+        """生成不含路径和底层异常的扫描投影。"""
+        return {"transactions": [item.to_public_dict() for item in self.transactions], "issues": [item.to_dict() for item in self.issues]}
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -217,7 +261,10 @@ class MaintenanceTransactionStore:
 
     def list_nonterminal(self) -> tuple[MaintenanceChange, ...]:
         """列出所有非终态事务；运行面缺失返回空，异常材料不会被跳过。"""
-        root = self._runtime_root()
+        try:
+            root = self._runtime_root()
+        except MaintenanceTransactionStoreError:
+            return MaintenanceScanResult((), (MaintenanceScanIssue(None, "scan_failed"),))
         if not root.exists():
             return ()
         try:
@@ -234,5 +281,46 @@ class MaintenanceTransactionStore:
                 result.append(transaction)
         return tuple(result)
 
+    def scan(self) -> MaintenanceScanResult:
+        """全量读取合法事务并逐项报告问题，不因单个损坏目录跳过其他事务。"""
+        try:
+            root = self._runtime_root()
+            root_exists = root.exists()
+        except (OSError, MaintenanceTransactionStoreError):
+            return MaintenanceScanResult((), (MaintenanceScanIssue(None, "scan_failed"),))
+        if not root_exists:
+            return MaintenanceScanResult((), ())
+        transactions: list[MaintenanceChange] = []
+        issues: list[MaintenanceScanIssue] = []
+        seen: set[str] = set()
+        try:
+            entries = sorted(root.iterdir(), key=lambda item: item.name)
+        except OSError:
+            return MaintenanceScanResult((), (MaintenanceScanIssue(None, "scan_failed"),))
+        for entry in entries:
+            try:
+                change_id = self._validate_change_id(entry.name)
+            except MaintenanceTransactionStoreError:
+                issues.append(MaintenanceScanIssue(None, "invalid_change_id"))
+                continue
+            folded = change_id.casefold()
+            if folded in seen:
+                issues.append(MaintenanceScanIssue(change_id, "duplicate_change_id"))
+                continue
+            seen.add(folded)
+            try:
+                invalid_directory = _is_reparse_point(entry) or not entry.is_dir()
+            except MaintenanceTransactionStoreError:
+                invalid_directory = True
+            if invalid_directory:
+                issues.append(MaintenanceScanIssue(change_id, "invalid_transaction_directory"))
+                continue
+            try:
+                transactions.append(self.load(change_id))
+            except MaintenanceTransactionStoreError:
+                issues.append(MaintenanceScanIssue(change_id, "invalid_transaction_material"))
+        transactions.sort(key=lambda item: (item.created_at, item.change_id))
+        return MaintenanceScanResult(tuple(transactions), tuple(issues))
 
-__all__ = ["MaintenanceTransactionStore", "MaintenanceTransactionStoreError"]
+
+__all__ = ["MaintenanceScanIssue", "MaintenanceScanResult", "MaintenanceTransactionStore", "MaintenanceTransactionStoreError"]
