@@ -67,6 +67,10 @@ describe('MaintenancePage', () => {
     expect(screen.getByText('当前仅开放状态查看和结构化预览')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /应用|修复|卸载/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    const operationArea = screen.getByRole('navigation', { name: '维护目标目录' }).closest('.maintenance-layout');
+    const notices = screen.getByText('当前仅开放状态查看和结构化预览').closest('.maintenance-post-notices');
+    if (!operationArea || !notices) throw new Error('操作区或提示区未渲染');
+    expect(operationArea.compareDocumentPosition(notices) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('只用详情基线指纹请求结构化预览，并只渲染受管叶子摘要', async () => {

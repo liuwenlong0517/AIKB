@@ -19,46 +19,46 @@ export function DashboardPage() {
         <Col xs={24} sm={12} lg={6}><Card><Statistic title="索引" value={data.index?.tokenizer ?? '未知'} /></Card></Col>
       </Row>}
       {/* 使用指南不依赖知识索引；即使总览接口降级，安装排障手册仍应可达。 */}
-      <Row gutter={[16, 16]} className="section-gap">
-        <Col xs={24}>
-          <Card title="使用指南" extra={<Typography.Text type="secondary">控制仓文档</Typography.Text>}>
+      <AsyncState loading={query.isLoading} error={query.error} onRetry={() => void query.refetch()} empty={!data}>
+        {data?.index?.rebuilt && <Alert className="section-gap" type="info" showIcon message="本次访问已根据 Markdown 事实源重建派生索引" />}
+      </AsyncState>
+      <Row gutter={[16, 16]} className="section-gap dashboard-content-row">
+        <Col xs={24} lg={12} className="dashboard-left-column">
+          <Card className="dashboard-guide-card" title="使用指南" extra={<Typography.Text type="secondary">控制仓文档</Typography.Text>}>
             <Row gutter={[16, 16]}>
               <Col xs={24} sm={12}>
-                <Card size="small" title="项目手册" hoverable>
-                  <Typography.Paragraph type="secondary">架构、安装、维护与故障排查说明。</Typography.Paragraph>
-                  <Link to="/manuals/project">阅读根 README.md →</Link>
-                </Card>
+                <Link className="dashboard-guide-link" to="/manuals/project" aria-label="阅读项目手册">
+                  <Card size="small" title="项目手册" hoverable>
+                    <Typography.Paragraph type="secondary">架构、安装、维护与故障排查说明。</Typography.Paragraph>
+                    <Typography.Text type="secondary">阅读项目手册 →</Typography.Text>
+                  </Card>
+                </Link>
               </Col>
               <Col xs={24} sm={12}>
-                <Card size="small" title="命令手册" hoverable>
-                  <Typography.Paragraph type="secondary">常用命令、参数、输出与边界说明。</Typography.Paragraph>
-                  <Link to="/manuals/commands">阅读 system/COMMANDS.md →</Link>
-                </Card>
+                <Link className="dashboard-guide-link" to="/manuals/commands" aria-label="阅读命令手册">
+                  <Card size="small" title="命令手册" hoverable>
+                    <Typography.Paragraph type="secondary">常用命令、参数、输出与边界说明。</Typography.Paragraph>
+                    <Typography.Text type="secondary">阅读命令手册 →</Typography.Text>
+                  </Card>
+                </Link>
               </Col>
             </Row>
           </Card>
+          {data && <Card className="dashboard-types-card" title="知识类型分布">
+            <List dataSource={Object.entries(data.by_type ?? {})} locale={{ emptyText: '暂无类型统计' }} renderItem={([name, count]) => <List.Item><span>{name}</span><Tag>{count} 篇</Tag></List.Item>} />
+          </Card>}
         </Col>
-      </Row>
-      <AsyncState loading={query.isLoading} error={query.error} onRetry={() => void query.refetch()} empty={!data}>
-        {data?.index?.rebuilt && <Alert className="section-gap" type="info" showIcon message="本次访问已根据 Markdown 事实源重建派生索引" />}
-        <Row gutter={[16, 16]} className="section-gap">
-          <Col xs={24} lg={12}>
-            <Card title="知识类型分布">
-              <List dataSource={Object.entries(data?.by_type ?? {})} locale={{ emptyText: '暂无类型统计' }} renderItem={([name, count]) => <List.Item><span>{name}</span><Tag>{count} 篇</Tag></List.Item>} />
-            </Card>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Card title="最近验证" extra={<Typography.Text type="secondary">{formatDate(recentDate)}</Typography.Text>}>
-              <List dataSource={data?.recent_documents ?? []} locale={{ emptyText: '暂无最近文档' }} renderItem={(item) => (
+        {data && <Col xs={24} lg={12}>
+          <Card className="dashboard-recent-card" title="最近验证" extra={<Typography.Text type="secondary">{formatDate(recentDate)}</Typography.Text>}>
+            <List dataSource={data.recent_documents ?? []} locale={{ emptyText: '暂无最近文档' }} renderItem={(item) => (
                 <List.Item>
                   <div><Link to={`/knowledge/view?id=${encodeURIComponent(item.id)}`}>{item.title}</Link><Typography.Paragraph type="secondary" ellipsis={{ rows: 1 }}>{item.path}</Typography.Paragraph></div>
                   <Typography.Text type="secondary">{formatDate(item.last_verified)}</Typography.Text>
                 </List.Item>
-              )} />
-            </Card>
-          </Col>
-        </Row>
-      </AsyncState>
+            )} />
+          </Card>
+        </Col>}
+      </Row>
     </>
   );
 }

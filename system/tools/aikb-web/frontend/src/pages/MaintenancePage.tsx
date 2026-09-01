@@ -120,11 +120,13 @@ export function MaintenancePage() {
 
   return <>
     <PageHeader title="安装与修复" description="按目标查看 AIKB 用户环境和 Agent 配置状态；写入前必须完成逐目标预览和高风险确认。" extra={<Tag color="blue">阶段 4B · 受控维护</Tag>} />
-    {platform && <PlatformCapabilityAlert platform={platform} />}
-    <div className="maintenance-notice"><Alert type="info" showIcon message={isApplySupported(platform) ? '逐目标受控应用 · 不提供一键全部修复' : '当前仅开放状态查看和结构化预览'} description="每次只处理当前选中的固定目标；页面不接受路径、命令、配置正文或环境值输入。" /></div>
     <AsyncMaintenanceState loading={targetsQuery.isLoading} error={targetsQuery.error} empty={!summaries.length} onRetry={() => void targetsQuery.refetch()}>
       <Row gutter={[16, 16]} className="maintenance-layout"><Col xs={24} lg={8} xl={7}><Card title="固定维护目标" className="maintenance-target-list-card"><nav aria-label="维护目标目录" className="maintenance-target-list">{TARGET_ORDER.map((targetId) => { const item = summaryMap.get(targetId); const status = getStatusView(statusMap.get(targetId)?.status ?? item?.status); return <button type="button" key={targetId} className={`maintenance-target-item${targetId === selectedTargetId ? ' is-selected' : ''}`} onClick={() => setSelectedTargetId(targetId)}><span className="maintenance-target-item-title">{TARGET_LABELS[targetId]}</span><span className="maintenance-target-item-id">{targetId}</span><span className="maintenance-target-item-status"><Tag color={status.color}>{status.label}</Tag></span></button>; })}</nav></Card></Col><Col xs={24} lg={16} xl={17}><MaintenanceDetail detail={detail} fallback={selectedSummary} loading={detailQuery.isLoading} error={detailQuery.error} preview={preview} previewExpired={previewExpired} previewLoading={previewMutation.isPending} previewError={previewMutation.error} applySupported={isApplySupported(detail?.platform ?? platform)} applyLoading={applyMutation.isPending} applySubmitted={applySubmitted} applyError={applyMutation.error} applyResult={applyResult} change={change} changeResponse={changeResponse} changeLoading={changeQuery.isLoading} changeError={changeQuery.error} confirmed={confirmed} onConfirmChange={setConfirmed} onPreview={requestPreview} onApply={submitApply} onRetry={() => void detailQuery.refetch()} onRestart={restartAfterApplyFailure} /></Col></Row>
     </AsyncMaintenanceState>
+    {platform && <div className="maintenance-post-notices">
+      <PlatformCapabilityAlert platform={platform} />
+      <div className="maintenance-notice"><Alert type="info" showIcon message={isApplySupported(platform) ? '逐目标受控应用 · 不提供一键全部修复' : '当前仅开放状态查看和结构化预览'} description="每次只处理当前选中的固定目标；页面不接受路径、命令、配置正文或环境值输入。" /></div>
+    </div>}
   </>;
 }
 

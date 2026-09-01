@@ -26,6 +26,18 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .state-panel { display: flex; align-items: center; justify-content: center; min-height: 260px; width: 100%; }
 .state-panel .ant-alert { width: min(100%, 720px); }
 .section-gap { margin-top: 16px; }
+.dashboard-content-row { height: max(360px, calc(100vh - 336px)); align-items: stretch; }
+.dashboard-content-row > .ant-col { height: 100%; min-height: 0; }
+.dashboard-left-column { display: flex; height: 100%; min-height: 0; flex-direction: column; gap: 16px; }
+.dashboard-guide-card { flex: 0 0 auto; }
+.dashboard-types-card { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+.dashboard-types-card > .ant-card-body { flex: 1; min-height: 0; overflow-y: auto; }
+.dashboard-guide-link { display: block; height: 100%; color: inherit; }
+.dashboard-guide-link:hover { color: inherit; }
+.dashboard-guide-link .ant-card { height: 100%; }
+.dashboard-guide-link:focus-visible { outline: 2px solid #1677ff; outline-offset: 3px; border-radius: 8px; }
+.dashboard-recent-card { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+.dashboard-recent-card > .ant-card-body { flex: 1; min-height: 0; overflow-y: auto; }
 .alert-stack { display: grid; gap: 10px; margin-top: 16px; }
 .tree-card { min-height: 560px; }
 .tree-card .ant-card-body { max-height: 670px; overflow: auto; }
@@ -60,8 +72,8 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .rules-confirmation-zone { display: grid; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid #ffd591; border-radius: 8px; background: #fffaf0; }
 .rules-confirmation-checkbox { line-height: 1.6; }
 .rules-apply-result { padding-top: 4px; }
+.maintenance-post-notices { margin-top: 16px; }
 .maintenance-platform-alert { margin-bottom: 16px; }
-.maintenance-notice { margin-bottom: 16px; }
 .maintenance-layout { align-items: stretch; }
 .maintenance-target-list-card, .maintenance-detail-card { height: 100%; }
 .maintenance-target-list { display: grid; gap: 8px; }
