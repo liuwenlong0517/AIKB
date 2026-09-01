@@ -23,6 +23,10 @@ from ...core.maintenance_targets import (
     MaintenanceTargetError,
     MaintenanceTargetStatus,
 )
+from ...core.maintenance_materials import (
+    MaintenanceEnvironmentMaterial,
+    MaintenanceLeafMaterial,
+)
 from ..maintenance import MaintenancePlan, MaintenanceStep
 
 
@@ -38,6 +42,78 @@ _EVENTS = ("SessionStart", "PreCompact", "Stop", "SessionEnd")
 _ENV_KEYS = ("AIKB_HOME", "AIKB_KNOWLEDGE_HOME")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REPARSE_POINT = 0x400
+
+
+class _JsonStructureError(ValueError):
+    """JSON 结构键重复或根节点类型不符合配置契约。"""
+
+
+def _json_pairs_preserving_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """保留原始键名，并拒绝精确或仅大小写不同的重复结构键。
+
+    PowerShell ``AdapterConfig.psm1`` 的结构键规则是配置写入的共同契约：
+    精确键优先、大小写不敏感兜底，但同一对象出现大小写变体时不能猜测。
+    Python 的默认 ``json.loads`` 会静默覆盖重复键，因此必须在解析阶段拦截。
+    """
+
+    result: dict[str, object] = {}
+    # JSON 标准层只拒绝同一对象内的精确重复键；仅大小写不同的键必须先
+    # 保留，直到调用方按某个受管结构字段查询时再由 _find_json_key 判歧义。
+    exact: set[str] = set()
+    for key, value in pairs:
+        if not isinstance(key, str):
+            raise _JsonStructureError("JSON 结构键必须是字符串")
+        if key in exact:
+            raise _JsonStructureError("JSON 对象包含重复结构键")
+        exact.add(key)
+        result[key] = value
+    return result
+
+
+def _load_json_preserving_keys(raw: bytes) -> object:
+    """按共享适配器规则解析 JSON，既保留键名又阻断大小写歧义。"""
+
+    return json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_json_pairs_preserving_keys)
+
+
+def _find_json_key(value: object, name: str) -> str | None:
+    """精确匹配优先、大小写不敏感兜底定位一个结构键。"""
+
+    if not isinstance(value, dict):
+        return None
+    if name in value:
+        # 与 PowerShell Find-JsonPropertyName 一致：即使存在精确键，只要
+        # 同一对象还有大小写变体，也不能猜测调用方意图。
+        matches = [key for key in value if key.casefold() == name.casefold()]
+        if len(matches) > 1:
+            raise _JsonStructureError("JSON 对象包含多个仅大小写不同的结构键")
+        return name
+    folded = name.casefold()
+    matches = [key for key in value if key.casefold() == folded]
+    if len(matches) > 1:
+        raise _JsonStructureError("JSON 对象包含多个仅大小写不同的结构键")
+    return matches[0] if matches else None
+
+
+def _canonical_hook_handler(value: dict[str, object]) -> dict[str, object]:
+    """提取 AIKB handler 的语义字段，比较时不因键大小写产生伪漂移。"""
+
+    result: dict[str, object] = {}
+    for name in ("type", "command", "timeout", "shell"):
+        key = _find_json_key(value, name)
+        if key is not None:
+            result[name] = value[key]
+    return result
+
+
+def _semantic_json(value: object) -> object:
+    """把结构键按大小写折叠供受管对象比较，值和数组顺序保持不变。"""
+
+    if isinstance(value, dict):
+        return {key.casefold(): _semantic_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_semantic_json(item) for item in value]
+    return value
 
 
 def _sha256(value: bytes) -> str:
@@ -274,6 +350,41 @@ class WindowsMaintenanceAdapter:
             summary_code=summary_code,
         )
 
+    def capture_environment(
+        self, plan: MaintenancePlan,
+    ) -> tuple[MaintenanceTargetStatus, Mapping[str, MaintenanceLeafMaterial], Mapping[str, MaintenanceEnvironmentMaterial]]:
+        """捕获 environment 事务所需的服务端材料，不接受浏览器提供的环境值。
+
+        该方法只返回给 ``MaintenancePreparationService`` 的私有材料；公开 API
+        仍只投影摘要。读取发生在准备事务的瞬间，调用方随后会用正文重新计算
+        before/after fingerprint，避免仅凭预览摘要跨越 TOCTOU 窗口。
+        """
+        if plan.target_id != "environment":
+            raise MaintenanceTargetError("仅支持 environment 材料")
+        status = self.inspect("environment")
+        values = self._read_environment()
+        leaves: dict[str, MaintenanceLeafMaterial] = {}
+        environments: dict[str, MaintenanceEnvironmentMaterial] = {}
+        for leaf_id, name in zip(MAINTENANCE_LEAVES_BY_TARGET["environment"], _ENV_KEYS):
+            current = values.get(name)
+            before = None if current is None else current.encode("utf-8")
+            expected = self._expected_environment[name].encode("utf-8")
+            leaves[leaf_id] = MaintenanceLeafMaterial(
+                leaf_id=leaf_id,
+                existence="missing" if current is None else "present",
+                before_hash=None if before is None else _sha256(before),
+                expected_hash=_sha256(expected),
+                file_mode=None,
+                before_bytes=before,
+                expected_bytes=expected,
+            )
+            environments[name] = MaintenanceEnvironmentMaterial(
+                name=name,
+                state="missing" if current is None else ("empty" if current == "" else "value"),
+                value=current,
+            )
+        return status, leaves, environments
+
     def _target(self, target_id: str):
         """通过静态注册表解析目标，不提供路径或动态 fallback。"""
 
@@ -376,7 +487,9 @@ class WindowsMaintenanceAdapter:
         tomllib.loads(text)
         marker_pattern = _managed_block_pattern(_CODEX_MCP_START, _CODEX_MCP_END)
         matches = marker_pattern.findall(text)
-        section_count = len(re.findall(r"(?m)^\s*\[mcp_servers\.aikb\]\s*$", text))
+        # TOML section 名同样遵循结构键契约；大小写变体不能被当作两个
+        # 可安全合并的服务。受管块内部的标准 section 只计一次。
+        section_count = len(re.findall(r"(?im)^\s*\[mcp_servers\.aikb\]\s*$", text))
         if section_count and not matches:
             code = "conflict"
             return {"difference": MaintenanceManagedDifference(leaf_id, code), "fingerprint_part": f"{leaf_id}:conflict"}
@@ -394,47 +507,59 @@ class WindowsMaintenanceAdapter:
     def _observe_claude_mcp(self, leaf_id: str, raw: bytes) -> dict[str, object]:
         """解析 Claude MCP 对象，非 AIKB_MANAGED 对象一律冲突。"""
 
-        config = json.loads(raw.decode("utf-8"))
+        config = _load_json_preserving_keys(raw)
         if not isinstance(config, dict):
             raise ValueError("Claude MCP 根必须是对象")
-        servers = config.get("mcpServers")
+        servers_key = _find_json_key(config, "mcpServers")
+        servers = config.get(servers_key) if servers_key is not None else None
         if servers is None or not isinstance(servers, dict):
             raise ValueError("mcpServers 必须是对象")
-        actual = servers.get("aikb")
+        aikb_key = _find_json_key(servers, "aikb")
+        actual = servers.get(aikb_key) if aikb_key is not None else None
         expected = _expected_claude_mcp()
         if actual is None:
             return {"difference": MaintenanceManagedDifference(leaf_id, "missing", after_hash=_sha256(_canonical_json(expected))), "fingerprint_part": f"{leaf_id}:missing"}
-        if not isinstance(actual, dict) or actual.get("env", {}).get("AIKB_MANAGED") != "1":
+        env_key = _find_json_key(actual, "env") if isinstance(actual, dict) else None
+        env = actual.get(env_key) if env_key is not None else None
+        marker_key = _find_json_key(env, "AIKB_MANAGED") if isinstance(env, dict) else None
+        if not isinstance(actual, dict) or not isinstance(env, dict) or marker_key is None or env.get(marker_key) != "1":
             return {"difference": MaintenanceManagedDifference(leaf_id, "conflict"), "fingerprint_part": f"{leaf_id}:conflict"}
-        actual_hash = _sha256(_canonical_json(actual))
+        actual_hash = _sha256(_canonical_json(_semantic_json(actual)))
         expected_hash = _sha256(_canonical_json(expected))
-        code = "unchanged" if actual == expected else "drifted"
+        code = "unchanged" if _semantic_json(actual) == _semantic_json(expected) else "drifted"
         return {"difference": MaintenanceManagedDifference(leaf_id, code, actual_hash, expected_hash), "fingerprint_part": f"{leaf_id}:{actual_hash}"}
 
     def _observe_hooks(self, agent: str, leaf_id: str, raw: bytes) -> dict[str, object]:
         """解析 hooks，只提取 AIKB handler 的结构化摘要，忽略用户其他 handlers。"""
 
-        config = json.loads(raw.decode("utf-8"))
-        if not isinstance(config, dict) or ("hooks" in config and not isinstance(config["hooks"], dict)):
+        config = _load_json_preserving_keys(raw)
+        hooks_key = _find_json_key(config, "hooks") if isinstance(config, dict) else None
+        if not isinstance(config, dict) or (hooks_key is not None and not isinstance(config[hooks_key], dict)):
             raise ValueError("hooks 根必须是对象")
-        hooks = config.get("hooks", {})
+        hooks = config.get(hooks_key, {}) if hooks_key is not None else {}
         managed: list[dict[str, object]] = []
         for event in _EVENTS:
-            groups = hooks.get(event, [])
+            if not isinstance(hooks, dict):
+                raise ValueError("hooks 必须是对象")
+            event_key = _find_json_key(hooks, event)
+            groups = hooks.get(event_key, []) if event_key is not None else []
             if not isinstance(groups, list):
                 raise ValueError("hook event 必须是数组")
             for group in groups:
                 if not isinstance(group, dict):
                     raise ValueError("hook group 必须是对象")
-                handlers = group.get("hooks", [])
+                handlers_key = _find_json_key(group, "hooks")
+                handlers = group.get(handlers_key, []) if handlers_key is not None else []
                 if not isinstance(handlers, list):
                     raise ValueError("hook handlers 必须是数组")
                 for handler in handlers:
                     if not isinstance(handler, dict):
                         raise ValueError("hook handler 必须是对象")
-                    command = handler.get("command")
+                    command_key = _find_json_key(handler, "command")
+                    command = handler.get(command_key) if command_key is not None else None
                     if isinstance(command, str) and _HOOK_SCRIPT in command:
-                        managed.append({"event": event, "matcher": group.get("matcher"), "handler": handler})
+                        matcher_key = _find_json_key(group, "matcher")
+                        managed.append({"event": event, "matcher": group.get(matcher_key) if matcher_key else None, "handler": _canonical_hook_handler(handler)})
         if not managed:
             expected = _expected_hooks(agent)
             return {"difference": MaintenanceManagedDifference(leaf_id, "missing", after_hash=_sha256(_canonical_json(expected))), "fingerprint_part": f"{leaf_id}:missing"}

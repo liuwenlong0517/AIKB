@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.responses import JSONResponse
 
 from aikb_web.core.maintenance_targets import (
@@ -13,6 +13,8 @@ from aikb_web.core.maintenance_targets import (
     MaintenanceTargetError,
     MaintenanceTargetStatus,
 )
+from aikb_web.core.maintenance_preparation import MaintenancePreparationError
+from aikb_web.core.maintenance_task import MaintenanceTaskCoordinator, MaintenanceTaskRejected
 from aikb_web.platform.maintenance import (
     MaintenancePlan,
     MaintenancePlatformCapabilities,
@@ -30,6 +32,13 @@ class MaintenancePreviewRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     base_fingerprint: str = Field(..., min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+
+
+class MaintenanceApplyRequest(BaseModel):
+    """维护应用输入；客户端只能提交服务端签发的进程内确认令牌。"""
+
+    model_config = ConfigDict(extra="forbid")
+    confirmation_token: str = Field(..., min_length=1, max_length=4096)
 
 
 def _adapter(request: Request) -> Any | None:
@@ -72,11 +81,15 @@ def _platform_public(request: Request, capabilities: MaintenancePlatformCapabili
     """公开平台能力分层；supported 保持完整维护能力，不被只读适配器改写。"""
 
     readonly = _read_only_available(request, capabilities)
+    coordinator = getattr(request.app.state, "maintenance_task_coordinator", None)
+    apply_available = callable(getattr(coordinator, "apply", None))
     return {
         **capabilities.public_dict(),
         "inspection_supported": readonly,
         "preview_supported": readonly,
-        "apply_supported": False,
+        # ``supported`` 表示完整三目标平台能力；当前收尾波次只开放
+        # environment 写适配器，因此 apply_supported 由实际任务服务单独表达。
+        "apply_supported": apply_available,
     }
 
 
@@ -208,7 +221,87 @@ def maintenance_target_preview(request: Request, target_id: str, body: Maintenan
         "inspection": inspection.public_dict(),
         "plan": plan_data,
     }
+    preparation = getattr(request.app.state, "maintenance_preparation_service", None)
+    if callable(getattr(preparation, "stage", None)):
+        try:
+            # preview 只把可信 plan/status 暂存进程内；事务目录和材料必须等
+            # apply 重新 inspect/plan 后才创建，避免只读请求产生磁盘副作用。
+            staged = preparation.stage(plan, inspection)
+        except MaintenancePreparationError:
+            return JSONResponse(
+                status_code=409,
+                content=error_body("MAINTENANCE_STALE_PREVIEW", "维护目标已发生变化，请重新读取", request),
+            )
+        except Exception:
+            return _unavailable(request)
+        preview.update(staged.to_dict())
     return success(preview, request)
 
 
-__all__ = ["MaintenancePreviewRequest", "router"]
+def _task_coordinator(request: Request) -> MaintenanceTaskCoordinator:
+    """取得维护任务协调器；未装配写服务时保持只读 404。"""
+    service = getattr(request.app.state, "maintenance_task_coordinator", None)
+    if not callable(getattr(service, "apply", None)) or not callable(getattr(service, "get_change", None)):
+        raise MaintenanceTaskRejected("维护应用服务不可用", status_code=404, code="not_found")
+    return service
+
+
+@router.post("/changes/{change_id}/apply", dependencies=[Depends(require_mutation_request)])
+def maintenance_apply(request: Request, change_id: str, body: dict[str, Any] | None = None) -> Any:
+    """消费单次确认并创建维护任务；请求不接受正文、路径、命令或摘要。"""
+    try:
+        service = _task_coordinator(request)
+        if body is None:
+            raise MaintenanceTaskRejected("请求参数无效", status_code=422, code="invalid_request")
+        try:
+            parsed = MaintenanceApplyRequest.model_validate(body)
+        except ValidationError as error:
+            raise MaintenanceTaskRejected("请求参数无效", status_code=422, code="invalid_request") from error
+        preparation = getattr(request.app.state, "maintenance_preparation_service", None)
+        staged = preparation.staged(change_id) if callable(getattr(preparation, "staged", None)) else None
+        if staged is not None:
+            if staged.confirmation_token != parsed.confirmation_token:
+                raise MaintenanceTaskRejected("确认令牌无效或已消费", code="maintenance_confirmation_invalid")
+            state = _state(request, staged.plan.target_id)
+            if isinstance(state, JSONResponse):
+                return state
+            target, _capabilities, inspection = state
+            status_value = inspection.status.value if hasattr(inspection.status, "value") else inspection.status
+            if status_value == "unsupported":
+                return JSONResponse(status_code=409, content=error_body("MAINTENANCE_TARGET_UNSUPPORTED", "维护目标当前不受支持", request))
+            if status_value == "conflict":
+                return JSONResponse(status_code=409, content=error_body("MAINTENANCE_CONFLICT", "维护目标存在受管冲突", request))
+            if status_value == "invalid":
+                return JSONResponse(status_code=409, content=error_body("MAINTENANCE_TARGET_INVALID", "维护目标状态无效", request))
+            current_adapter = _adapter(request)
+            if current_adapter is None or not callable(getattr(current_adapter, "plan", None)):
+                return _unavailable(request)
+            try:
+                fresh_plan = current_adapter.plan(target["target_id"], inspection)
+                if not isinstance(fresh_plan, MaintenancePlan) or fresh_plan.target_id != target["target_id"]:
+                    return _unavailable(request)
+                provider = getattr(request.app.state, "maintenance_material_provider", None) or current_adapter
+                prepared = preparation.materialize(staged, fresh_plan, inspection, provider, parsed.confirmation_token)
+            except MaintenancePreparationError:
+                return JSONResponse(
+                    status_code=409,
+                    content=error_body("MAINTENANCE_STALE_PREVIEW", "维护目标已发生变化，请重新读取", request),
+                )
+            except Exception:
+                return _unavailable(request)
+        data = service.apply(change_id=change_id, confirmation_token=parsed.confirmation_token)
+    except MaintenanceTaskRejected as error:
+        return JSONResponse(status_code=error.status_code, content=error_body(error.code, str(error), request))
+    return success(data, request)
+
+
+@router.get("/changes/{change_id}")
+def maintenance_change_status(request: Request, change_id: str) -> Any:
+    """读取维护事务和任务的安全状态，不返回令牌、备份、正文或物理路径。"""
+    try:
+        return success(_task_coordinator(request).get_change(change_id), request, allow_safe_result=True)
+    except MaintenanceTaskRejected as error:
+        return JSONResponse(status_code=error.status_code, content=error_body(error.code, str(error), request))
+
+
+__all__ = ["MaintenanceApplyRequest", "MaintenancePreviewRequest", "router"]

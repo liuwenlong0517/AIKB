@@ -71,4 +71,16 @@ describe('ApiClient', () => {
     expect(result.data.blocked).toBe(true);
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/rules/changes/change-1', expect.anything());
   });
+
+  it('维护 apply 只提交变更 ID 和确认令牌，并可读取任务/恢复状态', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { change_id: 'maintenance-change-1', status: 'applying', task_id: 'task-1' }, meta: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { change: { change_id: 'maintenance-change-1', target_id: 'environment', status: 'succeeded', task_id: 'task-1', restart_required: true }, task: { task_id: 'task-1', status: 'succeeded' } }, meta: {} }), { status: 200 }));
+    await api.maintenance.apply('maintenance-change-1', { confirmation_token: 'memory-token' });
+    const result = await api.maintenance.change('maintenance-change-1');
+    expect(result.data.change.status).toBe('succeeded');
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/maintenance/changes/maintenance-change-1/apply');
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'X-AIKB-Request': '1' }), body: JSON.stringify({ confirmation_token: 'memory-token' }) }));
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/maintenance/changes/maintenance-change-1');
+  });
 });

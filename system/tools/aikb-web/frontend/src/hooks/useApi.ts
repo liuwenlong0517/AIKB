@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData, MaintenanceApplyData, MaintenanceChangeEnvelope } from '../types/api';
 import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
@@ -74,6 +74,25 @@ export const usePreviewMaintenance = () =>
   useMutation({
     mutationFn: (input: { targetId: string; base_fingerprint: string }): Promise<ApiResponse<MaintenancePreviewData>> =>
       api.maintenance.preview(input.targetId, { base_fingerprint: input.base_fingerprint }),
+  });
+
+/** 提交逐目标维护确认；请求体只含一次性令牌，变更 ID 来自服务端预览。 */
+export const useApplyMaintenance = () =>
+  useMutation({
+    mutationFn: (input: { changeId: string; confirmation_token: string }): Promise<ApiResponse<MaintenanceApplyData>> =>
+      api.maintenance.apply(input.changeId, { confirmation_token: input.confirmation_token }),
+  });
+
+/** 轮询维护事务的任务/恢复状态；终态停止轮询，页面不会自动重放 apply。 */
+export const useMaintenanceChange = (changeId: string | undefined, enabled = true): UseQueryResult<ApiResponse<MaintenanceChangeEnvelope>> =>
+  useQuery<ApiResponse<MaintenanceChangeEnvelope>>({
+    queryKey: ['maintenance-change', changeId],
+    queryFn: () => api.maintenance.change(changeId as string),
+    enabled: Boolean(changeId) && enabled,
+    refetchInterval: (query) => {
+      const status = query.state.data?.data.change.status;
+      return status && ['succeeded', 'rolled_back', 'recovery_required'].includes(status) ? false : 2_000;
+    },
   });
 
 /** 活动 Working State 列表查询；筛选参数进入 query key，保证分页和筛选切换不会复用错误页面。 */

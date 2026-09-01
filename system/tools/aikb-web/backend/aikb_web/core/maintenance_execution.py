@@ -98,8 +98,19 @@ class MaintenanceExecutor:
         self._claim_coordinator = MaintenanceClaimCoordinator(store, self._lock)
         self._now_provider = now_provider or _utc_now
 
-    def execute(self, change_id: str, task_id: str, *, timeout: float = 0) -> MaintenanceChange:
-        """认领并执行 prepared 事务；失败时补偿并返回 rolled_back 或恢复态。"""
+    def execute(
+        self,
+        change_id: str,
+        task_id: str,
+        *,
+        timeout: float = 0,
+        before_claim: Callable[[MaintenanceChange], None] | None = None,
+    ) -> MaintenanceChange:
+        """认领并执行 prepared 事务；失败时补偿并返回 rolled_back 或恢复态。
+
+        ``before_claim`` 在同一把维护写锁内、材料绑定和 preflight 通过后调用，
+        供任务层消费一次性令牌；回调失败时尚未认领或写入事务。
+        """
         try:
             with self._lock.held(timeout=timeout):
                 try:
@@ -119,6 +130,11 @@ class MaintenanceExecutor:
                     raise
                 except Exception as error:
                     raise MaintenanceExecutionError("维护开始审计未成功") from error
+                if before_claim is not None:
+                    try:
+                        before_claim(current)
+                    except Exception as error:
+                        raise MaintenanceExecutionError("维护确认未成功") from error
                 current = self._claim_coordinator.claim_held(change_id, task_id)
                 attempted_writes: list[str] = []
                 try:

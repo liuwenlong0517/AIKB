@@ -1,15 +1,17 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MaintenancePage } from '../src/pages/MaintenancePage';
 import { api } from '../src/api/client';
 
-const mocks = vi.hoisted(() => ({ targets: vi.fn(), target: vi.fn(), statuses: vi.fn(), preview: vi.fn() }));
+const mocks = vi.hoisted(() => ({ targets: vi.fn(), target: vi.fn(), statuses: vi.fn(), preview: vi.fn(), apply: vi.fn(), change: vi.fn() }));
 vi.mock('../src/hooks/useApi', () => ({
   useMaintenanceTargets: mocks.targets,
   useMaintenanceTarget: mocks.target,
   useMaintenanceTargetStatuses: mocks.statuses,
   usePreviewMaintenance: mocks.preview,
+  useApplyMaintenance: mocks.apply,
+  useMaintenanceChange: mocks.change,
 }));
 
 const query = <T,>(data: T) => ({ data: { data, meta: {} }, isLoading: false, error: null, refetch: vi.fn() });
@@ -29,6 +31,11 @@ const statusQuery = (item: typeof targetItems[number]) => query({
 function renderPage() {
   return render(<MemoryRouter initialEntries={['/maintenance']}><Routes><Route path="/maintenance" element={<MaintenancePage />} /></Routes></MemoryRouter>);
 }
+
+beforeEach(() => {
+  mocks.apply.mockReturnValue(mutation());
+  mocks.change.mockReturnValue(query({ change: { change_id: 'maintenance-change-1', target_id: 'environment', status: 'prepared' } }));
+});
 
 describe('MaintenancePage', () => {
   it('维护请求只使用固定逻辑目标和基线指纹，并复用安全 POST 头', async () => {
@@ -98,5 +105,37 @@ describe('MaintenancePage', () => {
     expect(screen.getByText('当前平台不支持安装与修复检查')).toBeInTheDocument();
     expect(screen.getByText('当前平台不支持只读检查。')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '查看结构化预览' })).toBeDisabled();
+  });
+
+  it('预览后逐目标二次确认并跳转任务，同时显示重启提示', async () => {
+    const previewData = {
+      target: targetItems[0],
+      platform: { platform: 'windows', supported: true, inspection_supported: true, preview_supported: true, apply_supported: true },
+      inspection: { target_id: 'environment', status: 'missing', logical_leaves: [], steps: [], base_fingerprint: 'a'.repeat(64) },
+      plan: { target_id: 'environment', preview_digest: 'c'.repeat(64), before_fingerprint: 'a'.repeat(64), after_fingerprint: 'b'.repeat(64), steps: [{ step_id: 'preflight' }], logical_leaves: [], differences: [] },
+      change_id: 'maintenance-change-1',
+      confirmation_token: 'one-time-secret',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const previewMutate = vi.fn((_input: unknown, options: { onSuccess: (response: { data: typeof previewData }) => void }) => options.onSuccess({ data: previewData }));
+    const applyMutate = vi.fn((_input: unknown, options: { onSuccess: (response: { data: object }) => void }) => options.onSuccess({ data: { change_id: 'maintenance-change-1', status: 'succeeded', task_id: 'task-1', restart_required: true } }));
+    const items = targetItems.map((item) => item.target_id === 'environment' ? { ...item, status: 'missing' } : item);
+    const platform = { platform: 'windows', supported: true, inspection_supported: true, preview_supported: true, apply_supported: true };
+    mocks.targets.mockReturnValue(query({ items, platform }));
+    mocks.statuses.mockReturnValue(items.map(statusQuery));
+    mocks.target.mockReturnValue(query({ target: items[0], platform, status: { target_id: 'environment', status: 'missing', logical_leaves: [], steps: [], base_fingerprint: 'a'.repeat(64) }, leaves: [] }));
+    mocks.preview.mockReturnValue(mutation(previewMutate));
+    mocks.apply.mockReturnValue(mutation(applyMutate));
+    mocks.change.mockReturnValue(query({ change: { change_id: 'maintenance-change-1', target_id: 'environment', status: 'succeeded', task_id: 'task-1', restart_required: true } }));
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: '查看结构化预览' }));
+    expect(await screen.findByText('高风险确认：即将写入用户配置')).toBeInTheDocument();
+    expect(screen.queryByText('one-time-secret')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: '确认并应用当前目标' }));
+    await waitFor(() => expect(applyMutate).toHaveBeenCalledWith({ changeId: 'maintenance-change-1', confirmation_token: 'one-time-secret' }, expect.anything()));
+    expect(screen.getByText('维护已成功应用')).toBeInTheDocument();
+    expect(screen.getByText('配置已更新，需要人工重启对应 Agent')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看任务中心' })).toHaveAttribute('href', '/tasks/task-1');
   });
 });

@@ -33,7 +33,11 @@ from aikb_web.core.rule_task import RuleChangeTaskCoordinator
 from aikb_web.core.rule_transaction import RuleTransactionExecutor
 from aikb_web.core.maintenance_recovery_gate import MaintenanceRecoveryGate
 from aikb_web.core.maintenance_lock import MaintenanceWriteLock
-from aikb_web.core.maintenance_bootstrap import build_default_maintenance_recovery
+from aikb_web.core.maintenance_bootstrap import (
+    build_default_maintenance_recovery,
+    build_default_maintenance_services,
+)
+from aikb_web.core.maintenance_task import MaintenanceTaskCoordinator
 from aikb_web.platform import platform_state
 from aikb_web.platform.windows.maintenance_readonly import build_windows_readonly_adapter
 
@@ -143,6 +147,10 @@ def create_app(
     maintenance_startup_recovery: Any | None = None,
     maintenance_recovery_gate: MaintenanceRecoveryGate | None = None,
     maintenance_write_lock: MaintenanceWriteLock | None = None,
+    maintenance_preparation_service: Any | None = None,
+    maintenance_executor: Any | None = None,
+    maintenance_task_coordinator: MaintenanceTaskCoordinator | None = None,
+    maintenance_material_provider: Any | None = None,
 ) -> FastAPI:
     """创建可注入网关/任务/规则/维护适配器的 FastAPI 应用，便于契约测试和平台替换。"""
     gateway_was_default = gateway is None
@@ -185,6 +193,13 @@ def create_app(
                     gate.block()
             finally:
                 app.state.maintenance_recovery_started = True
+        maintenance_tasks = getattr(app.state, "maintenance_task_coordinator", None)
+        if maintenance_tasks is not None and not app.state.maintenance_tasks_recovered:
+            try:
+                maintenance_tasks.recover()
+            except Exception:
+                app.state.maintenance_recovery_gate.block()
+            app.state.maintenance_tasks_recovered = True
         if app.state.task_orchestrator is None and app.state.task_settings is not None:
             current_platform = platform_state()
             if current_platform.platform == "windows" and current_platform.supported:
@@ -213,6 +228,9 @@ def create_app(
             rule_tasks = getattr(app.state, "rule_task_coordinator", None)
             if rule_tasks is not None:
                 rule_tasks.shutdown()
+            maintenance_tasks = getattr(app.state, "maintenance_task_coordinator", None)
+            if maintenance_tasks is not None:
+                maintenance_tasks.shutdown()
 
     app = FastAPI(title="AIKB WebUI API", version="0.1.0", docs_url="/docs", redoc_url=None, lifespan=lifespan)
     dev_origins = ["http://127.0.0.1:5173", "http://localhost:5173"] if (
@@ -293,6 +311,7 @@ def create_app(
             app.state.maintenance_write_lock = None
     app.state.maintenance_recovery_started = False
     app.state.maintenance_recovery_error = False
+    app.state.maintenance_tasks_recovered = False
     # 显式注入优先；生产默认只在 Windows 且 settings 已验证时构造只读适配器。
     # 工厂只解析固定用户边界并延迟文件检查到 inspect，构造阶段不扫描、写入或
     # 创建运行材料；任何边界失败均安全降级为 None。
@@ -317,6 +336,50 @@ def create_app(
             app.state.maintenance_recovery_gate,
             app.state.maintenance_write_lock,
         )
+    # 维护 apply 只为已验证的 Windows 固定目标写适配器装配任务闭环。只读
+    # 适配器缺少 capture/apply 协议时保持 None，目标不会被错误声明为可写。
+    app.state.maintenance_preparation_service = maintenance_preparation_service
+    app.state.maintenance_executor = maintenance_executor
+    app.state.maintenance_task_coordinator = maintenance_task_coordinator
+    app.state.maintenance_material_provider = maintenance_material_provider
+    if (
+        app.state.maintenance_task_coordinator is None
+        and app.state.maintenance_executor is not None
+        and app.state.maintenance_write_lock is not None
+    ):
+        try:
+            app.state.maintenance_task_coordinator = MaintenanceTaskCoordinator(
+                app.state.maintenance_executor,
+                token_service=app.state.confirmation_tokens,
+                workspace_root=getattr(app.state.rule_preview_service, "_workspace_root", None),
+                audit_sink=getattr(app.state.knowledge_gateway, "web_audit_write", None),
+                recovery_gate=app.state.maintenance_recovery_gate,
+            )
+        except Exception:
+            app.state.maintenance_task_coordinator = None
+    if app.state.maintenance_material_provider is None:
+        app.state.maintenance_material_provider = getattr(app.state.maintenance_executor, "_adapter", None)
+    if (
+        app.state.maintenance_task_coordinator is None
+        and app.state.maintenance_preparation_service is None
+        and app.state.maintenance_executor is None
+        and app.state.maintenance_write_lock is not None
+    ):
+        services = build_default_maintenance_services(
+            app.state.task_settings,
+            app.state.maintenance_adapter,
+            app.state.knowledge_gateway,
+            app.state.maintenance_recovery_gate,
+            app.state.maintenance_write_lock,
+            app.state.confirmation_tokens,
+        ) if app.state.task_settings is not None else None
+        if services is not None:
+            (
+                app.state.maintenance_preparation_service,
+                app.state.maintenance_executor,
+                app.state.maintenance_task_coordinator,
+            ) = services
+            app.state.maintenance_material_provider = getattr(app.state.maintenance_executor, "_adapter", None)
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:

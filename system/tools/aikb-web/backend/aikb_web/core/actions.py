@@ -224,3 +224,29 @@ class ConfirmationTokenService:
             if not valid:
                 raise ActionError("确认令牌与预览不匹配")
             self._records.pop(token, None)
+
+    def validate(
+        self, token: str, *, action_id: str, parameters: Mapping[str, Any], risk_level: str, preview_digest: str,
+    ) -> None:
+        """校验令牌绑定但不消费，供异步任务创建阶段做安全预检。
+
+        预检和实际消费分开是为了避免请求线程在任务事实源尚未创建时先消耗
+        令牌；worker 会再次调用 ``consume``，因此进程内并发提交仍只有一个
+        调用能够真正执行。
+        """
+        with self._lock:
+            record = self._records.get(token)
+            if record is None:
+                raise ActionError("确认令牌无效或已消费")
+            if self._clock() >= record.expires_at:
+                self._records.pop(token, None)
+                raise ActionError("确认令牌已过期")
+            parameters_digest = hashlib.sha256(_canonical(dict(parameters)).encode("utf-8")).hexdigest()
+            valid = (
+                hmac.compare_digest(record.action_id, action_id)
+                and hmac.compare_digest(record.parameters_digest, parameters_digest)
+                and hmac.compare_digest(record.risk_level, risk_level)
+                and hmac.compare_digest(record.preview_digest, preview_digest)
+            )
+            if not valid:
+                raise ActionError("确认令牌与预览不匹配")

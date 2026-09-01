@@ -75,6 +75,11 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .maintenance-preview-action { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
 .maintenance-detail-loading { display: grid; min-height: 220px; place-items: center; }
 .maintenance-preview-panel { margin-top: 20px; padding-top: 16px; border-top: 1px solid #edf0f5; }
+.maintenance-confirmation-zone { display: grid; gap: 12px; margin-top: 18px; padding: 14px; border: 1px solid #ffd591; border-radius: 8px; background: #fffaf0; }
+.maintenance-confirmation-checkbox { line-height: 1.6; }
+.maintenance-token-note { display: block; margin-top: 16px; }
+.maintenance-apply-result { padding-top: 4px; }
+.maintenance-result-loading { padding: 16px 0; color: #68758a; }
 .maintenance-diff-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; width: 100%; }
 .maintenance-diff-status { display: block; margin-top: 3px; font-size: 12px; }
 .maintenance-diff-hash { max-width: 100%; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }

@@ -491,4 +491,64 @@ export interface MaintenancePreviewData {
     differences?: MaintenanceDiffData[];
     summary_code?: string;
   };
+  /** 生成可应用预览的部署会返回一次性确认材料；只在内存中短暂使用。 */
+  change_id?: string;
+  confirmation_token?: string;
+  expires_at?: string | null;
+  expires_in_seconds?: number;
+  change?: MaintenanceChangeData;
+}
+
+/** 维护事务的公开状态；未知未来值保留为字符串并按安全未知态展示。 */
+export type MaintenanceChangeStatus = 'prepared' | 'applying' | 'verifying' | 'succeeded' | 'rolling_back' | 'rolled_back' | 'recovery_required' | string;
+
+/** GET maintenance change 的安全投影，不含备份、路径、命令、正文或环境值。 */
+export interface MaintenanceChangeData {
+  change_id: string;
+  target_id: MaintenanceTargetId;
+  action_id?: string;
+  risk_level?: string;
+  status: MaintenanceChangeStatus;
+  base_fingerprint?: string;
+  before_fingerprint?: string;
+  after_fingerprint?: string;
+  step_summary?: string[];
+  task_id?: string | null;
+  rollback_status?: string;
+  restart_required?: boolean;
+  created_at?: string;
+  expires_at?: string;
+  updated_at?: string;
+  preview_digest?: string;
+  leaf_states?: MaintenanceLeafData[];
+}
+
+/** 维护变更关联的任务安全摘要；任务详情仍通过任务中心读取。 */
+export interface MaintenanceChangeTask {
+  task_id?: string;
+  status?: string;
+  action_id?: string;
+  change_id?: string;
+  created_at?: string | null;
+}
+
+/** GET /maintenance/changes/{change_id} 的兼容安全包装。 */
+export interface MaintenanceChangeEnvelope {
+  change: MaintenanceChangeData;
+  task?: MaintenanceChangeTask | null;
+  blocked?: boolean;
+  recovery_required?: boolean;
+  warning?: string | null;
+}
+
+/** POST maintenance apply 的最小安全响应；不接受或回显配置正文。 */
+export interface MaintenanceApplyData {
+  change_id: string;
+  task_id?: string | null;
+  status?: MaintenanceChangeStatus;
+  restart_required?: boolean;
+  change?: MaintenanceChangeData;
+  task?: MaintenanceChangeTask | null;
+  blocked?: boolean;
+  warning?: string | null;
 }

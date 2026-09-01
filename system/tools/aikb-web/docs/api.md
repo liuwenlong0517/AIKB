@@ -262,7 +262,29 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 
 返回无正文事务状态和关联任务安全摘要，用于页面轮询 `prepared`、`applying`、`validating`、`succeeded`、`rolled_back` 或 `recovery_required`。确认令牌、候选、备份、完整 diff、物理路径和底层异常永不返回。终态审计失败或无法安全恢复时，系统状态同时报告 `rule_recovery_required` 并阻止新的规则写入。
 
-## 8. 分页、空集和降级统一规则
+## 8. 阶段 4B 安装与修复接口
+
+维护目标固定为 `environment`、`agent.codex` 和 `agent.claude-code`。浏览器只能逐目标操作，不能提交路径、环境值、配置正文、命令或脚本，也没有一键全部修复和卸载入口。
+
+### GET /maintenance/targets、GET /maintenance/targets/{target_id}
+
+返回平台能力、固定目标、逻辑叶子、状态和基线指纹。状态只使用 `ready`、`missing`、`drifted`、`conflict`、`invalid`、`unsupported` 和 `restart_required`；响应不包含物理路径或非受管配置正文。
+
+### POST /maintenance/targets/{target_id}/preview
+
+请求体严格为 `base_fingerprint`。服务重新检查目标并生成结构化差异、固定步骤、前后指纹、进程内 `change_id`、五分钟单次确认令牌和过期时间。预览只暂存安全计划，不创建事务目录、私有材料、任务、审计或子进程；服务重启后暂存自然失效。
+
+### POST /maintenance/changes/{change_id}/apply
+
+请求体只允许 `confirmation_token`。服务先重新执行 inspect/plan 并比对暂存计划，随后才创建持久化事务和私有材料。后台任务在全局维护锁内验证材料、当前现场和 preflight，写入开始审计成功后再消费令牌；然后执行固定步骤、目标专属验证和必要的逆序补偿。任务参数只保存 `change_id`。
+
+### GET /maintenance/changes/{change_id}
+
+返回维护事务、关联任务、恢复门禁和重启提示的安全投影。令牌、备份、配置正文、环境值、物理路径、probe 原始输出和底层异常永不返回。`recovery_required` 会阻止新的维护写入。
+
+Windows Agent 验证使用服务端固定的 MCP initialize、tools/list、四个生命周期 hook 和中文 UTF-8 probe；命令、事件和超时不能由浏览器控制。macOS 继续返回不支持。
+
+## 9. 分页、空集和降级统一规则
 
 - page 从 1 开始；阶段 2 新增的运行状态 page_size 上限为 50，审计上限为 100。超限返回 400 invalid_request，不得静默扩大或无限制读取；阶段 1 搜索继续使用 `limit<=20`。
 - total 是当前筛选下可信计数；无法计算时返回 null，并在 meta.degraded=true，不得用当前页长度伪造总数。
@@ -270,6 +292,6 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 - 可重建索引不可用时，能从 Markdown/JSONL 事实源安全读取的接口可以局部降级；无法保证结果完整性的搜索、分页或详情接口必须 503。
 - 所有降级都要给机器可读的 warnings 枚举（如 index_unavailable、audit_partial、damaged_records、session_id_unavailable），不把底层异常文本放入响应。
 
-## 9. 明确禁止公开的内容
+## 10. 明确禁止公开的内容
 
 任何接口、错误包络、日志转发或浏览器源代码都不得公开：Windows 绝对路径、盘符、UNC 路径、workspace/数据库物理路径、完整 Git 输出、SQL、环境变量值、密钥/token/cookie、完整请求 payload、完整 MCP 返回值、知识正文（搜索/审计场景）、诊断正文、聊天全文、transcript、隐藏推理、二进制附件和完整 traceback。需要定位问题时只返回 request_id，由本机服务日志关联。

@@ -28,6 +28,8 @@ import type {
   MaintenanceTargetsData,
   MaintenanceTargetDetail,
   MaintenancePreviewData,
+  MaintenanceApplyData,
+  MaintenanceChangeEnvelope,
 } from '../types/api';
 
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
@@ -185,6 +187,12 @@ export const api = {
     target: (targetId: string) => apiClient.getEnvelope<MaintenanceTargetDetail>(`/maintenance/targets/${encodeURIComponent(targetId)}`),
     preview: (targetId: string, body: { base_fingerprint: string }) =>
       apiClient.postEnvelope<MaintenancePreviewData>(`/maintenance/targets/${encodeURIComponent(targetId)}/preview`, body),
+    /** 仅提交服务端生成的变更 ID 和一次性确认令牌，不允许浏览器携带路径或正文。 */
+    apply: (changeId: string, body: { confirmation_token: string }) =>
+      apiClient.postEnvelope<MaintenanceApplyData>(`/maintenance/changes/${encodeURIComponent(changeId)}/apply`, body),
+    /** 查询维护事务和任务关联；服务端未提供该路由时由页面以错误态提示，不自动重试写入。 */
+    change: (changeId: string) =>
+      apiClient.getEnvelope<MaintenanceChangeEnvelope>(`/maintenance/changes/${encodeURIComponent(changeId)}`),
   },
 };
 
