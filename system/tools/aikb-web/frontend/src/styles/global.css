@@ -83,6 +83,10 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .maintenance-diff-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; width: 100%; }
 .maintenance-diff-status { display: block; margin-top: 3px; font-size: 12px; }
 .maintenance-diff-hash { max-width: 100%; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+.maintenance-diff-semantics { width: 100%; margin: 0; }
+.maintenance-diff-semantics .ant-descriptions-item-label { width: 88px; color: #667085; }
+.maintenance-diff-evidence { width: 100%; color: #667085; font-size: 12px; }
+.maintenance-diff-evidence summary { cursor: pointer; }
 .markdown-body { color: #293448; line-height: 1.8; overflow-wrap: anywhere; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #14213d; line-height: 1.35; margin: 1.5em 0 0.7em; }
 .markdown-body h1:first-child { margin-top: 0; }

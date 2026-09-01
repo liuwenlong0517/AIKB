@@ -164,7 +164,38 @@ function MaintenanceApplyResult({ result, status, change, changeResponse, loadin
   return <div className="maintenance-apply-result section-gap">{error && <Alert type="warning" showIcon message="正在读取维护变更状态" description="任务已提交，但当前无法读取最新状态；页面不会自动重复提交。" />}{blocked && <Alert type="error" showIcon message="维护写入已被恢复门禁阻断" description="系统要求人工检查恢复状态；页面不会自动重试或覆盖现场。" />}{changeResponse?.warning && <Alert type="warning" showIcon message="维护状态提示" description={changeResponse.warning} />}<Alert type={view.type} showIcon message={view.title} description={view.description} /><Descriptions column={1} size="small" className="section-gap"><Descriptions.Item label="变更 ID">{result.change_id}</Descriptions.Item>{taskId && <Descriptions.Item label="任务 ID">{taskId}</Descriptions.Item>}{change?.rollback_status && <Descriptions.Item label="回滚状态">{change.rollback_status}</Descriptions.Item>}</Descriptions>{taskId && <Button type="link"><Link to={`/tasks/${encodeURIComponent(taskId)}`}>查看任务中心</Link></Button>}</div>;
 }
 
-function MaintenanceDiff({ diff }: { diff: MaintenanceDiffData }) { return <List.Item><div className="maintenance-diff-item"><div><Typography.Text strong>{diff.leaf_id}</Typography.Text><Typography.Text type="secondary" className="maintenance-diff-status">{DIFF_LABELS[diff.difference_code ?? ''] ?? '受管状态已返回'}</Typography.Text></div><Space direction="vertical" size={0} align="end">{diff.before_hash && <Typography.Text type="secondary" className="maintenance-diff-hash">变更前摘要：{diff.before_hash}</Typography.Text>}{diff.after_hash && <Typography.Text type="secondary" className="maintenance-diff-hash">变更后摘要：{diff.after_hash}</Typography.Text>}</Space></div></List.Item>; }
+/**
+ * 展示服务端固定语义说明，帮助用户在确认前理解“哪里变了、会做什么、
+ * 哪些内容保留”。哈希仅作为折叠的次要证据，正文、路径和真实值永不渲染。
+ */
+function MaintenanceDiff({ diff }: { diff: MaintenanceDiffData }) {
+  const affected = diff.affected_fields ?? [];
+  const preserved = diff.preserved_scope ?? [];
+  const managed = diff.managed_diff ?? [];
+  return <List.Item>
+    <div className="maintenance-diff-item">
+      <div>
+        <Typography.Text strong>{diff.display_name ?? diff.leaf_id}</Typography.Text>
+        <Typography.Text type="secondary" className="maintenance-diff-status">{DIFF_LABELS[diff.difference_code ?? ''] ?? '受管状态已返回'}</Typography.Text>
+      </div>
+      <Descriptions column={1} size="small" className="maintenance-diff-semantics">
+        {diff.current_summary && <Descriptions.Item label="当前问题">{diff.current_summary}</Descriptions.Item>}
+        {diff.change_action && <Descriptions.Item label="将执行">{diff.change_action}</Descriptions.Item>}
+        {diff.expected_summary && <Descriptions.Item label="预期结果">{diff.expected_summary}</Descriptions.Item>}
+        {affected.length > 0 && <Descriptions.Item label="影响字段">{affected.join('、')}</Descriptions.Item>}
+        {managed.length > 0 && <Descriptions.Item label="受管范围">{managed.join('、')}</Descriptions.Item>}
+        {preserved.length > 0 && <Descriptions.Item label="明确保留">{preserved.join('、')}</Descriptions.Item>}
+      </Descriptions>
+      {(diff.before_hash || diff.after_hash) && <details className="maintenance-diff-evidence">
+        <summary>显示摘要证据</summary>
+        <Space direction="vertical" size={0}>
+          {diff.before_hash && <Typography.Text type="secondary" className="maintenance-diff-hash">变更前摘要：{diff.before_hash}</Typography.Text>}
+          {diff.after_hash && <Typography.Text type="secondary" className="maintenance-diff-hash">变更后摘要：{diff.after_hash}</Typography.Text>}
+        </Space>
+      </details>}
+    </div>
+  </List.Item>;
+}
 
 function PlatformCapabilityAlert({ platform }: { platform: import('../types/api').MaintenancePlatformData }) {
   const inspectionSupported = platform.inspection_supported ?? platform.supported; const previewSupported = platform.preview_supported ?? inspectionSupported; const applySupported = isApplySupported(platform);

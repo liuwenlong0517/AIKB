@@ -85,6 +85,25 @@ describe('MaintenancePage', () => {
     expect(screen.queryByText(/C:\\|\/Users\\|备份路径|环境变量值/)).not.toBeInTheDocument();
   });
 
+  it('按受管差异语义展示当前问题、动作、影响字段和保留范围', async () => {
+    const mutate = vi.fn((_input: unknown, options: { onSuccess: (response: { data: object }) => void }) => options.onSuccess({ data: {
+      target: targetItems[0], platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false }, inspection: { target_id: 'environment', status: 'missing', logical_leaves: [], steps: [], base_fingerprint: 'a'.repeat(64) }, plan: { target_id: 'environment', preview_digest: 'c'.repeat(64), before_fingerprint: 'a'.repeat(64), after_fingerprint: 'b'.repeat(64), steps: [{ step_id: 'preflight' }], logical_leaves: [], differences: [{ leaf_id: 'user_environment.aikb_home', difference_code: 'drifted', display_name: 'AIKB 控制仓环境设置', current_summary: '受管内容与当前版本不一致', change_action: '更新受管内容', expected_summary: '替换为当前版本的受管内容', affected_fields: ['用户级 AIKB 控制仓设置'], managed_diff: ['控制仓设置的受管值'], preserved_scope: ['其他用户环境变量'], before_hash: 'd'.repeat(64), after_hash: 'e'.repeat(64) }] },
+    } }));
+    const platform = { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false };
+    mocks.targets.mockReturnValue(query({ items: targetItems, platform }));
+    mocks.statuses.mockReturnValue(targetItems.map(statusQuery));
+    mocks.target.mockReturnValue(query({ target: targetItems[0], platform, status: { target_id: 'environment', status: 'missing', logical_leaves: ['user_environment.aikb_home', 'user_environment.aikb_knowledge_home'], steps: [], base_fingerprint: 'a'.repeat(64) }, leaves: [] }));
+    mocks.preview.mockReturnValue(mutation(mutate));
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: '查看结构化预览' }));
+    expect(await screen.findByText('AIKB 控制仓环境设置')).toBeInTheDocument();
+    expect(screen.getByText('当前问题')).toBeInTheDocument();
+    expect(screen.getByText('更新受管内容')).toBeInTheDocument();
+    expect(screen.getByText('用户级 AIKB 控制仓设置')).toBeInTheDocument();
+    expect(screen.getByText('其他用户环境变量')).toBeInTheDocument();
+    expect(screen.getByText('显示摘要证据')).toBeInTheDocument();
+  });
+
   it('冲突和损坏目标不提供预览按钮', () => {
     const items = targetItems.map((item) => item.target_id === 'environment' ? { ...item, status: 'conflict' } : item);
     mocks.targets.mockReturnValue(query({ items, platform: { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false } }));

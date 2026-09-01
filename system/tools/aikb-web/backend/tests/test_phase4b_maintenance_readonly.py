@@ -81,6 +81,12 @@ class WindowsMaintenanceReadOnlyTests(unittest.TestCase):
             environment = adapter.inspect("environment")
             self.assertEqual(environment.status, "missing")
             self.assertEqual({item.difference_code for item in environment.differences}, {"missing"})
+            environment_difference = environment.differences[0]
+            self.assertEqual(environment_difference.display_name, "AIKB 控制仓环境设置")
+            self.assertEqual(environment_difference.change_action, "新增受管内容")
+            self.assertIn("用户级 AIKB 控制仓设置", environment_difference.affected_fields)
+            self.assertIn("其他用户环境变量", environment_difference.preserved_scope)
+            self.assertNotIn("AIKB_HOME", json.dumps(environment_difference.public_dict(), ensure_ascii=False))
             self.assertEqual(adapter.plan("environment").summary_code, "repair_available")
 
             (root / "codex").mkdir()
@@ -93,6 +99,8 @@ class WindowsMaintenanceReadOnlyTests(unittest.TestCase):
             self.assertEqual(drifted.differences[0].difference_code, "drifted")
             self.assertIsNotNone(drifted.differences[0].before_hash)
             self.assertIsNotNone(drifted.differences[0].after_hash)
+            self.assertEqual(drifted.differences[0].change_action, "更新受管内容")
+            self.assertEqual(drifted.differences[0].expected_summary, "替换为当前版本的受管内容")
 
     def test_conflict_invalid_and_reparse_are_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -238,6 +246,16 @@ class WindowsMaintenanceReadOnlyTests(unittest.TestCase):
                 preview_digest="c" * 64,
                 differences=differences,
                 summary_code="no_change",
+            )
+
+    def test_difference_semantics_reject_free_text_injection(self) -> None:
+        """公开语义只能来自叶子白名单，不能借模型回显路径或秘密。"""
+
+        with self.assertRaises(MaintenanceTargetError):
+            MaintenanceManagedDifference(
+                "agent.codex.mcp",
+                "drifted",
+                affected_fields=("C:\\secret.json",),
             )
 
     def test_unknown_target_and_injected_environment_keys_are_rejected(self) -> None:

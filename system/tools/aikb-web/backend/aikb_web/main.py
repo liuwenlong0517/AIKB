@@ -24,6 +24,7 @@ from aikb_web.api.v1.tasks import router as tasks_router
 from aikb_web.api.v1.system import router as system_router
 from aikb_web.api.v1.rules import router as rules_router
 from aikb_web.api.v1.maintenance import router as maintenance_router
+from aikb_web.api.v1.manuals import router as manuals_router
 from aikb_web.core.actions import ActionRegistry, ConfirmationTokenService
 from aikb_web.core.gateway import GatewayError, KnowledgeNotFound, KnowledgeGateway, CoreKnowledgeGateway
 from aikb_web.core.orchestrator import TaskOrchestrator
@@ -38,6 +39,7 @@ from aikb_web.core.maintenance_bootstrap import (
     build_default_maintenance_services,
 )
 from aikb_web.core.maintenance_task import MaintenanceTaskCoordinator
+from aikb_web.core.manuals import ManualProvider
 from aikb_web.platform import platform_state
 from aikb_web.platform.windows.maintenance_readonly import build_windows_readonly_adapter
 
@@ -151,6 +153,7 @@ def create_app(
     maintenance_executor: Any | None = None,
     maintenance_task_coordinator: MaintenanceTaskCoordinator | None = None,
     maintenance_material_provider: Any | None = None,
+    manual_provider: Any | None = None,
 ) -> FastAPI:
     """创建可注入网关/任务/规则/维护适配器的 FastAPI 应用，便于契约测试和平台替换。"""
     gateway_was_default = gateway is None
@@ -252,6 +255,13 @@ def create_app(
             init_error = True
     app.state.knowledge_gateway = gateway
     app.state.gateway_init_error = init_error
+    # 手册只读服务绑定控制仓根目录，并通过固定逻辑 ID 读取两份白名单文档。
+    # 测试可注入 provider；生产装配不在启动阶段读取正文。
+    if manual_provider is not None:
+        app.state.manual_provider = manual_provider
+    else:
+        settings = getattr(gateway, "settings", None)
+        app.state.manual_provider = ManualProvider(settings.repo_root) if settings is not None else None
     # 注册表和令牌服务独立于 workspace，保证只读动作目录/预览在知识服务降级时仍可诊断。
     app.state.action_registry = getattr(orchestrator, "registry", None) or ActionRegistry()
     app.state.confirmation_tokens = getattr(orchestrator, "tokens", None) or ConfirmationTokenService()
@@ -458,6 +468,7 @@ def create_app(
     app.include_router(tasks_router, prefix="/api/v1")
     app.include_router(rules_router, prefix="/api/v1")
     app.include_router(maintenance_router, prefix="/api/v1")
+    app.include_router(manuals_router, prefix="/api/v1")
 
     @app.api_route("/api/{path:path}", methods=["GET"])
     def unknown_api(path: str) -> None:

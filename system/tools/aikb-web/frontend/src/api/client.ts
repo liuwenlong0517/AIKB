@@ -15,6 +15,7 @@ import type {
   CheckpointDetail,
   CheckpointListData,
   RuntimeListData,
+  ArchivedRuntimeListData,
   WorkingStateDetail,
   ActionPreviewData,
   ActionsData,
@@ -30,6 +31,7 @@ import type {
   MaintenancePreviewData,
   MaintenanceApplyData,
   MaintenanceChangeEnvelope,
+  ManualData,
 } from '../types/api';
 
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
@@ -125,6 +127,8 @@ export const apiClient = new ApiClient();
 
 export const api = {
   overview: () => apiClient.get<OverviewData>('/knowledge/overview'),
+  /** 读取固定控制仓手册；浏览器只传递注册表逻辑 ID，不接受路径。 */
+  manual: (manualId: string) => apiClient.get<ManualData>(`/manuals/${encodeURIComponent(manualId)}`),
   tree: async () => (await apiClient.get<{ root: TreeNode }>('/knowledge/tree')).root,
   search: (query: string, filters: SearchFilters) =>
     apiClient.get<SearchData>('/knowledge/search', { q: query, type: filters.type, tags: filters.tag }),
@@ -140,14 +144,27 @@ export const api = {
   runtime: {
     list: (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}) =>
       apiClient.getEnvelope<RuntimeListData>('/runtime/working-states', params),
+    /** 历史接口只读取归档 Working State，不能通过活动接口 status 绕过边界。 */
+    archivedList: (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}) =>
+      apiClient.getEnvelope<ArchivedRuntimeListData>('/runtime/archived-working-states', params),
     detail: async (workId: string) => {
       const response = await apiClient.getEnvelope<WorkingStateDetail | { item: WorkingStateDetail }>(`/runtime/working-states/${encodeURIComponent(workId)}`);
       return { ...response, data: unwrapItem(response.data) };
     },
+    archivedDetail: async (workId: string) => {
+      const response = await apiClient.getEnvelope<WorkingStateDetail | { item: WorkingStateDetail }>(`/runtime/archived-working-states/${encodeURIComponent(workId)}`);
+      return { ...response, data: unwrapItem(response.data) };
+    },
     checkpoints: (workId: string, params: { page?: number; page_size?: number } = {}) =>
       apiClient.getEnvelope<CheckpointListData>(`/runtime/working-states/${encodeURIComponent(workId)}/checkpoints`, params),
+    archivedCheckpoints: (workId: string, params: { page?: number; page_size?: number } = {}) =>
+      apiClient.getEnvelope<CheckpointListData>(`/runtime/archived-working-states/${encodeURIComponent(workId)}/checkpoints`, params),
     checkpoint: async (workId: string, checkpointId: string) => {
       const response = await apiClient.getEnvelope<CheckpointDetail | { item: CheckpointDetail }>(`/runtime/working-states/${encodeURIComponent(workId)}/checkpoints/${encodeURIComponent(checkpointId)}`);
+      return { ...response, data: unwrapItem(response.data) };
+    },
+    archivedCheckpoint: async (workId: string, checkpointId: string) => {
+      const response = await apiClient.getEnvelope<CheckpointDetail | { item: CheckpointDetail }>(`/runtime/archived-working-states/${encodeURIComponent(workId)}/checkpoints/${encodeURIComponent(checkpointId)}`);
       return { ...response, data: unwrapItem(response.data) };
     },
   },

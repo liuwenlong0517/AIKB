@@ -1,13 +1,13 @@
 import { Alert, Button, Card, Col, Descriptions, Empty, Input, List, Pagination as AntPagination, Row, Select, Space, Tag, Typography } from 'antd';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AsyncState } from '../components/AsyncState';
 import { PageHeader } from '../components/PageHeader';
-import { useRuntimeCheckpoint, useRuntimeCheckpoints, useRuntimeWorkingState, useRuntimeWorkingStates } from '../hooks/useApi';
-import type { ApiMeta, CheckpointDetail, RuntimeRepositorySummary, WorkingStateStatus } from '../types/api';
+import { useRuntimeArchivedCheckpoint, useRuntimeArchivedCheckpoints, useRuntimeArchivedWorkingState, useRuntimeArchivedWorkingStates, useRuntimeCheckpoint, useRuntimeCheckpoints, useRuntimeWorkingState, useRuntimeWorkingStates } from '../hooks/useApi';
+import type { ApiMeta, CheckpointDetail, RuntimeRepositorySummary, RuntimeWorkingStateStatus } from '../types/api';
 import { useState } from 'react';
 
-const STATUS_LABELS: Record<WorkingStateStatus, string> = { planned: '计划中', active: '进行中', blocked: '已阻塞' };
-const STATUS_COLORS: Record<WorkingStateStatus, string> = { planned: 'blue', active: 'green', blocked: 'red' };
+const STATUS_LABELS: Record<string, string> = { planned: '计划中', active: '进行中', blocked: '已阻塞', completed: '已完成', abandoned: '已放弃', superseded: '已替代' };
+const STATUS_COLORS: Record<string, string> = { planned: 'blue', active: 'green', blocked: 'red', completed: 'green', abandoned: 'orange', superseded: 'purple' };
 
 /** 将后端降级元信息转为稳定的人类提示；绝不展示底层路径、异常或诊断正文。 */
 function WarningBar({ meta, audit = false }: { meta?: ApiMeta; audit?: boolean }) {
@@ -24,7 +24,7 @@ function WarningBar({ meta, audit = false }: { meta?: ApiMeta; audit?: boolean }
 
 function StatusTag({ status }: { status?: string | null }) {
   if (!status) return <Tag>未知状态</Tag>;
-  const typed = status as WorkingStateStatus;
+  const typed = status as RuntimeWorkingStateStatus;
   return <Tag color={STATUS_COLORS[typed] ?? 'default'}>{STATUS_LABELS[typed] ?? status}</Tag>;
 }
 
@@ -66,51 +66,70 @@ function Sections({ sections }: { sections?: Record<string, string | string[] | 
 
 /** 运行状态页面同时承担列表、任务详情和检查点深链，刷新深层 URL 仍会回到同一只读页面。 */
 export function RuntimePage() {
-  const { workId, checkpointId } = useParams<{ workId?: string; checkpointId?: string }>();
-  return workId ? <RuntimeDetail workId={workId} checkpointId={checkpointId} /> : <RuntimeList />;
+  const { workId, checkpointId, historyWorkId, historyCheckpointId } = useParams<{ workId?: string; checkpointId?: string; historyWorkId?: string; historyCheckpointId?: string }>();
+  const location = useLocation();
+  if (historyWorkId) return <RuntimeDetail workId={historyWorkId} checkpointId={historyCheckpointId} archived />;
+  return workId ? <RuntimeDetail workId={workId} checkpointId={checkpointId} /> : <RuntimeList view={location.pathname === '/runtime/history' ? 'history' : 'active'} />;
 }
 
-function RuntimeList() {
+function RuntimeList({ view }: { view: 'active' | 'history' }) {
+  const navigate = useNavigate();
   const [project, setProject] = useState('');
   const [agent, setAgent] = useState('');
   const [status, setStatus] = useState<string>();
   const [page, setPage] = useState(1);
   const pageSize = 20;
-  const query = useRuntimeWorkingStates({ project_id: project || undefined, agent: agent || undefined, status, page, page_size: pageSize });
+  // 两类列表严格按当前路由二选一启用，避免历史筛选被误发给活动接口，
+  // 也避免普通活动页无意义读取归档数据。
+  const activeQuery = useRuntimeWorkingStates({ project_id: project || undefined, agent: agent || undefined, status, page, page_size: pageSize }, view === 'active');
+  const archivedQuery = useRuntimeArchivedWorkingStates({ project_id: project || undefined, agent: agent || undefined, status, page, page_size: pageSize }, view === 'history');
+  const query = view === 'history' ? archivedQuery : activeQuery;
   const data = query.data?.data;
   return <>
-    <PageHeader title="运行状态" description="查看活动 Working State、有限恢复章节和双仓安全摘要。" />
+    <PageHeader title="运行状态" description="查看活动和历史 Working State 的只读安全摘要。" />
+    <Card className="search-controls">
+      <Space>
+        <Button type={view === 'active' ? 'primary' : 'default'} onClick={() => { setPage(1); setStatus(undefined); navigate('/runtime'); }}>活动任务</Button>
+        <Button type={view === 'history' ? 'primary' : 'default'} onClick={() => { setPage(1); setStatus(undefined); navigate('/runtime/history'); }}>历史任务</Button>
+      </Space>
+    </Card>
     <Card className="search-controls">
       <Space wrap>
         <Input aria-label="按项目筛选" placeholder="项目逻辑 ID" value={project} onChange={(event) => { setProject(event.target.value); setPage(1); }} />
         <Input aria-label="按最新作者筛选" placeholder="最新检查点作者 Agent" value={agent} onChange={(event) => { setAgent(event.target.value); setPage(1); }} />
-        <Select aria-label="按任务状态筛选" allowClear placeholder="全部活动状态" style={{ width: 170 }} value={status} onChange={(value) => { setStatus(value); setPage(1); }} options={Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))} />
+        <Select aria-label="按任务状态筛选" allowClear placeholder={view === 'history' ? '全部历史状态' : '全部活动状态'} style={{ width: 170 }} value={status} onChange={(value) => { setStatus(value); setPage(1); }} options={Object.entries(view === 'history' ? { completed: STATUS_LABELS.completed, abandoned: STATUS_LABELS.abandoned, superseded: STATUS_LABELS.superseded } : { planned: STATUS_LABELS.planned, active: STATUS_LABELS.active, blocked: STATUS_LABELS.blocked }).map(([value, label]) => ({ value, label }))} />
         <Button onClick={() => { setProject(''); setAgent(''); setStatus(undefined); setPage(1); }}>清除筛选</Button>
       </Space>
     </Card>
     <WarningBar meta={query.data?.meta} />
     <AsyncState loading={query.isLoading} error={query.error} onRetry={() => void query.refetch()} empty={!data}>
-      {data && <Card title={<span>活动任务 <Typography.Text type="secondary">{data.pagination.total ?? data.items.length} 项</Typography.Text></span>}>
-        {!data.items.length ? <Empty description="当前没有活动任务。" /> : <List itemLayout="vertical" dataSource={data.items} renderItem={(item) => <List.Item actions={[<Link key="detail" to={`/runtime/${encodeURIComponent(item.work_id)}`}>查看详情</Link>]}> <List.Item.Meta title={<Space><Link to={`/runtime/${encodeURIComponent(item.work_id)}`}>{item.work_id}</Link><StatusTag status={item.status} /><OwnershipTag mode={item.ownership_mode} /></Space>} description={<Space wrap><Typography.Text type="secondary">项目：{text(item.project_id)}</Typography.Text><Typography.Text type="secondary">Owner：{text(item.owner_agent)}</Typography.Text><Typography.Text type="secondary">最新作者：{text(item.author_agent ?? item.agent)}</Typography.Text><Typography.Text type="secondary">参与会话：{item.participant_count ?? item.participants?.length ?? 0}</Typography.Text></Space>} /><Typography.Paragraph ellipsis={{ rows: 2 }}>{text(item.goal)}</Typography.Paragraph><Space wrap><Typography.Text type="secondary">更新：{date(item.updated_at)}</Typography.Text><Typography.Text type="secondary">检查点：{text(item.checkpoint_id)}</Typography.Text>{item.workspace_dirty ? <Tag color="orange">工作区有改动</Tag> : <Tag color="green">工作区干净</Tag>}</Space></List.Item>} />}
+      {data && <Card title={<span>{view === 'history' ? '历史任务' : '活动任务'} <Typography.Text type="secondary">{data.pagination.total ?? data.items.length} 项</Typography.Text></span>}>
+        {!data.items.length ? <Empty description={view === 'history' ? '当前没有历史任务。' : '当前没有活动任务。'} /> : <List itemLayout="vertical" dataSource={data.items} renderItem={(item) => <List.Item actions={[<Link key="detail" to={view === 'history' ? `/runtime/history/${encodeURIComponent(item.work_id)}` : `/runtime/${encodeURIComponent(item.work_id)}`}>查看详情</Link>]}> <List.Item.Meta title={<Space><Link to={view === 'history' ? `/runtime/history/${encodeURIComponent(item.work_id)}` : `/runtime/${encodeURIComponent(item.work_id)}`}>{item.work_id}</Link><StatusTag status={item.status} /><OwnershipTag mode={item.ownership_mode} /></Space>} description={<Space wrap><Typography.Text type="secondary">项目：{text(item.project_id)}</Typography.Text><Typography.Text type="secondary">Owner：{text(item.owner_agent)}</Typography.Text><Typography.Text type="secondary">最新作者：{text(item.author_agent ?? item.agent)}</Typography.Text><Typography.Text type="secondary">参与会话：{item.participant_count ?? item.participants?.length ?? 0}</Typography.Text></Space>} /><Typography.Paragraph ellipsis={{ rows: 2 }}>{text(item.goal)}</Typography.Paragraph><Space wrap><Typography.Text type="secondary">{view === 'history' ? '关闭/最后活动' : '更新'}：{date(item.updated_at)}</Typography.Text><Typography.Text type="secondary">检查点：{text(item.checkpoint_id)}</Typography.Text>{item.workspace_dirty ? <Tag color="orange">工作区有改动</Tag> : <Tag color="green">工作区干净</Tag>}</Space></List.Item>} />}
         {data.pagination.total !== null && data.pagination.total > pageSize && <AntPagination className="section-gap" current={page} pageSize={pageSize} total={data.pagination.total} showSizeChanger={false} onChange={setPage} />}
       </Card>}
     </AsyncState>
   </>;
 }
 
-function RuntimeDetail({ workId, checkpointId }: { workId: string; checkpointId?: string }) {
-  const detailQuery = useRuntimeWorkingState(workId);
+function RuntimeDetail({ workId, checkpointId, archived = false }: { workId: string; checkpointId?: string; archived?: boolean }) {
+  const activeDetailQuery = useRuntimeWorkingState(workId, !archived);
+  const archivedDetailQuery = useRuntimeArchivedWorkingState(workId, archived);
+  const detailQuery = archived ? archivedDetailQuery : activeDetailQuery;
   const [checkpointPage, setCheckpointPage] = useState(1);
   const checkpointPageSize = 20;
   // 检查点是独立分页资源；详情深链打开时仍保留用户当前所在页，避免固定请求第一页。
-  const checkpointsQuery = useRuntimeCheckpoints(workId, { page: checkpointPage, page_size: checkpointPageSize });
-  const checkpointQuery = useRuntimeCheckpoint(workId, checkpointId);
+  const activeCheckpointsQuery = useRuntimeCheckpoints(workId, { page: checkpointPage, page_size: checkpointPageSize }, !archived);
+  const archivedCheckpointsQuery = useRuntimeArchivedCheckpoints(workId, { page: checkpointPage, page_size: checkpointPageSize }, archived);
+  const checkpointsQuery = archived ? archivedCheckpointsQuery : activeCheckpointsQuery;
+  const activeCheckpointQuery = useRuntimeCheckpoint(workId, checkpointId, !archived);
+  const archivedCheckpointQuery = useRuntimeArchivedCheckpoint(workId, checkpointId, archived);
+  const checkpointQuery = archived ? archivedCheckpointQuery : activeCheckpointQuery;
   const detail = detailQuery.data?.data;
   const checkpoint = checkpointQuery.data?.data;
   return <>
-    <PageHeader title={detail?.work_id ?? '任务详情'} description="仅展示活动任务的安全恢复信息。" extra={<Button href="/runtime">← 返回活动任务</Button>} />
+    <PageHeader title={detail?.work_id ?? '任务详情'} description={archived ? '仅展示已归档任务的安全历史信息。' : '仅展示活动任务的安全恢复信息。'} extra={<Button href={archived ? '/runtime/history' : '/runtime'}>← 返回{archived ? '历史任务' : '活动任务'}</Button>} />
     <WarningBar meta={detailQuery.data?.meta} />
-    <AsyncState loading={detailQuery.isLoading} error={detailQuery.error} onRetry={() => void detailQuery.refetch()} empty={!detail} emptyDescription="未找到该任务或它已不在活动范围内。">
+    <AsyncState loading={detailQuery.isLoading} error={detailQuery.error} onRetry={() => void detailQuery.refetch()} empty={!detail} emptyDescription={archived ? '未找到该任务或它已不在历史归档范围内。' : '未找到该任务或它已不在活动范围内。'}>
       {detail && <>
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={15}><Card title={<Space><span>任务概览</span><StatusTag status={detail.status} /><OwnershipTag mode={detail.ownership_mode} /></Space>}><Descriptions column={1} size="small"><Descriptions.Item label="目标">{text(detail.goal)}</Descriptions.Item><Descriptions.Item label="当前状态">{text(detail.current_state)}</Descriptions.Item><Descriptions.Item label="下一步">{text(detail.next_steps)}</Descriptions.Item><Descriptions.Item label="阻塞">{text(detail.blockers)}</Descriptions.Item><Descriptions.Item label="更新时间">{date(detail.updated_at)}</Descriptions.Item><Descriptions.Item label="Owner">{text(detail.owner_agent)} / <SessionId value={detail.owner_session_id} /></Descriptions.Item><Descriptions.Item label="最新作者">{text(detail.author_agent ?? detail.agent)} / {text(detail.author_role ?? detail.role)}</Descriptions.Item><Descriptions.Item label="作者会话 ID"><SessionId value={detail.author_session_id ?? detail.session_id} /></Descriptions.Item><Descriptions.Item label="授权参与会话">{detail.participant_count ?? detail.participants?.length ?? 0}</Descriptions.Item></Descriptions></Card></Col>
@@ -118,7 +137,7 @@ function RuntimeDetail({ workId, checkpointId }: { workId: string; checkpointId?
           <Col xs={24}><Card title={<span>恢复章节 <Typography.Text type="secondary">（只读白名单）</Typography.Text></span>}><Sections sections={detail.sections} /></Card></Col>
         </Row>
         <Card className="section-gap" title={<span>检查点历史 <Typography.Text type="secondary">{detail.checkpoint_count ?? checkpointsQuery.data?.data.pagination.total ?? 0} 项</Typography.Text></span>}>
-          {checkpointsQuery.isLoading ? <Typography.Text type="secondary">正在读取检查点…</Typography.Text> : checkpointsQuery.error ? <Alert type="warning" showIcon message="检查点暂时不可用" description={checkpointsQuery.error.message} /> : !checkpointsQuery.data?.data.items.length ? <Empty description="当前任务没有检查点。" /> : <><List dataSource={checkpointsQuery.data.data.items} renderItem={(item) => <List.Item actions={[<Link key="open" to={`/runtime/${encodeURIComponent(workId)}/checkpoints/${encodeURIComponent(item.checkpoint_id)}`}>查看检查点</Link>]}><List.Item.Meta title={<Space><Typography.Text code>{item.checkpoint_id}</Typography.Text><StatusTag status={item.status} /></Space>} description={<Space wrap><Typography.Text type="secondary">更新时间：{date(item.updated_at)}</Typography.Text><Typography.Text type="secondary">作者：{text(item.author_agent ?? item.agent)}</Typography.Text><Typography.Text type="secondary">作者会话：<SessionId value={item.author_session_id ?? item.session_id} /></Typography.Text></Space>} /></List.Item>} />
+          {checkpointsQuery.isLoading ? <Typography.Text type="secondary">正在读取检查点…</Typography.Text> : checkpointsQuery.error ? <Alert type="warning" showIcon message="检查点暂时不可用" description={checkpointsQuery.error.message} /> : !checkpointsQuery.data?.data.items.length ? <Empty description="当前任务没有检查点。" /> : <><List dataSource={checkpointsQuery.data.data.items} renderItem={(item) => <List.Item actions={[<Link key="open" to={archived ? `/runtime/history/${encodeURIComponent(workId)}/checkpoints/${encodeURIComponent(item.checkpoint_id)}` : `/runtime/${encodeURIComponent(workId)}/checkpoints/${encodeURIComponent(item.checkpoint_id)}`}>查看检查点</Link>]}><List.Item.Meta title={<Space><Typography.Text code>{item.checkpoint_id}</Typography.Text><StatusTag status={item.status} /></Space>} description={<Space wrap><Typography.Text type="secondary">更新时间：{date(item.updated_at)}</Typography.Text><Typography.Text type="secondary">作者：{text(item.author_agent ?? item.agent)}</Typography.Text><Typography.Text type="secondary">作者会话：<SessionId value={item.author_session_id ?? item.session_id} /></Typography.Text></Space>} /></List.Item>} />
             {(() => { const pagination = checkpointsQuery.data?.data.pagination; if (!pagination) return null; const total = pagination.total ?? (pagination.has_next ? (checkpointPage + 1) * checkpointPageSize : checkpointPage * checkpointPageSize); return <AntPagination className="section-gap" current={checkpointPage} pageSize={checkpointPageSize} total={total} showSizeChanger={false} onChange={setCheckpointPage} />; })()}
           </>}
         </Card>

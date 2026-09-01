@@ -60,11 +60,42 @@ def working_states(
     return success(data, request, degraded=degraded, warnings=warnings)
 
 
+@router.get("/archived-working-states")
+def archived_working_states(
+    request: Request,
+    project_id: str | None = Query(default=None, max_length=120),
+    status: list[str] | None = Query(default=None),
+    agent: str | None = Query(default=None, max_length=120),
+    page: int = Query(default=1, ge=1, le=100000),
+    page_size: int = Query(default=20, ge=1, le=50),
+) -> dict[str, Any]:
+    """列出 completed、abandoned、superseded 历史任务；与活动接口完全分离。"""
+    gateway = _gateway(request, "web_archived_work_states")
+    data = gateway.web_archived_work_states(
+        project_id=validate_project_id(project_id),
+        status=split_csv(status),
+        agent=agent.strip() if agent else None,
+        page=page,
+        page_size=page_size,
+    )
+    degraded, warnings = _runtime_meta(data)
+    return success(data, request, degraded=degraded, warnings=warnings)
+
+
 @router.get("/working-states/{work_id}")
 def working_state(request: Request, work_id: str) -> dict[str, Any]:
     """读取一个活动任务的有限详情，所有正文和仓库字段由共享核心裁剪。"""
     identifier = validate_runtime_identifier(work_id, name="work_id")
     data = _gateway(request, "web_work_state").web_work_state(identifier)
+    degraded, warnings = _runtime_meta(data)
+    return success(data, request, degraded=degraded, warnings=warnings)
+
+
+@router.get("/archived-working-states/{work_id}")
+def archived_working_state(request: Request, work_id: str) -> dict[str, Any]:
+    """读取历史任务的安全详情；归档内容只读且不暴露物理路径。"""
+    identifier = validate_runtime_identifier(work_id, name="work_id")
+    data = _gateway(request, "web_archived_work_state").web_archived_work_state(identifier)
     degraded, warnings = _runtime_meta(data)
     return success(data, request, degraded=degraded, warnings=warnings)
 
@@ -82,10 +113,32 @@ def checkpoints(
     return success(data, request, degraded=False, warnings=[])
 
 
+@router.get("/archived-working-states/{work_id}/checkpoints")
+def archived_checkpoints(
+    request: Request,
+    work_id: str,
+    page: int = Query(default=1, ge=1, le=100000),
+    page_size: int = Query(default=20, ge=1, le=50),
+) -> dict[str, Any]:
+    """分页读取历史任务检查点；不会创建、修改或重新打开任务。"""
+    identifier = validate_runtime_identifier(work_id, name="work_id")
+    data = _gateway(request, "web_archived_checkpoints").web_archived_checkpoints(identifier, page=page, page_size=page_size)
+    return success(data, request, degraded=False, warnings=[])
+
+
 @router.get("/working-states/{work_id}/checkpoints/{checkpoint_id}")
 def checkpoint(request: Request, work_id: str, checkpoint_id: str) -> dict[str, Any]:
     """读取白名单检查点章节；不返回源文件路径、完整 Markdown 或原始输入。"""
     work_identifier = validate_runtime_identifier(work_id, name="work_id")
     checkpoint_identifier = validate_runtime_identifier(checkpoint_id, name="checkpoint_id")
     data = _gateway(request, "web_checkpoint").web_checkpoint(work_identifier, checkpoint_identifier)
+    return success(data, request, degraded=False, warnings=[])
+
+
+@router.get("/archived-working-states/{work_id}/checkpoints/{checkpoint_id}")
+def archived_checkpoint(request: Request, work_id: str, checkpoint_id: str) -> dict[str, Any]:
+    """读取历史检查点的安全字段；不返回源文件路径或原始 Markdown。"""
+    work_identifier = validate_runtime_identifier(work_id, name="work_id")
+    checkpoint_identifier = validate_runtime_identifier(checkpoint_id, name="checkpoint_id")
+    data = _gateway(request, "web_archived_checkpoint").web_archived_checkpoint(work_identifier, checkpoint_identifier)
     return success(data, request, degraded=False, warnings=[])

@@ -33,6 +33,16 @@ export interface OverviewData {
   index?: { tokenizer?: string; rebuilt?: boolean };
 }
 
+/** 控制仓人类维护手册的只读投影；manual_id 仅允许服务端固定注册值。 */
+export interface ManualData {
+  manual_id: 'project' | 'commands' | string;
+  title: string;
+  content: string;
+  content_hash: string;
+  revision: string;
+  truncated?: boolean;
+}
+
 export interface TreeNode {
   name: string;
   path: string;
@@ -89,6 +99,9 @@ export interface SearchFilters { type?: string; tag?: string }
 
 /** 运行状态只读投影中的稳定状态枚举；关闭状态不会出现在阶段 2 活动列表。 */
 export type WorkingStateStatus = 'planned' | 'active' | 'blocked';
+/** 历史 Working State 的终态；活动接口不会接受这些值。 */
+export type ArchivedWorkingStateStatus = 'completed' | 'abandoned' | 'superseded';
+export type RuntimeWorkingStateStatus = WorkingStateStatus | ArchivedWorkingStateStatus;
 
 export interface Pagination {
   page: number;
@@ -110,7 +123,7 @@ export interface RuntimeRepositorySummary {
 export interface WorkingStateSummary {
   work_id: string;
   project_id?: string | null;
-  status: WorkingStateStatus;
+  status: RuntimeWorkingStateStatus;
   work_schema_version?: string | null;
   /** 兼容字段：始终表示最新检查点作者，不表示 owner。 */
   agent?: string | null;
@@ -187,6 +200,9 @@ export interface RuntimeListData {
   count?: number;
   index?: { status?: string; rebuilt?: boolean; available?: boolean };
 }
+
+/** 历史运行状态列表与活动列表共享分页形状，但通过独立 API 保持生命周期边界。 */
+export type ArchivedRuntimeListData = RuntimeListData;
 
 export interface CheckpointListData {
   items: CheckpointSummary[];
@@ -473,6 +489,14 @@ export interface MaintenanceTargetDetail {
 export interface MaintenanceDiffData {
   leaf_id: string;
   difference_code?: 'unchanged' | 'missing' | 'drifted' | 'conflict' | 'invalid';
+  /** 服务端固定白名单提供的人类可读语义，不是配置正文或用户输入。 */
+  display_name?: string;
+  change_action?: string;
+  current_summary?: string;
+  expected_summary?: string;
+  affected_fields?: string[];
+  preserved_scope?: string[];
+  managed_diff?: string[];
   before_hash?: string | null;
   after_hash?: string | null;
 }

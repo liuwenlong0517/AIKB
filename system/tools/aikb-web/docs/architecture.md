@@ -14,13 +14,13 @@
 浏览器永远不能直接访问文件系统、SQLite、Git、PowerShell 或 workspace。后端按事实源职责分流：
 
 - 知识读模型读取知识仓 Markdown 及共享核心查询；workspace/db/ 只作可重建索引。
-- Working State 读模型读取 workspace/active 的 work.md、检查点及其索引；不把工作状态提升为正式知识。
+- Working State 读模型分别读取 workspace/active 与 workspace/archive 的 work.md、检查点及其派生索引；活动与历史接口保持独立，不把工作状态提升为正式知识。
 - 审计读模型读取 workspace/audit/events/、fallback JSON，并按 invocation_id 聚合；报告和索引只是派生物。
 - 受控任务只消费静态动作注册表和平台适配器：前端不能提交命令、路径或环境；任务事件 JSONL 是事实源，snapshot 是可重建投影，审计仍写入独立 JSONL 事实源。
 - 规则预览只消费静态规则 ID、基线哈希和候选正文：正式规则保持不变，完整 diff 只存在于同步响应，候选和无正文事务摘要进入专用本机运行面。规则应用只消费服务端变更 ID 和进程内令牌，通过专用任务协调器、跨进程锁、原子替换、正式复核和恢复状态机修改 `USER_RULES.md`。
 - 系统读模型只输出平台、Python、双仓 Git 短摘要和索引可用性；Git 命令必须固定、超时、白名单字段。
 
-运行状态第一小版本只读活动项；归档项和关闭项不进入查询范围。Working State 工作元数据 v2 将 owner（持久责任主体）与 latest author（最近检查点作者）分开投影，SQLite 派生索引版本独立为 v3；旧 `agent/session_id/role` 只作为 latest-author 兼容字段。`legacy-unbound` 不猜测 owner，`shared`/`handed-off` 显示显式授权状态。列表默认按最新更新时间倒序，审计调用默认按最新开始时间倒序，并以逻辑 ID 做稳定排序兜底。
+运行状态把活动项与历史归档作为两个独立只读模型：前者仅允许 `planned`、`active`、`blocked`，后者仅允许 `completed`、`abandoned`、`superseded`，并以归档事实路径再次确认生命周期。Working State 工作元数据 v2 将 owner（持久责任主体）与 latest author（最近检查点作者）分开投影，SQLite 派生索引版本独立为 v3；旧 `agent/session_id/role` 只作为 latest-author 兼容字段。`legacy-unbound` 不猜测 owner，`shared`/`handed-off` 显示显式授权状态。列表默认按最新更新时间倒序，审计调用默认按最新开始时间倒序，并以逻辑 ID 做稳定排序兜底。
 
 ## 读模型分层
 
@@ -42,7 +42,12 @@ API Client 只接受 {data, meta} 或 {error, meta}。页面通过状态钩子�
     /system/info
     /system/capabilities
     /knowledge/*
+    /manuals/{project|commands}
     /runtime/working-states
+      ├─ /{work_id}
+      └─ /{work_id}/checkpoints
+           └─ /{checkpoint_id}
+    /runtime/archived-working-states
       ├─ /{work_id}
       └─ /{work_id}/checkpoints
            └─ /{checkpoint_id}

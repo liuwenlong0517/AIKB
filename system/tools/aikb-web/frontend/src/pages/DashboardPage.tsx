@@ -12,13 +12,34 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader title="总览" description="查看 AIKB 正式知识、索引和最近验证状态。" />
+      {data && <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="正式知识" value={data.document_count} suffix="篇" /></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="知识类型" value={Object.keys(data.by_type ?? {}).length} suffix="类" /></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="标签" value={data.by_tag.length} suffix="个" /></Card></Col>
+        <Col xs={24} sm={12} lg={6}><Card><Statistic title="索引" value={data.index?.tokenizer ?? '未知'} /></Card></Col>
+      </Row>}
+      {/* 使用指南不依赖知识索引；即使总览接口降级，安装排障手册仍应可达。 */}
+      <Row gutter={[16, 16]} className="section-gap">
+        <Col xs={24}>
+          <Card title="使用指南" extra={<Typography.Text type="secondary">控制仓文档</Typography.Text>}>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} sm={12}>
+                <Card size="small" title="项目手册" hoverable>
+                  <Typography.Paragraph type="secondary">架构、安装、维护与故障排查说明。</Typography.Paragraph>
+                  <Link to="/manuals/project">阅读根 README.md →</Link>
+                </Card>
+              </Col>
+              <Col xs={24} sm={12}>
+                <Card size="small" title="命令手册" hoverable>
+                  <Typography.Paragraph type="secondary">常用命令、参数、输出与边界说明。</Typography.Paragraph>
+                  <Link to="/manuals/commands">阅读 system/COMMANDS.md →</Link>
+                </Card>
+              </Col>
+            </Row>
+          </Card>
+        </Col>
+      </Row>
       <AsyncState loading={query.isLoading} error={query.error} onRetry={() => void query.refetch()} empty={!data}>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} sm={12} lg={6}><Card><Statistic title="正式知识" value={data?.document_count ?? 0} suffix="篇" /></Card></Col>
-          <Col xs={24} sm={12} lg={6}><Card><Statistic title="知识类型" value={Object.keys(data?.by_type ?? {}).length} suffix="类" /></Card></Col>
-          <Col xs={24} sm={12} lg={6}><Card><Statistic title="标签" value={data?.by_tag.length ?? 0} suffix="个" /></Card></Col>
-          <Col xs={24} sm={12} lg={6}><Card><Statistic title="索引" value={data?.index?.tokenizer ?? '未知'} /></Card></Col>
-        </Row>
         {data?.index?.rebuilt && <Alert className="section-gap" type="info" showIcon message="本次访问已根据 Markdown 事实源重建派生索引" />}
         <Row gutter={[16, 16]} className="section-gap">
           <Col xs={24} lg={12}>

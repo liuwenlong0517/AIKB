@@ -765,6 +765,105 @@ class WorkStateStore:
         item = self._web_work_record(self._web_row_for_work(work_id), detail=True)
         return {"item": item, "index": result["index"]}
 
+    def web_archived_work_states(
+        self, *, work_id: str | None = None, project_id: str | None = None,
+        status: str | list[str] | tuple[str, ...] | None = None, agent: str | None = None,
+        page: int = 1, page_size: int = 20, limit: int | None = None,
+    ) -> dict[str, Any]:
+        """返回已关闭 Working State 的独立 Web 只读视图。
+
+        归档查询与 ``web_active_work_states`` 分开建模：这里只允许
+        ``completed``、``abandoned``、``superseded``，并再次按事实路径确认记录
+        位于 ``workspace/archive``。这样即使派生索引包含两类记录，活动和历史
+        任务也不会因为共享一个宽泛的 status 查询而混在一起。
+        """
+        if work_id is not None and not self._valid_web_identifier(work_id):
+            raise ValueError("work_id 格式无效")
+        if project_id is not None and (len(project_id) > 120 or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", project_id)):
+            raise ValueError("project_id 格式无效")
+        if agent is not None and len(agent) > 120:
+            raise ValueError("agent 长度超限")
+        if limit is not None:
+            page_size = limit if page_size == 20 else page_size
+        page, page_size = self._web_validate_paging(page, page_size)
+        statuses = self._web_archived_status_filter(status)
+        index = self._web_index_status()
+        if index["status"] == "unavailable":
+            return {"count": 0, "unique": False, "items": [], "pagination": self._web_pagination(page, page_size, 0, 0), "index": index}
+        filters = ["status IN ('completed','abandoned','superseded')"]
+        params: list[Any] = []
+        if work_id:
+            filters.append("work_id = ?")
+            params.append(work_id)
+        if project_id:
+            filters.append("project_id = ?")
+            params.append(project_id)
+        if statuses:
+            filters.append("status IN (" + ",".join("?" for _ in statuses) + ")")
+            params.extend(statuses)
+        if agent:
+            filters.append("author_agent = ?")
+            params.append(agent)
+        connection = sqlite3.connect(self.settings.work_db)
+        try:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                f"SELECT * FROM work_items WHERE {' AND '.join(filters)}",
+                params,
+            ).fetchall()
+        except sqlite3.Error:
+            return {"count": 0, "unique": False, "items": [], "pagination": self._web_pagination(page, page_size, 0, 0), "index": {**index, "status": "unavailable", "reason": "derived_index_query_failed"}}
+        finally:
+            connection.close()
+        rows = [row for row in rows if self._is_archived_record(dict(row))]
+        rows = sorted(rows, key=lambda row: str(row["work_id"] or ""))
+        rows = sorted(rows, key=lambda row: str(row["updated_at"] or ""), reverse=True)
+        total = len(rows)
+        start = (page - 1) * page_size
+        selected = rows[start:start + page_size]
+        items = [{**self._web_work_record(dict(row), detail=False), "lifecycle": "archived"} for row in selected]
+        return {
+            "count": len(items), "unique": len(items) == 1, "items": items,
+            "pagination": self._web_pagination(page, page_size, total, len(items)), "index": index,
+        }
+
+    def web_archived_work_state(self, work_id: str) -> dict[str, Any]:
+        """读取已归档任务的有限详情；不会改变任务生命周期或归档内容。"""
+        if not self._valid_web_identifier(work_id):
+            raise ValueError("work_id 格式无效")
+        result = self.web_archived_work_states(work_id=work_id, page=1, page_size=1)
+        if not result["items"]:
+            raise KeyError("归档工作状态不存在")
+        item = {**self._web_work_record(self._web_archived_row_for_work(work_id), detail=True), "lifecycle": "archived"}
+        return {"item": item, "index": result["index"]}
+
+    def web_archived_checkpoints(self, work_id: str, *, page: int = 1, page_size: int = 20, limit: int | None = None) -> dict[str, Any]:
+        """分页列出归档任务的检查点摘要，复用与活动任务相同的字段白名单。"""
+        work_dir = self._web_archived_work_dir(work_id)
+        if limit is not None:
+            page_size = limit if page_size == 20 else page_size
+        page, page_size = self._web_validate_paging(page, page_size)
+        records = [self._web_checkpoint_record(path, include_detail=False) for path in (work_dir / "checkpoints").glob("*.md")]
+        records.sort(key=lambda item: str(item.get("checkpoint_id") or ""))
+        records.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        total = len(records)
+        start = (page - 1) * page_size
+        items = records[start:start + page_size]
+        return {"work_id": work_id, "count": len(items), "items": items, "pagination": self._web_pagination(page, page_size, total, len(items)), "source": "working-state archive Markdown", "lifecycle": "archived"}
+
+    def web_archived_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]:
+        """读取归档检查点的有限详情，不暴露源文件路径或原始 Markdown。"""
+        if not self._valid_web_identifier(work_id) or not self._valid_web_identifier(checkpoint_id):
+            raise ValueError("标识格式无效")
+        work_dir = self._web_archived_work_dir(work_id)
+        checkpoint_path = next(
+            (path for path in (work_dir / "checkpoints").glob("*.md") if path.stem.lower() == checkpoint_id),
+            None,
+        )
+        if checkpoint_path is None:
+            raise KeyError("归档检查点不存在")
+        return {"work_id": work_id, "item": self._web_checkpoint_record(checkpoint_path, include_detail=True), "source": "working-state archive Markdown", "lifecycle": "archived"}
+
     def web_checkpoints(self, work_id: str, *, page: int = 1, page_size: int = 20, limit: int | None = None) -> dict[str, Any]:
         """列出指定工作状态的检查点摘要；只读取 Markdown，不返回文件路径。"""
         work_dir = self._web_work_dir(work_id)
@@ -992,6 +1091,21 @@ class WorkStateStore:
             raise KeyError("工作状态不存在")
         return dict(row)
 
+    def _web_archived_row_for_work(self, work_id: str) -> dict[str, Any]:
+        """从派生索引取单项归档记录，并确认其状态和事实路径均属历史范围。"""
+        connection = sqlite3.connect(self.settings.work_db)
+        try:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM work_items WHERE work_id = ? AND status IN ('completed','abandoned','superseded')",
+                (work_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None or not self._is_archived_record(dict(row)):
+            raise KeyError("归档工作状态不存在")
+        return dict(row)
+
     def _is_active_record(self, row: dict[str, Any]) -> bool:
         """确认索引行对应 ``workspace/active``，不把归档记录带入 v1。"""
         raw_path = str(row.get("path") or "")
@@ -999,6 +1113,19 @@ class WorkStateStore:
             return False
         try:
             Path(raw_path).resolve().relative_to((self.settings.workspace_root / "active").resolve())
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _is_archived_record(self, row: dict[str, Any]) -> bool:
+        """确认索引行对应 ``workspace/archive``，避免历史查询信任可篡改的路径列。"""
+        if str(row.get("status") or "") not in {"completed", "abandoned", "superseded"}:
+            return False
+        raw_path = str(row.get("path") or "")
+        if not raw_path:
+            return False
+        try:
+            Path(raw_path).resolve().relative_to((self.settings.workspace_root / "archive").resolve())
             return True
         except (OSError, ValueError):
             return False
@@ -1026,6 +1153,17 @@ class WorkStateStore:
         return list(dict.fromkeys(normalized))
 
     @staticmethod
+    def _web_archived_status_filter(status: str | list[str] | tuple[str, ...] | None) -> list[str]:
+        """规范化历史状态筛选，拒绝把活动状态带入归档观察面。"""
+        if status is None or status == "":
+            return []
+        values = status.split(",") if isinstance(status, str) else list(status)
+        normalized = [str(value).strip().lower() for value in values if str(value).strip()]
+        if any(value not in {"completed", "abandoned", "superseded"} for value in normalized):
+            raise ValueError("历史 status 只能是 completed、abandoned 或 superseded")
+        return list(dict.fromkeys(normalized))
+
+    @staticmethod
     def _web_pagination(page: int, page_size: int, total: int, selected: int) -> dict[str, Any]:
         """生成运行状态和检查点共用的分页摘要。"""
         start = (page - 1) * page_size
@@ -1048,7 +1186,8 @@ class WorkStateStore:
                 repositories = []
         public: dict[str, Any] = {
             "work_id": self._web_id(row.get("work_id")),
-            "project_id": str(row.get("project_id") or ""),
+            # project_id 是稳定逻辑标识；旧索引若含异常值也不能原样回传。
+            "project_id": self._web_id(row.get("project_id")),
             "status": str(row.get("status") or "unknown"),
             # 兼容字段 agent/session_id/role 的语义是“最新检查点作者”，不是 owner。
             # owner 缺失时保持 null，不能从最新作者或项目路径推断归属。
@@ -1106,7 +1245,7 @@ class WorkStateStore:
         return public
 
     def _web_work_dir(self, work_id: str) -> Path:
-        """按稳定工作 ID 定位活动目录；阶段 2 第一版不提供归档任务查询。"""
+        """按稳定工作 ID 定位活动目录；归档任务使用独立定位方法。"""
         if not self._valid_web_identifier(work_id):
             raise ValueError("work_id 格式无效")
         root = self.settings.workspace_root / "active"
@@ -1120,6 +1259,22 @@ class WorkStateStore:
             except (OSError, ValueError):
                 continue
         raise KeyError("工作状态不存在")
+
+    def _web_archived_work_dir(self, work_id: str) -> Path:
+        """按工作 ID 定位归档目录，并以 Front Matter 状态确认历史边界。"""
+        if not self._valid_web_identifier(work_id):
+            raise ValueError("work_id 格式无效")
+        root = self.settings.workspace_root / "archive"
+        for path in sorted(root.rglob("work.md")):
+            try:
+                resolved = path.parent.resolve()
+                resolved.relative_to(root.resolve())
+                data = self._load_work(path)
+                if data.get("work_id") == work_id and data.get("status") in {"completed", "abandoned", "superseded"}:
+                    return resolved
+            except (OSError, ValueError):
+                continue
+        raise KeyError("归档工作状态不存在")
 
     def _web_checkpoint_record(self, path: Path, *, include_detail: bool) -> dict[str, Any]:
         """将检查点 Markdown 投影为有限元数据和章节；绝不回传源文件路径。"""

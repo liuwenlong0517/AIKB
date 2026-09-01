@@ -11,6 +11,7 @@ import { AuditPage } from '../pages/AuditPage';
 import { TasksPage } from '../pages/TasksPage';
 import { RulesPage } from '../pages/RulesPage';
 import { MaintenancePage } from '../pages/MaintenancePage';
+import { ManualPage } from '../pages/ManualPage';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
@@ -24,6 +25,7 @@ export function App() {
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/manuals/:manualId" element={<ManualPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/knowledge/view" element={<DocumentPage />} />
             <Route path="/rules" element={<RulesPage />} />
@@ -34,6 +36,9 @@ export function App() {
             <Route path="/runtime" element={<RuntimePage />} />
             <Route path="/runtime/:workId" element={<RuntimePage />} />
             <Route path="/runtime/:workId/checkpoints/:checkpointId" element={<RuntimePage />} />
+            <Route path="/runtime/history" element={<RuntimePage />} />
+            <Route path="/runtime/history/:historyWorkId" element={<RuntimePage />} />
+            <Route path="/runtime/history/:historyWorkId/checkpoints/:historyCheckpointId" element={<RuntimePage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/audit/:invocationId" element={<AuditPage />} />
             <Route path="/tasks" element={<TasksPage />} />

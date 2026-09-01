@@ -2,12 +2,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData, MaintenanceApplyData, MaintenanceChangeEnvelope } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData, MaintenanceApplyData, MaintenanceChangeEnvelope, ManualData } from '../types/api';
 import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
 
 export const useOverview = () => useQuery({ queryKey: ['knowledge-overview'], queryFn: api.overview });
+/** 深层手册路由刷新后独立恢复正文；未知逻辑 ID 由后端安全拒绝。 */
+export const useManual = (manualId: string | undefined): UseQueryResult<ManualData> =>
+  useQuery({ queryKey: ['manual', manualId], queryFn: () => api.manual(manualId as string), enabled: Boolean(manualId) });
 export const useKnowledgeTree = () => useQuery({ queryKey: ['knowledge-tree'], queryFn: api.tree });
 export const useDocument = (id: string | undefined) =>
   useQuery({ queryKey: ['document', id], queryFn: () => api.document(id as string), enabled: Boolean(id) });
@@ -96,20 +99,36 @@ export const useMaintenanceChange = (changeId: string | undefined, enabled = tru
   });
 
 /** 活动 Working State 列表查询；筛选参数进入 query key，保证分页和筛选切换不会复用错误页面。 */
-export const useRuntimeWorkingStates = (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}): UseQueryResult<ApiResponse<RuntimeListData>> =>
-  useQuery({ queryKey: ['runtime-working-states', params], queryFn: () => api.runtime.list(params) });
+export const useRuntimeWorkingStates = (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<RuntimeListData>> =>
+  useQuery({ queryKey: ['runtime-working-states', params], queryFn: () => api.runtime.list(params), enabled });
+
+/** 历史 Working State 列表只在历史页签启用，避免普通活动页无谓读取归档数据。 */
+export const useRuntimeArchivedWorkingStates = (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<RuntimeListData>> =>
+  useQuery({ queryKey: ['runtime-archived-working-states', params], queryFn: () => api.runtime.archivedList(params), enabled });
 
 /** 单个活动任务详情，禁用无 workId 的空路由请求。 */
-export const useRuntimeWorkingState = (workId: string | undefined): UseQueryResult<ApiResponse<WorkingStateDetail>> =>
-  useQuery({ queryKey: ['runtime-working-state', workId], queryFn: () => api.runtime.detail(workId as string), enabled: Boolean(workId) });
+export const useRuntimeWorkingState = (workId: string | undefined, enabled = true): UseQueryResult<ApiResponse<WorkingStateDetail>> =>
+  useQuery({ queryKey: ['runtime-working-state', workId], queryFn: () => api.runtime.detail(workId as string), enabled: Boolean(workId) && enabled });
+
+/** 历史任务详情独立读取归档接口，不把终态任务重新解释为活动任务。 */
+export const useRuntimeArchivedWorkingState = (workId: string | undefined, enabled = true): UseQueryResult<ApiResponse<WorkingStateDetail>> =>
+  useQuery({ queryKey: ['runtime-archived-working-state', workId], queryFn: () => api.runtime.archivedDetail(workId as string), enabled: Boolean(workId) && enabled });
 
 /** 任务检查点摘要分页。 */
-export const useRuntimeCheckpoints = (workId: string | undefined, params: { page?: number; page_size?: number } = {}): UseQueryResult<ApiResponse<CheckpointListData>> =>
-  useQuery({ queryKey: ['runtime-checkpoints', workId, params], queryFn: () => api.runtime.checkpoints(workId as string, params), enabled: Boolean(workId) });
+export const useRuntimeCheckpoints = (workId: string | undefined, params: { page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<CheckpointListData>> =>
+  useQuery({ queryKey: ['runtime-checkpoints', workId, params], queryFn: () => api.runtime.checkpoints(workId as string, params), enabled: Boolean(workId) && enabled });
+
+/** 历史任务检查点分页查询；详情页通过独立 key 保留刷新深链。 */
+export const useRuntimeArchivedCheckpoints = (workId: string | undefined, params: { page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<CheckpointListData>> =>
+  useQuery({ queryKey: ['runtime-archived-checkpoints', workId, params], queryFn: () => api.runtime.archivedCheckpoints(workId as string, params), enabled: Boolean(workId) && enabled });
 
 /** 有限检查点详情，不读取原始工作文件。 */
-export const useRuntimeCheckpoint = (workId: string | undefined, checkpointId: string | undefined): UseQueryResult<ApiResponse<CheckpointDetail>> =>
-  useQuery({ queryKey: ['runtime-checkpoint', workId, checkpointId], queryFn: () => api.runtime.checkpoint(workId as string, checkpointId as string), enabled: Boolean(workId && checkpointId) });
+export const useRuntimeCheckpoint = (workId: string | undefined, checkpointId: string | undefined, enabled = true): UseQueryResult<ApiResponse<CheckpointDetail>> =>
+  useQuery({ queryKey: ['runtime-checkpoint', workId, checkpointId], queryFn: () => api.runtime.checkpoint(workId as string, checkpointId as string), enabled: Boolean(workId && checkpointId) && enabled });
+
+/** 历史检查点详情独立读取归档接口。 */
+export const useRuntimeArchivedCheckpoint = (workId: string | undefined, checkpointId: string | undefined, enabled = true): UseQueryResult<ApiResponse<CheckpointDetail>> =>
+  useQuery({ queryKey: ['runtime-archived-checkpoint', workId, checkpointId], queryFn: () => api.runtime.archivedCheckpoint(workId as string, checkpointId as string), enabled: Boolean(workId && checkpointId) && enabled });
 
 /** 审计摘要查询；summary 与列表分别请求，允许列表局部失败而保留计数。 */
 export const useAuditSummary = (params: { since?: string; date?: string; agent?: string; source?: string; status?: string; operation?: string } = {}): UseQueryResult<ApiResponse<AuditSummaryData>> =>

@@ -39,11 +39,19 @@ class KnowledgeGateway(Protocol):
     # Markdown、JSONL 或 SQLite 的事实源。
     def web_active_work_states(self, **kwargs: Any) -> dict[str, Any]: ...
 
+    def web_archived_work_states(self, **kwargs: Any) -> dict[str, Any]: ...
+
     def web_work_state(self, work_id: str) -> dict[str, Any]: ...
+
+    def web_archived_work_state(self, work_id: str) -> dict[str, Any]: ...
 
     def web_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]: ...
 
+    def web_archived_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]: ...
+
     def web_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]: ...
+
+    def web_archived_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]: ...
 
     def web_repository_summary(self) -> dict[str, Any]: ...
 
@@ -288,6 +296,21 @@ class CoreKnowledgeGateway:
         except Exception as error:
             raise GatewayError("运行状态读取失败") from error
 
+    def web_archived_work_states(self, **kwargs: Any) -> dict[str, Any]:
+        """委托共享 Working State 的独立归档列表投影，不读取活动任务。"""
+        method = getattr(self._workstate(), "web_archived_work_states", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少归档列表能力")
+        try:
+            result = method(**kwargs)
+            if not isinstance(result, dict):
+                raise GatewayError("归档运行状态服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("归档运行状态读取失败") from error
+
     def web_work_state(self, work_id: str) -> dict[str, Any]:
         """委托共享 Working State 安全详情投影。"""
         method = getattr(self._workstate(), "web_work_state", None)
@@ -302,6 +325,21 @@ class CoreKnowledgeGateway:
             raise
         except Exception as error:
             raise GatewayError("运行状态读取失败") from error
+
+    def web_archived_work_state(self, work_id: str) -> dict[str, Any]:
+        """委托共享 Working State 的独立归档详情投影。"""
+        method = getattr(self._workstate(), "web_archived_work_state", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少归档详情能力")
+        try:
+            result = method(work_id)
+            if not isinstance(result, dict):
+                raise GatewayError("归档运行状态服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("归档运行状态读取失败") from error
 
     def web_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]:
         """委托共享检查点安全列表投影。"""
@@ -318,6 +356,21 @@ class CoreKnowledgeGateway:
         except Exception as error:
             raise GatewayError("检查点读取失败") from error
 
+    def web_archived_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]:
+        """委托共享归档检查点列表；活动检查点接口不承担历史语义。"""
+        method = getattr(self._workstate(), "web_archived_checkpoints", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少归档检查点能力")
+        try:
+            result = method(work_id, **kwargs)
+            if not isinstance(result, dict):
+                raise GatewayError("归档检查点服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("归档检查点读取失败") from error
+
     def web_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]:
         """委托共享检查点安全详情投影。"""
         method = getattr(self._workstate(), "web_checkpoint", None)
@@ -332,6 +385,21 @@ class CoreKnowledgeGateway:
             raise
         except Exception as error:
             raise GatewayError("检查点读取失败") from error
+
+    def web_archived_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]:
+        """委托共享归档检查点详情；接口保持只读和字段白名单。"""
+        method = getattr(self._workstate(), "web_archived_checkpoint", None)
+        if not callable(method):
+            raise GatewayError("运行状态服务缺少归档检查点详情能力")
+        try:
+            result = method(work_id, checkpoint_id)
+            if not isinstance(result, dict):
+                raise GatewayError("归档检查点服务返回无效结果")
+            return result
+        except (ValueError, KeyError):
+            raise
+        except Exception as error:
+            raise GatewayError("归档检查点读取失败") from error
 
     def web_repository_summary(self) -> dict[str, Any]:
         """委托共享双仓语义摘要，避免 Web 层重新读取 Git 原始输出。"""

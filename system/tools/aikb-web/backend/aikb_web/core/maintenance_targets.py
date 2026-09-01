@@ -78,6 +78,70 @@ MAINTENANCE_DIFFERENCE_CODES = (
     "conflict",
     "invalid",
 )
+
+# 叶子的人类可读说明是控制面内的固定白名单，而不是适配器或浏览器提供的
+# 文本。说明只描述受管字段和保留范围，不包含配置正文、环境真实值或物理路径。
+_LEAF_SEMANTICS: Mapping[str, Mapping[str, tuple[str, ...] | str]] = MappingProxyType(
+    {
+        "user_environment.aikb_home": {
+            "display_name": "AIKB 控制仓环境设置",
+            "affected_fields": ("用户级 AIKB 控制仓设置",),
+            "preserved_scope": ("其他用户环境变量", "系统级环境变量"),
+            "managed_diff": ("控制仓设置的受管值",),
+        },
+        "user_environment.aikb_knowledge_home": {
+            "display_name": "AIKB 知识仓环境设置",
+            "affected_fields": ("用户级 AIKB 知识仓设置",),
+            "preserved_scope": ("其他用户环境变量", "系统级环境变量"),
+            "managed_diff": ("知识仓设置的受管值",),
+        },
+        "agent.codex.root_instructions": {
+            "display_name": "Codex 根指令受管区块",
+            "affected_fields": ("根指令中的 AIKB 受管区块",),
+            "preserved_scope": ("根指令中的其他用户内容", "其他 Codex 配置"),
+            "managed_diff": ("根指令受管区块内容",),
+        },
+        "agent.codex.mcp": {
+            "display_name": "Codex MCP 受管区块",
+            "affected_fields": ("MCP 中的 AIKB 受管服务",),
+            "preserved_scope": ("其他 MCP 服务", "非受管配置字段"),
+            "managed_diff": ("AIKB MCP 受管服务的结构与启动设置",),
+        },
+        "agent.codex.hooks": {
+            "display_name": "Codex hooks 受管处理器",
+            "affected_fields": ("hooks 中的 AIKB 受管处理器",),
+            "preserved_scope": ("其他 hooks 处理器", "非受管配置字段"),
+            "managed_diff": ("AIKB hooks 的生命周期事件、匹配器与处理器设置",),
+        },
+        "agent.claude-code.root_instructions": {
+            "display_name": "Claude Code 根指令受管区块",
+            "affected_fields": ("根指令中的 AIKB 受管区块",),
+            "preserved_scope": ("根指令中的其他用户内容", "其他 Claude Code 配置"),
+            "managed_diff": ("根指令受管区块内容",),
+        },
+        "agent.claude-code.mcp": {
+            "display_name": "Claude Code MCP 受管服务",
+            "affected_fields": ("MCP 中的 AIKB 受管服务",),
+            "preserved_scope": ("其他 MCP 服务", "非受管配置字段"),
+            "managed_diff": ("AIKB MCP 受管服务的结构与启动设置",),
+        },
+        "agent.claude-code.hooks": {
+            "display_name": "Claude Code hooks 受管处理器",
+            "affected_fields": ("hooks 中的 AIKB 受管处理器",),
+            "preserved_scope": ("其他 hooks 处理器", "非受管配置字段"),
+            "managed_diff": ("AIKB hooks 的生命周期事件、匹配器与处理器设置",),
+        },
+    }
+)
+_DIFFERENCE_SEMANTIC_TEXT: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        "unchanged": {"change_action": "保持不变", "current_summary": "受管内容与当前版本一致", "expected_summary": "保持当前受管版本"},
+        "missing": {"change_action": "新增受管内容", "current_summary": "未检测到受管内容", "expected_summary": "安装当前版本的受管内容"},
+        "drifted": {"change_action": "更新受管内容", "current_summary": "受管内容与当前版本不一致", "expected_summary": "替换为当前版本的受管内容"},
+        "conflict": {"change_action": "不执行写入", "current_summary": "检测到无法安全接管的同名内容", "expected_summary": "保持现场并要求人工处理"},
+        "invalid": {"change_action": "不执行写入", "current_summary": "配置无法安全解析", "expected_summary": "保持现场并要求人工处理"},
+    }
+)
 _REASON_BY_STATUS: Mapping[str, str] = MappingProxyType(
     {
         "ready": "none",
@@ -339,6 +403,15 @@ class MaintenanceManagedDifference:
     difference_code: str
     before_hash: str | None = None
     after_hash: str | None = None
+    # 以下字段均由固定叶子/差异码推导；保留可选构造参数是为兼容已有内部
+    # 调用方，但传入的值必须与白名单一致，不能借模型注入自由文本。
+    display_name: str | None = None
+    change_action: str | None = None
+    current_summary: str | None = None
+    expected_summary: str | None = None
+    affected_fields: tuple[str, ...] = ()
+    preserved_scope: tuple[str, ...] = ()
+    managed_diff: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """校验逻辑叶子、差异枚举和摘要格式，拒绝正文伪装输入。"""
@@ -350,6 +423,26 @@ class MaintenanceManagedDifference:
             value = getattr(self, field_name)
             if value is not None and _HASH_RE.fullmatch(value) is None:
                 raise MaintenanceTargetError(f"{field_name} 必须是 SHA-256")
+        semantics = _LEAF_SEMANTICS.get(self.leaf_id)
+        if semantics is None:
+            raise MaintenanceTargetError("受管差异叶子未声明")
+        text = _DIFFERENCE_SEMANTIC_TEXT[self.difference_code]
+        expected = {
+            "display_name": semantics["display_name"],
+            "change_action": text["change_action"],
+            "current_summary": text["current_summary"],
+            "expected_summary": text["expected_summary"],
+            "affected_fields": tuple(semantics["affected_fields"]),
+            "preserved_scope": tuple(semantics["preserved_scope"]),
+            "managed_diff": tuple(semantics["managed_diff"]),
+        }
+        # 所有公开说明都来自代码内固定映射；显式传参只能重复固定值，不能
+        # 通过实例化模型把路径、秘密或整段配置伪装成“语义说明”。
+        for field_name, expected_value in expected.items():
+            supplied = getattr(self, field_name)
+            if supplied not in (None, (), expected_value):
+                raise MaintenanceTargetError(f"{field_name} 必须使用固定受管语义")
+            object.__setattr__(self, field_name, expected_value)
 
     def public_dict(self) -> dict[str, Any]:
         """返回受管片段的最小结构化差异，不回显片段正文。"""
@@ -357,6 +450,13 @@ class MaintenanceManagedDifference:
         return {
             "leaf_id": self.leaf_id,
             "difference_code": self.difference_code,
+            "display_name": self.display_name,
+            "change_action": self.change_action,
+            "current_summary": self.current_summary,
+            "expected_summary": self.expected_summary,
+            "affected_fields": list(self.affected_fields),
+            "preserved_scope": list(self.preserved_scope),
+            "managed_diff": list(self.managed_diff),
             "before_hash": self.before_hash,
             "after_hash": self.after_hash,
         }

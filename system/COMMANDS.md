@@ -669,7 +669,7 @@ MCP 服务必须以 `python -m aikb serve --agent codex` 或对应 Agent 标识�
 
 ## 7. AIKB WebUI 命令
 
-WebUI 当前在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读、活动 Working State、检查点、脱敏审计查询、系统状态，以及规则读取和 USER_RULES.md 的受控预览/确认应用。AI_RULES.md 与 CONTRIBUTING.md 在 Web 中只读；服务不提供知识正文修改、Working State 写入、Shell 执行、归档任务搜索或原始诊断下载。规则 apply 只接受短期确认凭据并由服务端校验基线，macOS 仅保留扩展位置，尚未实现或验证。
+WebUI 当前在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读、总览中的项目/命令手册入口、活动与历史 Working State、检查点、脱敏审计查询、系统状态、安装修复状态与受控应用，以及规则读取和 USER_RULES.md 的受控预览/确认应用。AI_RULES.md 与 CONTRIBUTING.md 在 Web 中只读；服务不提供知识正文修改、Working State 写入、Shell 执行或原始诊断下载。规则和维护 apply 只接受短期确认凭据并由服务端校验基线，macOS 仅保留扩展位置，尚未实现或验证。
 
 ### 7.1 构建：`build-aikb-web.ps1`
 

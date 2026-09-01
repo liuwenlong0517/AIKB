@@ -117,9 +117,13 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
 
 查询参数：id_or_path（必填，逻辑 ID 或 content/...，最长 500）、可选 section（最长 200）、max_chars（默认 500000，范围 300..500000）。返回上述公共字段加 content、truncated、applicable_versions、relations。正文保持 Markdown 块和换行；不启用原始 HTML。不存在、非 verified 或非法标识统一为 404 not_found 或 400 invalid_request，不泄漏存在性差异。
 
+### GET /manuals/{manual_id}
+
+读取控制仓人类维护手册。`manual_id` 仅允许 `project`（根 README.md）或 `commands`（system/COMMANDS.md），不接受文件路径或任意控制仓相对路径；`max_chars` 范围为 300..500000。返回 `manual_id`、`title`、`content`、`content_hash`、`revision` 和可选 `truncated`。正文是 UTF-8 Markdown，服务端在固定白名单文件之外不提供通用文件浏览能力，也不返回物理路径。
+
 ## 4. 阶段 2 运行状态接口
 
-运行状态是 workspace/active 与其可重建索引的只读投影，不是知识内容。默认只列活动状态：planned、active、blocked。已关闭的 completed、abandoned、superseded 不混入活动列表；如需历史必须由明确的 include_closed=true 契约另行实现，本阶段不开放。
+运行状态是 workspace/active、workspace/archive 与其可重建索引的只读投影，不是知识内容。活动和历史使用独立接口：活动只列 planned、active、blocked；历史只列已关闭的 completed、abandoned、superseded。任何接口都不接受通过 include_closed 混合两类生命周期。
 
 ### GET /runtime/working-states
 
@@ -158,7 +162,7 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
       "pagination": { "page": 1, "page_size": 20, "total": 1, "has_next": false }
     }
 
-`work_schema_version` 是 Markdown 工作元数据版本（当前为 v2）；SQLite 只是可重建派生索引，当前内部索引版本为 v3，不应与该字段混用。`agent`、`session_id`、`role` 是保留的 latest-author 兼容字段；正式字段是 `author_*`。Owner 使用 `owner_agent`/`owner_session_id`，不能由 latest author 推断。`ownership_mode` 为 `session-bound`、`shared`、`handed-off` 或 `legacy-unbound`；旧文档使用 `legacy-unbound` 且 owner 字段为 null。`participants` 最多 16 项，只含有界 agent/session_id/role。session_id 没有可靠来源时必须为 null，不得以 Agent、连接 ID 或时间戳冒充。repositories 每项最多 8 项，只允许 role、available、branch、revision、dirty；去除底层 path 和内部 signature。正文型章节在共享读模型中限长。第一小版本只查询活动 Working State，不提供归档或关闭任务搜索。
+`work_schema_version` 是 Markdown 工作元数据版本（当前为 v2）；SQLite 只是可重建派生索引，当前内部索引版本为 v3，不应与该字段混用。`agent`、`session_id`、`role` 是保留的 latest-author 兼容字段；正式字段是 `author_*`。Owner 使用 `owner_agent`/`owner_session_id`，不能由 latest author 推断。`ownership_mode` 为 `session-bound`、`shared`、`handed-off` 或 `legacy-unbound`；旧文档使用 `legacy-unbound` 且 owner 字段为 null。`participants` 最多 16 项，只含有界 agent/session_id/role。session_id 没有可靠来源时必须为 null，不得以 Agent、连接 ID 或时间戳冒充。repositories 每项最多 8 项，只允许 role、available、branch、revision、dirty；去除底层 path 和内部 signature。正文型章节在共享读模型中限长。
 
 ### GET /runtime/working-states/{work_id}
 
@@ -171,6 +175,22 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
 ### GET /runtime/working-states/{work_id}/checkpoints/{checkpoint_id}
 
 返回有限检查点详情：摘要字段加白名单 `sections`，并把 goal、current_state、next_steps、blockers、verification、changed_files 作为同值扁平字段方便页面使用；每个标量或列表项最多 4000 字符，列表最多 50 项，物理路径统一替换为安全占位符。不返回磁盘位置、完整 Markdown、完整 diff、聊天记录或恢复时的原始输入。
+
+### GET /runtime/archived-working-states
+
+历史任务查询参数与活动列表相同；`status` 仅允许 completed、abandoned、superseded，`agent` 继续匹配最新检查点作者。返回相同的安全摘要字段并增加 `lifecycle: "archived"`。共享核心会按归档事实路径再次确认记录，响应不含 archive 物理路径。
+
+### GET /runtime/archived-working-states/{work_id}
+
+返回已归档任务的有限详情，字段白名单、owner/最新作者分离、章节裁剪规则与活动详情一致；不存在、仍处于活动目录或状态不是终态的任务统一按 not_found 处理。
+
+### GET /runtime/archived-working-states/{work_id}/checkpoints
+
+分页返回已归档任务的检查点摘要。检查点是历史只读记录，不能通过该接口重开、关闭、删除或修改任务。
+
+### GET /runtime/archived-working-states/{work_id}/checkpoints/{checkpoint_id}
+
+返回已归档检查点的白名单详情，与活动检查点详情使用同一脱敏和限长规则；不返回原始 Markdown、物理路径或隐藏诊断。
 
 ## 5. 阶段 2 审计接口
 
@@ -268,7 +288,7 @@ session_label 是优先展示的人类标签；session_label、session_id 缺失
 
 ### GET /maintenance/targets、GET /maintenance/targets/{target_id}
 
-返回平台能力、固定目标、逻辑叶子、状态和基线指纹。状态只使用 `ready`、`missing`、`drifted`、`conflict`、`invalid`、`unsupported` 和 `restart_required`；响应不包含物理路径或非受管配置正文。
+返回平台能力、固定目标、逻辑叶子、状态和基线指纹。状态只使用 `ready`、`missing`、`drifted`、`conflict`、`invalid`、`unsupported` 和 `restart_required`；响应不包含物理路径或非受管配置正文。每个受管差异还返回服务端固定的 `display_name`、`change_action`、`current_summary`、`expected_summary`、`affected_fields`、`managed_diff` 和 `preserved_scope`，用于说明当前问题、预期动作、受影响的受管字段及明确保留范围。这些字段只描述语义，不返回环境真实值、配置正文、秘密或任意路径；`before_hash`/`after_hash` 仍只是可折叠的次要证据。
 
 ### POST /maintenance/targets/{target_id}/preview
 

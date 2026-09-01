@@ -4,13 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RuntimePage } from '../src/pages/RuntimePage';
 
 const mocks = vi.hoisted(() => ({
-  list: vi.fn(), detail: vi.fn(), checkpoints: vi.fn(), checkpoint: vi.fn(),
+  list: vi.fn(), archivedList: vi.fn(), detail: vi.fn(), archivedDetail: vi.fn(), checkpoints: vi.fn(), archivedCheckpoints: vi.fn(), checkpoint: vi.fn(), archivedCheckpoint: vi.fn(),
 }));
 vi.mock('../src/hooks/useApi', () => ({
   useRuntimeWorkingStates: mocks.list,
+  useRuntimeArchivedWorkingStates: mocks.archivedList,
   useRuntimeWorkingState: mocks.detail,
+  useRuntimeArchivedWorkingState: mocks.archivedDetail,
   useRuntimeCheckpoints: mocks.checkpoints,
+  useRuntimeArchivedCheckpoints: mocks.archivedCheckpoints,
   useRuntimeCheckpoint: mocks.checkpoint,
+  useRuntimeArchivedCheckpoint: mocks.archivedCheckpoint,
 }));
 
 const result = <T,>(data: T) => ({ data: { data, meta: { warnings: [] } }, isLoading: false, isError: false, error: null, refetch: vi.fn() });
@@ -19,9 +23,13 @@ const emptyList = { items: [], pagination: { page: 1, page_size: 20, total: 0, h
 describe('RuntimePage', () => {
   beforeEach(() => {
     mocks.list.mockReturnValue(result(emptyList));
+    mocks.archivedList.mockReturnValue(result(emptyList));
     mocks.detail.mockReturnValue(result({ work_id: 'demo-task', status: 'active', goal: '只读观察', session_id: null, repositories: [] }));
+    mocks.archivedDetail.mockReturnValue(result({ work_id: 'demo-task', status: 'completed', goal: '只读观察', session_id: null, repositories: [] }));
     mocks.checkpoints.mockReturnValue(result({ items: [], pagination: { page: 1, page_size: 20, total: 0, has_next: false } }));
+    mocks.archivedCheckpoints.mockReturnValue(result({ items: [], pagination: { page: 1, page_size: 20, total: 0, has_next: false } }));
     mocks.checkpoint.mockReturnValue(result({ checkpoint_id: 'cp-1', status: 'active', session_id: null, goal: '只读观察', sections: {} }));
+    mocks.archivedCheckpoint.mockReturnValue(result({ checkpoint_id: 'cp-1', status: 'active', session_id: null, goal: '只读观察', sections: {} }));
   });
 
   it('显示活动任务合法空集，不出现写入动作', () => {
@@ -45,7 +53,7 @@ describe('RuntimePage', () => {
     render(<MemoryRouter initialEntries={['/runtime/demo-task']}><Routes><Route path="/runtime/:workId" element={<RuntimePage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText('cp-1')).toBeInTheDocument();
     fireEvent.click(screen.getByTitle('2'));
-    await waitFor(() => expect(mocks.checkpoints).toHaveBeenLastCalledWith('demo-task', { page: 2, page_size: 20 }));
+    await waitFor(() => expect(mocks.checkpoints).toHaveBeenLastCalledWith('demo-task', { page: 2, page_size: 20 }, true));
     expect(await screen.findByText('cp-21')).toBeInTheDocument();
   });
 
@@ -55,5 +63,15 @@ describe('RuntimePage', () => {
     expect(screen.getByText('旧数据·未认领')).toBeInTheDocument();
     expect(screen.getByText('Owner：—')).toBeInTheDocument();
     expect(screen.getByText('最新作者：claude-code')).toBeInTheDocument();
+  });
+
+  it('历史页签读取终态任务并使用历史深链', async () => {
+    mocks.archivedList.mockReturnValue(result({ items: [{ work_id: 'history-task', status: 'completed', lifecycle: 'archived', goal: '已完成任务' }], pagination: { page: 1, page_size: 20, total: 1, has_next: false } }));
+    render(<MemoryRouter initialEntries={['/runtime']}><Routes><Route path="/runtime" element={<RuntimePage />} /><Route path="/runtime/history" element={<RuntimePage />} /></Routes></MemoryRouter>);
+    fireEvent.click(screen.getByText('历史任务'));
+    expect(await screen.findByText('history-task')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看详情' })).toHaveAttribute('href', '/runtime/history/history-task');
+    expect(mocks.list).toHaveBeenLastCalledWith(expect.any(Object), false);
+    expect(mocks.archivedList).toHaveBeenLastCalledWith(expect.any(Object), true);
   });
 });

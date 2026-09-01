@@ -117,7 +117,9 @@ def capabilities(request: Request) -> dict[str, Any]:
             "capabilities": [
                 {"id": "knowledge.read", "supported": True},
                 {"id": "knowledge.search", "supported": True},
+                {"id": "manuals.read", "supported": True},
                 {"id": "runtime.work_state.read", "supported": True},
+                {"id": "runtime.archive.read", "supported": True},
                 {"id": "runtime.checkpoint.read", "supported": True},
                 {"id": "audit.read", "supported": True},
                 {"id": "knowledge.write", "supported": False, "reason": "read_only"},

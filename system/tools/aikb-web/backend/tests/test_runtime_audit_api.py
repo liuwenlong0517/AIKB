@@ -43,17 +43,34 @@ class FakeGateway:
             "index": {"status": "ready"},
         }
 
+    def web_archived_work_states(self, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "count": 1,
+            "items": [{"work_id": "history-1", "status": "completed", "project_id": "safe-project", "lifecycle": "archived"}],
+            "pagination": {"page": kwargs["page"], "page_size": kwargs["page_size"], "total": 1, "has_next": False},
+            "index": {"status": "ready"},
+        }
+
     def web_work_state(self, work_id: str) -> dict[str, Any]:
         data: dict[str, Any] = {"item": {"work_id": work_id, "sections": {"goal": "safe"}}}
         if self.detail_index is not None:
             data["index"] = self.detail_index
         return data
 
+    def web_archived_work_state(self, work_id: str) -> dict[str, Any]:
+        return {"item": {"work_id": work_id, "status": "completed", "lifecycle": "archived"}, "index": {"status": "ready"}}
+
     def web_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]:
         return {"work_id": work_id, "items": [], "pagination": {"total": 0}}
 
+    def web_archived_checkpoints(self, work_id: str, **kwargs: Any) -> dict[str, Any]:
+        return {"work_id": work_id, "items": [], "pagination": {"total": 0}, "lifecycle": "archived"}
+
     def web_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]:
         return {"work_id": work_id, "item": {"checkpoint_id": checkpoint_id, "sections": {"goal": "safe"}}}
+
+    def web_archived_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]:
+        return {"work_id": work_id, "item": {"checkpoint_id": checkpoint_id, "lifecycle": "archived"}}
 
     def web_repository_summary(self) -> dict[str, Any]:
         return {"status": "ready", "repositories": [
@@ -91,6 +108,15 @@ class RuntimeAuditApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/runtime/working-states/task-1").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/runtime/working-states/task-1/checkpoints").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/runtime/working-states/task-1/checkpoints/checkpoint-1").status_code, 200)
+
+    def test_archived_working_state_routes_are_read_only_and_separate(self) -> None:
+        response = self.client.get("/api/v1/runtime/archived-working-states", params={"status": "completed"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["items"][0]["lifecycle"], "archived")
+        self.assertEqual(self.client.get("/api/v1/runtime/archived-working-states/history-1").status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/runtime/archived-working-states/history-1/checkpoints").status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/runtime/archived-working-states/history-1/checkpoints/checkpoint-1").status_code, 200)
+        self.assertEqual(self.client.post("/api/v1/runtime/archived-working-states").status_code, 405)
 
     def test_audit_filters_paging_and_safe_projection(self) -> None:
         response = self.client.get("/api/v1/audit/events", params={"source": "mcp", "page_size": 1})

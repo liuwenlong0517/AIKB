@@ -5,10 +5,10 @@ const { Header, Sider, Content } = Layout;
 
 const navigation = [
   { key: '/', label: <Link to="/">总览</Link> },
+  { key: '/search', label: <Link to="/search">搜索</Link> },
   { key: '/knowledge', label: <Link to="/knowledge">知识库</Link> },
   { key: '/rules', label: <Link to="/rules">规则中心</Link> },
   { key: '/maintenance', label: <Link to="/maintenance">安装与修复</Link> },
-  { key: '/search', label: <Link to="/search">搜索</Link> },
   { key: '/runtime', label: <Link to="/runtime">运行状态</Link> },
   { key: '/audit', label: <Link to="/audit">审计日志</Link> },
   { key: '/tasks', label: <Link to="/tasks">任务中心</Link> },
