@@ -59,25 +59,39 @@ function Remove-JsonProperty {
 function ConvertTo-JsonPreservingKeys {
     # 递归序列化 JSON 对象，逐项写出字典键，避免 ConvertTo-Json 将仅大小写不同的键折叠。
     # 标量仍交给 PowerShell 负责转义、数字格式和布尔/null 表示；对象/数组由本函数递归处理。
-    param([object]$Value)
+    # 缩进和换行由本函数生成，以同时保留重复大小写键和配置文件的可读格式。
+    param(
+        [object]$Value,
+        [int]$IndentLevel = 0
+    )
+    $indent = ('  ' * $IndentLevel) -join ''
+    $childIndent = ('  ' * ($IndentLevel + 1)) -join ''
+    $lineBreak = [Environment]::NewLine
     if ($null -eq $Value) {
         return 'null'
     }
     if ($Value -is [System.Collections.IDictionary]) {
+        if ($Value.Count -eq 0) {
+            return '{}'
+        }
         $members = [System.Collections.Generic.List[string]]::new()
         foreach ($key in $Value.Keys) {
-            $encodedKey = ConvertTo-JsonPreservingKeys -Value ([string]$key)
-            $encodedValue = ConvertTo-JsonPreservingKeys -Value $Value[$key]
-            $members.Add($encodedKey + ':' + $encodedValue)
+            $encodedKey = ConvertTo-JsonPreservingKeys -Value ([string]$key) -IndentLevel ($IndentLevel + 1)
+            $encodedValue = ConvertTo-JsonPreservingKeys -Value $Value[$key] -IndentLevel ($IndentLevel + 1)
+            $members.Add($childIndent + $encodedKey + ': ' + $encodedValue)
         }
-        return '{' + ($members -join ',') + '}'
+        return '{' + $lineBreak + ($members -join (',' + $lineBreak)) + $lineBreak + $indent + '}'
     }
     if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        if (@($Value).Count -eq 0) {
+            return '[]'
+        }
         $items = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $Value) {
-            $items.Add((ConvertTo-JsonPreservingKeys -Value $item))
+            $encodedItem = ConvertTo-JsonPreservingKeys -Value $item -IndentLevel ($IndentLevel + 1)
+            $items.Add($childIndent + $encodedItem)
         }
-        return '[' + ($items -join ',') + ']'
+        return '[' + $lineBreak + ($items -join (',' + $lineBreak)) + $lineBreak + $indent + ']'
     }
     return [string](ConvertTo-Json -InputObject $Value -Compress -Depth 10)
 }

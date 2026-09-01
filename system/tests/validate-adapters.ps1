@@ -177,6 +177,10 @@ try {
         Get-Content -Raw -LiteralPath $path | ConvertFrom-Json | Out-Null
     }
     Get-Content -Raw -LiteralPath $claudeConfig | ConvertFrom-Json -AsHashtable | Out-Null
+    $claudeConfigText = Get-Content -Raw -LiteralPath $claudeConfig
+    if (@($claudeConfigText -split "`r?`n").Count -le 2 -or $claudeConfigText -notmatch '(?m)^  "mcpServers":') {
+        throw 'Claude 配置未保持多行缩进格式'
+    }
     if ($codexToml -notmatch 'preserve-me') { throw 'Codex 原有配置未保留' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $codexHome 'hooks.json')) -notmatch 'preserve-codex-hook') { throw 'Codex 原有 hook 未保留' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $claudeHome 'settings.json')) -notmatch 'preserve-claude-hook') { throw 'Claude 原有 hook 未保留' }
