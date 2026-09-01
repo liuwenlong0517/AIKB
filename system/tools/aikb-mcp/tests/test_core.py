@@ -1126,6 +1126,59 @@ class MCPTests(unittest.TestCase):
         self.assertTrue(response["result"]["isError"])
         self.assertIn("不一致", response["result"]["content"][0]["text"])
 
+    def test_protocol_parse_error_and_non_object_request_are_isolated(self) -> None:
+        """坏 JSON 返回标准协议错误，后续合法请求仍可由同一服务实例处理。"""
+        parse_error = self.server.process_line('{"jsonrpc":')
+        self.assertEqual(parse_error["id"], None)
+        self.assertEqual(parse_error["error"]["code"], -32700)
+        invalid_request = self.server.process_line('[]')
+        self.assertEqual(invalid_request["error"]["code"], -32600)
+        healthy = self.server.process_line('{"jsonrpc":"2.0","id":9,"method":"ping"}')
+        self.assertEqual(healthy["result"], {})
+
+    def test_tool_arguments_follow_declared_input_schema_before_execution(self) -> None:
+        """拒绝未声明字段和错误类型，避免业务层隐式强转改变调用语义。"""
+        unknown_field = self.server.handle({
+            "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": {"name": "search_knowledge", "arguments": {"query": "SQLite", "bogus_field": True}},
+        })
+        self.assertEqual(unknown_field["error"]["code"], -32602)
+        self.assertIn("未声明字段", unknown_field["error"]["message"])
+
+        wrong_type = self.server.handle({
+            "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+            "params": {"name": "search_knowledge", "arguments": {"query": 123}},
+        })
+        self.assertEqual(wrong_type["error"]["code"], -32602)
+        self.assertIn("arguments.query 必须是 string", wrong_type["error"]["message"])
+
+        missing_required = self.server.handle({
+            "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+            "params": {"name": "read_knowledge", "arguments": {}},
+        })
+        self.assertEqual(missing_required["error"]["code"], -32602)
+        self.assertIn("id_or_path 为必填字段", missing_required["error"]["message"])
+
+        wrong_params_shape = self.server.handle({
+            "jsonrpc": "2.0", "id": 13, "method": "tools/call", "params": [],
+        })
+        self.assertEqual(wrong_params_shape["error"]["code"], -32602)
+
+    def test_checkpoint_rejects_missing_or_non_directory_project_path(self) -> None:
+        """不存在路径和普通文件都不能派生 project_id 或创建 Working State。"""
+        missing = self.fixture.root / "missing-project"
+        with self.assertRaisesRegex(ValueError, "已存在的目录"):
+            self.server.work.checkpoint({
+                "project_path": str(missing), "goal": "不存在项目", "agent": "codex", "session_id": "s1",
+            })
+        file_path = self.fixture.root / "not-a-project.txt"
+        file_path.write_text("fixture", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "已存在的目录"):
+            self.server.work.checkpoint({
+                "project_path": str(file_path), "goal": "普通文件", "agent": "codex", "session_id": "s1",
+            })
+        self.assertEqual(self.server.work.get()["count"], 0)
+
     def test_claim_tool_explicitly_upgrades_legacy_session_binding(self) -> None:
         """真实 tools/call 只有携带升级开关时才把旧截断 owner 迁移为完整会话。"""
         full_session = "A" * 32 + "-exact-tail"

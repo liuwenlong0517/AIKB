@@ -384,7 +384,12 @@ class WorkStateStore:
         raw_project_path = str(payload.get("project_path") or "").strip()
         if not raw_project_path:
             raise ValueError("project_path 不能为空")
-        resolved_project = str(Path(raw_project_path).expanduser().resolve())
+        project_path = Path(raw_project_path).expanduser().resolve()
+        # Path.resolve() 默认允许末端不存在；若继续执行会用虚构路径派生 project_id，
+        # 并在 workspace/ 生成无法恢复的垃圾任务，因此必须在任何写入前失败关闭。
+        if not project_path.is_dir():
+            raise ValueError("project_path 必须是已存在的目录")
+        resolved_project = str(project_path)
         p_id = project_id(resolved_project)
         status = str(payload.get("status") or "active")
         if status not in OPEN_STATUS:

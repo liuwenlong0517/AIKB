@@ -9,7 +9,7 @@ param(
     [ValidateRange(1, 10000)]
     [double]$MaxSearchMedianMs = 500,
     [ValidateRange(1, 10000)]
-    [double]$MaxHookMedianMs = 500
+    [double]$MaxHookMedianMs = 450
 )
 
 $ErrorActionPreference = 'Stop'

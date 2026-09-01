@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sys
-import traceback
 from typing import Any
 
 from .audit import AuditStore, audit_project_id, summarize_tool_action, summarize_tool_result
@@ -157,6 +156,62 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> None:
+    """校验 MCP 工具声明实际使用的 JSON Schema 子集。
+
+    当前工具契约只依赖 object/array/string/integer/boolean、required、
+    additionalProperties、enum 和长度/数值上下限。这里在调用业务代码前严格
+    校验这些约束，避免 Python 的 ``str()``/``int()`` 隐式强转掩盖客户端错误；
+    若未来声明引入新关键字，应先扩展本函数及边界测试，而不是静默忽略。
+    """
+    expected_type = schema.get("type")
+    type_matches = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        # bool 是 Python 的 int 子类，但 JSON Schema 明确区分 boolean/integer。
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+    }
+    if expected_type in type_matches and not type_matches[expected_type](value):
+        raise ValueError(f"{path} 必须是 {expected_type}")
+
+    if "enum" in schema and value not in schema["enum"]:
+        allowed = "、".join(str(item) for item in schema["enum"])
+        raise ValueError(f"{path} 必须是以下值之一：{allowed}")
+
+    if expected_type == "object":
+        properties = schema.get("properties") or {}
+        for required_name in schema.get("required") or []:
+            if required_name not in value:
+                raise ValueError(f"{path}.{required_name} 为必填字段")
+        if schema.get("additionalProperties") is False:
+            unknown = sorted(set(value) - set(properties))
+            if unknown:
+                raise ValueError(f"{path} 包含未声明字段：{', '.join(unknown)}")
+        for name, item in value.items():
+            child_schema = properties.get(name)
+            if child_schema is not None:
+                _validate_schema_value(item, child_schema, f"{path}.{name}")
+    elif expected_type == "array":
+        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+            raise ValueError(f"{path} 项数不得超过 {schema['maxItems']}")
+        item_schema = schema.get("items")
+        if item_schema:
+            for index, item in enumerate(value):
+                _validate_schema_value(item, item_schema, f"{path}[{index}]")
+    elif expected_type == "string":
+        if "minLength" in schema and len(value) < int(schema["minLength"]):
+            raise ValueError(f"{path} 长度不得小于 {schema['minLength']}")
+        if "maxLength" in schema and len(value) > int(schema["maxLength"]):
+            raise ValueError(f"{path} 长度不得超过 {schema['maxLength']}")
+    elif expected_type == "integer":
+        if "minimum" in schema and value < int(schema["minimum"]):
+            raise ValueError(f"{path} 不得小于 {schema['minimum']}")
+        if "maximum" in schema and value > int(schema["maximum"]):
+            raise ValueError(f"{path} 不得超过 {schema['maximum']}")
+
+
 class MCPServer:
     """把 MCP 协议方法路由到知识服务和 Working State 存储。"""
 
@@ -184,6 +239,26 @@ class MCPServer:
             raise PermissionError("MCP 服务未绑定 Agent；请使用 serve --agent codex|claude-code")
         if not declared or declared != bound:
             raise PermissionError(f"{field} 与 MCP 服务绑定 Agent 不一致，拒绝 Working State 写入")
+
+    @staticmethod
+    def _tool_schema(name: str) -> dict[str, Any] | None:
+        """按工具名返回对客户端公开的同一份输入契约，避免校验规则另起一套。"""
+        return next((tool["inputSchema"] for tool in TOOLS if tool["name"] == name), None)
+
+    def process_line(self, raw: str) -> dict[str, Any] | None:
+        """解析并处理一行 JSON-RPC；语法错误返回标准 Parse error。
+
+        JSON 语法错误尚未形成可关联的请求，因此响应 ID 固定为 ``null``；解析
+        成功但顶层不是对象则属于 Invalid Request。两类输入都在协议边界内消化，
+        不向 stderr 泄漏 traceback，也不影响后续行继续处理。
+        """
+        try:
+            message = json.loads(raw)
+        except json.JSONDecodeError:
+            return self._error(None, -32700, "Parse error")
+        if not isinstance(message, dict):
+            return self._error(None, -32600, "Invalid Request: JSON-RPC 请求必须是对象")
+        return self.handle(message)
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
         """处理一个 JSON-RPC 请求；通知类消息无 ID 时不返回响应。"""
@@ -218,8 +293,22 @@ class MCPServer:
             elif method == "tools/list":
                 result = {"tools": TOOLS}
             elif method == "tools/call":
-                params = message.get("params") or {}
-                result = self.call_tool(str(params.get("name") or ""), params.get("arguments") or {})
+                # 字段缺省时使用空对象；字段已出现则保留原类型供协议校验，避免
+                # ``[]``、空字符串等假值被 ``or {}`` 静默伪装成合法参数对象。
+                params = message.get("params") if "params" in message else {}
+                if not isinstance(params, dict):
+                    return self._error(request_id, -32602, "Invalid params: params 必须是对象")
+                name = str(params.get("name") or "")
+                arguments = params.get("arguments") if "arguments" in params else {}
+                if not isinstance(arguments, dict):
+                    return self._error(request_id, -32602, "Invalid params: arguments 必须是对象")
+                schema = self._tool_schema(name)
+                if schema is not None:
+                    try:
+                        _validate_schema_value(arguments, schema, "arguments")
+                    except ValueError as exc:
+                        return self._error(request_id, -32602, f"Invalid params: {exc}")
+                result = self.call_tool(name, arguments)
             elif method == "resources/list":
                 result = {"resources": []}
             elif method == "prompts/list":
@@ -354,13 +443,9 @@ class MCPServer:
             raw = raw.strip()
             if not raw:
                 continue
-            try:
-                message = json.loads(raw)
-                response = self.handle(message)
-                if response is not None:
-                    print(json.dumps(response, ensure_ascii=False, separators=(",", ":")), flush=True)
-            except Exception:
-                traceback.print_exc(file=sys.stderr)
+            response = self.process_line(raw)
+            if response is not None:
+                print(json.dumps(response, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
 def run_server(settings: Settings | None = None, agent: str = "unknown") -> None:

@@ -554,7 +554,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 | `-SearchSamples` | 整数 `3..21`；默认 `7` | 热搜索样本数。 |
 | `-HookSamples` | 整数 `3..21`；默认 `5` | SessionStart hook 样本数。 |
 | `-MaxSearchMedianMs` | 数值 `1..10000`；默认 `500` | 搜索中位耗时上限。 |
-| `-MaxHookMedianMs` | 数值 `1..10000`；默认 `500` | hook 中位耗时上限。 |
+| `-MaxHookMedianMs` | 数值 `1..10000`；默认 `450` | hook 中位耗时上限。 |
 
 示例：
 

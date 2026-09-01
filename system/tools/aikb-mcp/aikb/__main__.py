@@ -5,17 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
-from .audit import AuditStore, audit_summary, combine_invocations, filter_events, render_markdown, write_excel_report, write_report
 from .config import Settings
-from .hooks import handle_hook
-from .indexer import metadata_report, rebuild_knowledge_index, review_report
-from .knowledge import KnowledgeService
-from .rules import validate_candidate_file, validate_structure_rules
-from .server import run_server
-from .workstate import WorkStateStore
 
 
 def _configure_stdio_utf8() -> None:
@@ -30,6 +22,32 @@ def _configure_stdio_utf8() -> None:
 def _json(value: object) -> None:
     """以便于人类查看的 UTF-8 JSON 输出结果，不改变调用方对象。"""
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def _run_hook_command(agent: str, event: str, settings: Settings) -> int:
+    """执行生命周期 Hook 的 UTF-8 JSON 协议，并保持单行紧凑输出。"""
+    from .hooks import handle_hook
+
+    # Windows PowerShell 管道偶尔会在 UTF-8 JSON 前保留 BOM，协议入口需容忍该边界。
+    raw = sys.stdin.read().lstrip("\ufeff").strip()
+    payload = json.loads(raw) if raw else {}
+    print(json.dumps(handle_hook(agent, event, payload, settings), ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
+def _try_fast_hook(argv: list[str]) -> int | None:
+    """为真实短进程 Hook 跳过无关的完整 CLI 子命令树构建。
+
+    包装器固定使用 ``hook --agent <值> --event <值>``；只有完全符合该形状时
+    才进入快路径。带全局路径选项、缺失参数或额外参数的手工调用仍交给标准
+    argparse，以保持原有帮助、错误提示和兼容行为。
+    """
+    if len(argv) != 5 or argv[0] != "hook" or argv[1] != "--agent" or argv[3] != "--event":
+        return None
+    agent, event = argv[2], argv[4]
+    if not agent or not event:
+        return None
+    return _run_hook_command(agent, event, Settings.load())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,7 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """执行一个 CLI 命令并返回进程退出码；未指定命令时进入 MCP 服务。"""
     _configure_stdio_utf8()
-    args = build_parser().parse_args(argv)
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    fast_hook_result = _try_fast_hook(effective_argv)
+    if fast_hook_result is not None:
+        return fast_hook_result
+    args = build_parser().parse_args(effective_argv)
     settings = Settings.load(
         repo_root=args.repo_root,
         workspace_root=args.workspace_root,
@@ -97,12 +119,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     command = args.command or "serve"
     if command == "serve":
+        from .server import run_server
+
         run_server(settings, agent=args.agent if args.command else "unknown")
     elif command == "validate":
+        from .indexer import metadata_report
+
         report = metadata_report(settings)
         _json(report)
         return 0 if report["valid"] else 1
     elif command == "validate-rules":
+        from .rules import validate_candidate_file, validate_structure_rules
+
         if args.candidate_file is not None and not args.rule_id:
             print("候选校验必须同时指定静态规则 ID", file=sys.stderr)
             return 2
@@ -117,24 +145,39 @@ def main(argv: list[str] | None = None) -> int:
         _json(report)
         return 0 if report["valid"] else 1
     elif command == "review":
+        from .indexer import review_report
+
         report = review_report(settings)
         _json(report)
         return 0 if report["valid"] else 1
     elif command == "rebuild":
+        from .indexer import rebuild_knowledge_index
+        from .workstate import WorkStateStore
+
         result = {"knowledge": rebuild_knowledge_index(settings), "work": WorkStateStore(settings).rebuild_index()}
         _json(result)
     elif command == "search":
+        from .knowledge import KnowledgeService
+
         _json(KnowledgeService(settings).search(args.query, limit=args.limit))
     elif command == "read":
+        from .knowledge import KnowledgeService
+
         _json(KnowledgeService(settings).read(args.identifier, section=args.section, max_chars=args.max_chars))
     elif command == "work-get":
+        from .workstate import WorkStateStore
+
         _json(WorkStateStore(settings).get(project_path=args.project_path, work_id=args.work_id))
     elif command == "hook":
-        # Windows PowerShell 管道偶尔会在 UTF-8 JSON 前保留 BOM，协议入口需容忍该边界。
-        raw = sys.stdin.read().lstrip("\ufeff").strip()
-        payload = json.loads(raw) if raw else {}
-        print(json.dumps(handle_hook(args.agent, args.event, payload, settings), ensure_ascii=False, separators=(",", ":")))
+        return _run_hook_command(args.agent, args.event, settings)
     elif command == "audit":
+        from datetime import datetime
+
+        from .audit import (
+            AuditStore, audit_summary, combine_invocations, filter_events, render_markdown,
+            write_excel_report, write_report,
+        )
+
         store = AuditStore(settings)
         loaded = store.read_events()
         selected_date = getattr(args, "date", None)
