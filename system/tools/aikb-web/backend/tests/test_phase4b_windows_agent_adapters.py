@@ -10,11 +10,14 @@ import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+from aikb_web.core.actions import ConfirmationTokenService
 from aikb_web.core.maintenance_changes import MaintenanceChange, MaintenanceLeafState
 from aikb_web.core.maintenance_materials import MaintenanceLeafMaterial, MaintenanceMaterialManifest
+from aikb_web.core.maintenance_preparation import MaintenancePreparationError, MaintenancePreparationService
 from aikb_web.platform.maintenance import MaintenanceStep
 from aikb_web.platform.windows.maintenance_agents import (
     WindowsAgentMaintenanceAdapter,
@@ -26,6 +29,7 @@ from aikb_web.platform.windows.maintenance_agents import (
 from aikb_web.platform.windows.maintenance_readonly import (
     WindowsMaintenanceAdapter,
     _expected_claude_mcp,
+    _expected_codex_mcp,
     _expected_hooks,
     _expected_root,
     _load_json_preserving_keys,
@@ -49,6 +53,26 @@ class _Materials:
     def load(self, _change_id: str) -> MaintenanceMaterialManifest:
         assert self.manifest is not None
         return self.manifest
+
+
+class _PreparationTransactions:
+    """只记录准备阶段创建的事务，不接触正式运行目录。"""
+
+    def __init__(self) -> None:
+        self.items: list[MaintenanceChange] = []
+
+    def create(self, value: MaintenanceChange) -> None:
+        self.items.append(value)
+
+
+class _PreparationMaterials:
+    """只记录私有材料正文，供测试断言非受管配置得到保留。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    def prepare(self, *args: object) -> None:
+        self.calls.append(args)
 
 
 def _make_transaction(target_id: str, leaves: tuple[MaintenanceLeafMaterial, ...]) -> MaintenanceChange:
@@ -93,6 +117,58 @@ class WindowsAgentAdapterTests(unittest.TestCase):
         self.assertEqual(updated["McpServers"]["other"], {"x": 1})
         self.assertEqual(updated["private"], "保留")
 
+    def test_claude_ready_mcp_merge_is_byte_for_byte_noop(self) -> None:
+        """受管 MCP 已就绪时不重写整个配置文件，保留第三方格式和正文。"""
+        raw = (
+            b'{\r\n  "mcpServers": {\r\n    "aikb": {\r\n'
+            b'      "type": "stdio", "command": "pwsh",\r\n'
+            b'      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '
+            b'"& (Join-Path $env:AIKB_HOME \'system/tools/aikb-mcp/scripts/aikb.ps1\') serve --agent claude-code"],\r\n'
+            b'      "env": {"AIKB_MANAGED": "1"}\r\n'
+            b'    }, "other": {"command": "third-party"}\r\n'
+            b'  }, "private": "preserve"\r\n}\r\n'
+        )
+        self.assertEqual(_merge_claude_mcp(raw), raw)
+
+    def test_claude_mcp_drift_is_merged_and_third_party_is_retained(self) -> None:
+        """受管 MCP 漂移仍只修复 AIKB 对象，并保留外部服务。"""
+        raw = json.dumps(
+            {"mcpServers": {"aikb": {**_expected_claude_mcp(), "command": "private"}, "other": {"command": "third-party"}}, "private": True},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        merged = json.loads(_merge_claude_mcp(raw).decode("utf-8"))
+        self.assertEqual(merged["mcpServers"]["aikb"], _expected_claude_mcp())
+        self.assertEqual(merged["mcpServers"]["other"], {"command": "third-party"})
+        self.assertTrue(merged["private"])
+
+    def test_claude_root_drift_keeps_ready_mcp_material_bytes(self) -> None:
+        """仅 root 漂移时，Claude MCP 期望材料必须沿用原始字节。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "claude").mkdir()
+            (root / "claude" / "CLAUDE.md").write_bytes(_expected_root().replace(b"ENTRY_RULES.md", b"OTHER_RULES.md"))
+            mcp_raw = (
+                b'{"mcpServers":{"aikb":'
+                + json.dumps(_expected_claude_mcp(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                + b'},"private":"preserve"}'
+            )
+            (root / ".claude.json").write_bytes(mcp_raw)
+            hooks = {"hooks": {}}
+            for item in _expected_hooks("claude-code"):
+                group = {"hooks": [item["handler"]]}
+                if item["matcher"] is not None:
+                    group["matcher"] = item["matcher"]
+                hooks["hooks"].setdefault(str(item["event"]), []).append(group)
+            (root / "claude" / "settings.json").write_bytes(json.dumps(hooks).encode("utf-8"))
+            readonly = self._readonly(root)
+            self.assertEqual([item.difference_code for item in readonly.inspect("agent.claude-code").differences], ["drifted", "unchanged", "unchanged"])
+            plan = readonly.plan("agent.claude-code")
+            adapter = WindowsAgentMaintenanceAdapter(readonly, _Materials(), type("S", (), {"load": lambda _self, _id: None})())
+            _fresh, captured, _ = adapter.capture_agent(plan)
+            mcp = captured["agent.claude-code.mcp"]
+            self.assertEqual(mcp.expected_hash, mcp.before_hash)
+            self.assertEqual(mcp.expected_bytes, mcp_raw)
+
     def test_json_case_duplicate_is_rejected_before_write(self) -> None:
         raw = b'{"mcpServers": {}, "MCPSERVERS": {}}'
         # 结构歧义在共享 JSON 读取层即被拒绝，尚未进入 Agent 写适配器，
@@ -128,6 +204,104 @@ class WindowsAgentAdapterTests(unittest.TestCase):
         self.assertEqual(first_value["private"], {"x": 1})
         self.assertEqual(first_value["hooks"]["SESSIONSTART"][0]["hooks"][0]["Command"], "other")
         self.assertEqual(first_value, second_value)
+
+    def _write_agent_material_fixture(self, root: Path, target_id: str) -> None:
+        """写入带第三方内容且仅受管 MCP 漂移的隔离 Codex/Claude fixture。"""
+        if target_id == "agent.codex":
+            home = root / "codex"
+            home.mkdir()
+            (home / "AGENTS.md").write_bytes(b"# private instructions\n")
+            codex_mcp = _expected_codex_mcp().replace(b'command = "pwsh"', b'command = "private-pwsh"')
+            (home / "config.toml").write_bytes(b'model = "private-model"\n' + codex_mcp)
+            hooks = {"hooks": {"SessionStart": [{"hooks": [{"command": "third-party"}]}]}, "private": True}
+            (home / "hooks.json").write_bytes(json.dumps(hooks, ensure_ascii=False).encode("utf-8"))
+            return
+
+        home = root / "claude"
+        home.mkdir()
+        (home / "CLAUDE.md").write_bytes(b"# private instructions\n")
+        mcp = dict(_expected_claude_mcp())
+        mcp["command"] = "private-pwsh"
+        config = {"mcpServers": {"aikb": mcp, "other": {"command": "third-party"}}, "private": "保留"}
+        (root / ".claude.json").write_bytes(json.dumps(config, ensure_ascii=False).encode("utf-8"))
+        hooks = {"hooks": {"SessionStart": [{"hooks": [{"command": "third-party"}]}]}, "private": True}
+        (home / "settings.json").write_bytes(json.dumps(hooks, ensure_ascii=False).encode("utf-8"))
+
+    def _prepare_agent_fixture(self, root: Path, target_id: str):
+        """通过真实准备服务材料化隔离 Agent，返回计划、适配器和材料记录。"""
+        self._write_agent_material_fixture(root, target_id)
+        readonly = self._readonly(root)
+        status = readonly.inspect(target_id)
+        plan = readonly.plan(target_id, status)
+        transactions = _PreparationTransactions()
+        materials = _PreparationMaterials()
+
+        class _CaptureStore:
+            def load(self, _change_id: str) -> MaintenanceChange:
+                raise AssertionError("捕获阶段不应读取事务材料")
+
+        adapter = WindowsAgentMaintenanceAdapter(readonly, _Materials(), _CaptureStore())
+        service = MaintenancePreparationService(transactions, lambda _store: materials, ConfirmationTokenService())
+        prepared = service.prepare(plan, status, adapter)
+        return readonly, plan, status, adapter, prepared, materials
+
+    def test_preparation_materializes_codex_and_claude_with_third_party_content(self) -> None:
+        """真实 Agent 材料化只校验受管指纹，同时保留第三方正文。"""
+        for target_id in ("agent.codex", "agent.claude-code"):
+            with self.subTest(target_id=target_id), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                readonly, _plan, status, _adapter, prepared, materials = self._prepare_agent_fixture(root, target_id)
+                self.assertEqual(getattr(status.status, "value", status.status), "drifted")
+                self.assertEqual(prepared.change.status, "prepared")
+                self.assertEqual(len(materials.calls), 1)
+                leaves = materials.calls[0][2]
+                self.assertIn(b"private instructions", leaves[f"{target_id}.root_instructions"].expected_bytes)
+                if target_id == "agent.codex":
+                    self.assertIn(b'private-model', leaves[f"{target_id}.mcp"].expected_bytes)
+                    self.assertIn(b"third-party", leaves[f"{target_id}.hooks"].expected_bytes)
+                else:
+                    parsed = json.loads(leaves[f"{target_id}.mcp"].expected_bytes.decode("utf-8"))
+                    self.assertEqual(parsed["mcpServers"]["other"], {"command": "third-party"})
+                    self.assertEqual(parsed["private"], "保留")
+                    self.assertIn(b"third-party", leaves[f"{target_id}.hooks"].expected_bytes)
+                final_status = readonly.inspect(target_id)
+                self.assertEqual(getattr(final_status.status, "value", final_status.status), "drifted")
+
+    def test_preparation_rejects_managed_material_tampering_after_capture(self) -> None:
+        """受管正文被篡改时，即使整文件摘要同步更新也不得生成 prepared。"""
+        for target_id in ("agent.codex", "agent.claude-code"):
+            with self.subTest(target_id=target_id), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._write_agent_material_fixture(root, target_id)
+                readonly = self._readonly(root)
+                status = readonly.inspect(target_id)
+                plan = readonly.plan(target_id, status)
+
+                class _CaptureStore:
+                    def load(self, _change_id: str) -> MaintenanceChange:
+                        raise AssertionError("捕获阶段不应读取事务材料")
+
+                adapter = WindowsAgentMaintenanceAdapter(readonly, _Materials(), _CaptureStore())
+                fresh, captured, _ = adapter.capture_agent(plan)
+                mcp_id = f"{target_id}.mcp"
+                leaf = captured[mcp_id]
+                needle = b'command = "pwsh"' if target_id == "agent.codex" else b'"command": "pwsh"'
+                tampered = leaf.expected_bytes.replace(needle, b'command = "tampered"' if target_id == "agent.codex" else b'"command": "tampered"')
+                captured[mcp_id] = replace(leaf, expected_bytes=tampered, expected_hash=hashlib.sha256(tampered).hexdigest())
+
+                class _CapturedProvider:
+                    def capture(self, _plan):
+                        return fresh, captured, {}
+
+                    def managed_fingerprint_part(self, verify_target_id, leaf_id, raw):
+                        return adapter.managed_fingerprint_part(verify_target_id, leaf_id, raw)
+
+                transactions = _PreparationTransactions()
+                materials = _PreparationMaterials()
+                service = MaintenancePreparationService(transactions, lambda _store: materials, ConfirmationTokenService())
+                with self.assertRaises(MaintenancePreparationError):
+                    service.prepare(plan, status, _CapturedProvider())
+                self.assertEqual(transactions.items, [])
 
     def test_capture_and_apply_codex_fixture_preserves_user_text_then_rolls_back(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -35,7 +35,12 @@ function displayDate(value?: string | null): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN');
 }
 
-function riskLabel(value?: string | null): string { return value === 'read_only' ? '只读动作' : value === 'derived_write' ? '派生写入' : '风险级别未说明'; }
+function riskLabel(value?: string | null): string {
+  return value === 'read_only' ? '只读动作' : value === 'derived_write' ? '派生写入' : value === 'user_config_write' ? '用户配置写入' : '风险级别未说明';
+}
+function riskColor(value?: string | null): string {
+  return value === 'read_only' ? 'green' : value === 'user_config_write' ? 'red' : 'orange';
+}
 function platformLabel(platform: string): string { return platform === 'windows' ? 'Windows' : platform === 'macos' ? 'macOS' : '受支持平台'; }
 function effectLabel(effect: string): string { return effect === 'read:control_repository' ? '读取控制仓' : effect === 'read:knowledge_repository' ? '读取知识仓' : '受控安全范围'; }
 function isTerminal(status?: string | null): boolean { return Boolean(status && TERMINAL_STATUSES.has(status as TaskStatus)); }
@@ -75,7 +80,7 @@ function ActionCard({ action, onPreview, loading }: { action: ActionSpec; onPrev
   return <Card className="task-action-card" title={<Space><span>{action.title}</span><Tag>{action.action_id}</Tag></Space>}>
     <Typography.Paragraph>{action.description}</Typography.Paragraph>
     <Descriptions column={1} size="small">
-      <Descriptions.Item label="风险 / 影响"><Tag color={action.risk_level === 'read_only' ? 'green' : 'orange'}>{riskLabel(action.risk_level)}</Tag>{action.effects?.length ? ` · ${action.effects.map(effectLabel).join('、')}` : ' · 无额外影响说明'}</Descriptions.Item>
+      <Descriptions.Item label="风险 / 影响"><Tag color={riskColor(action.risk_level)}>{riskLabel(action.risk_level)}</Tag>{action.effects?.length ? ` · ${action.effects.map(effectLabel).join('、')}` : ' · 无额外影响说明'}</Descriptions.Item>
       <Descriptions.Item label="超时">{action.timeout_seconds} 秒</Descriptions.Item>
       <Descriptions.Item label="平台">{action.supported_platforms?.length ? action.supported_platforms.map(platformLabel).join('、') : '平台未说明'}</Descriptions.Item>
       <Descriptions.Item label="参数">无（首批动作固定空 Schema，不允许自定义参数）</Descriptions.Item>
@@ -89,7 +94,7 @@ function PreviewPanel({ preview, tokenReady, expires, submitting, onSubmit, onCl
   const [confirmed, setConfirmed] = useState(false);
   // read_only 仍必须携带服务端令牌，但不增加第二次危险确认；派生写入才显示人工确认框。
   const needsConfirmation = preview.risk_level !== 'read_only';
-  return <Card className="section-gap task-preview-card" title={<Space><span>执行预览</span><Tag color={preview.risk_level === 'read_only' ? 'green' : 'orange'}>{riskLabel(preview.risk_level)}</Tag></Space>} extra={<Button type="link" onClick={onClose}>关闭预览</Button>}>
+  return <Card className="section-gap task-preview-card" title={<Space><span>执行预览</span><Tag color={riskColor(preview.risk_level)}>{riskLabel(preview.risk_level)}</Tag></Space>} extra={<Button type="link" onClick={onClose}>关闭预览</Button>}>
     <Alert type="info" showIcon message={preview.risk_level === 'read_only' ? '这是只读动作' : '这是受控派生写入动作'} description="必须先查看服务端规范化预览；页面不会展示或接收命令、路径、环境变量和自定义参数。" />
     <Descriptions className="section-gap" column={1} size="small">
       <Descriptions.Item label="动作">{preview.action_id}</Descriptions.Item>
@@ -145,7 +150,7 @@ function TaskCenter() {
 }
 
 function TaskList({ tasks }: { tasks: TaskSnapshot[] }) {
-  return <List itemLayout="vertical" dataSource={tasks} renderItem={(task) => <List.Item actions={[<Link key="detail" to={`/tasks/${encodeURIComponent(task.task_id)}`}>查看详情</Link>]}><List.Item.Meta title={<Space><Link to={`/tasks/${encodeURIComponent(task.task_id)}`}>{task.action_id}</Link>{statusTag(task.status)}</Space>} description={<Space wrap><Typography.Text type="secondary">任务：{task.task_id}</Typography.Text><Typography.Text type="secondary">创建：{displayDate(task.created_at)}</Typography.Text><Typography.Text type="secondary">更新：{displayDate(task.updated_at)}</Typography.Text></Space>} /><Space wrap><Tag>{riskLabel(task.risk_level)}</Tag>{task.output_truncated && <Tag color="orange">输出已裁剪</Tag>}<Typography.Text type="secondary">超时：{task.timeout_seconds ?? '—'} 秒</Typography.Text></Space></List.Item>} />;
+  return <List itemLayout="vertical" dataSource={tasks} renderItem={(task) => <List.Item actions={[<Link key="detail" to={`/tasks/${encodeURIComponent(task.task_id)}`}>查看详情</Link>]}><List.Item.Meta title={<Space><Link to={`/tasks/${encodeURIComponent(task.task_id)}`}>{task.action_id}</Link>{statusTag(task.status)}</Space>} description={<Space wrap><Typography.Text type="secondary">任务：{task.task_id}</Typography.Text><Typography.Text type="secondary">创建：{displayDate(task.created_at)}</Typography.Text><Typography.Text type="secondary">更新：{displayDate(task.updated_at)}</Typography.Text></Space>} /><Space wrap><Tag color={riskColor(task.risk_level)}>{riskLabel(task.risk_level)}</Tag>{task.output_truncated && <Tag color="orange">输出已裁剪</Tag>}<Typography.Text type="secondary">超时：{task.timeout_seconds ?? '—'} 秒</Typography.Text></Space></List.Item>} />;
 }
 
 function applyTaskEvent(current: TaskSnapshot, event: TaskEvent): TaskSnapshot {
@@ -193,7 +198,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
       {activeTask && <>
         <Card title={<Space><span>{activeTask.action_id}</span>{statusTag(activeTask.status)}{events.connected && <Tag color="green">实时连接</Tag>}{events.error && <Tag color="orange">实时连接重试中</Tag>}</Space>} extra={!isTerminal(activeTask.status) ? <Button danger loading={cancelMutation.isPending} onClick={cancel}>{activeTask.status === 'cancelling' ? '再次请求取消' : '取消任务'}</Button> : undefined}>
           <Row gutter={[16, 16]}>
-            <Col xs={24} lg={12}><Descriptions column={1} size="small"><Descriptions.Item label="任务 ID">{activeTask.task_id}</Descriptions.Item><Descriptions.Item label="动作">{activeTask.action_id}</Descriptions.Item><Descriptions.Item label="风险">{riskLabel(activeTask.risk_level)}</Descriptions.Item><Descriptions.Item label="状态">{statusTag(activeTask.status)}</Descriptions.Item><Descriptions.Item label="创建时间">{displayDate(activeTask.created_at)}</Descriptions.Item><Descriptions.Item label="更新时间">{displayDate(activeTask.updated_at)}</Descriptions.Item><Descriptions.Item label="超时">{activeTask.timeout_seconds ?? '—'} 秒</Descriptions.Item><Descriptions.Item label="关联审计 ID">{activeTask.invocation_id ?? '未提供'}</Descriptions.Item></Descriptions></Col>
+            <Col xs={24} lg={12}><Descriptions column={1} size="small"><Descriptions.Item label="任务 ID">{activeTask.task_id}</Descriptions.Item><Descriptions.Item label="动作">{activeTask.action_id}</Descriptions.Item><Descriptions.Item label="风险"><Tag color={riskColor(activeTask.risk_level)}>{riskLabel(activeTask.risk_level)}</Tag></Descriptions.Item><Descriptions.Item label="状态">{statusTag(activeTask.status)}</Descriptions.Item><Descriptions.Item label="创建时间">{displayDate(activeTask.created_at)}</Descriptions.Item><Descriptions.Item label="更新时间">{displayDate(activeTask.updated_at)}</Descriptions.Item><Descriptions.Item label="超时">{activeTask.timeout_seconds ?? '—'} 秒</Descriptions.Item><Descriptions.Item label="关联审计 ID">{activeTask.invocation_id ?? '未提供'}</Descriptions.Item></Descriptions></Col>
             <Col xs={24} lg={12}><Typography.Text strong>进度</Typography.Text><Progress className="task-progress" percent={typeof activeTask.progress === 'number' ? Math.max(0, Math.min(100, activeTask.progress)) : undefined} status={activeTask.status === 'failed' ? 'exception' : activeTask.status === 'succeeded' ? 'success' : undefined} /><Typography.Text type="secondary">参数：无（首批动作固定空 Schema）</Typography.Text></Col>
           </Row>
         </Card>

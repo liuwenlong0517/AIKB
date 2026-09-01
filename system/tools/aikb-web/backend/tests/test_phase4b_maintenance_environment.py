@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import unittest
 from dataclasses import replace
 from unittest.mock import patch
@@ -150,6 +151,97 @@ class WindowsEnvironmentAdapterTests(unittest.TestCase):
         self.values.update({"AIKB_HOME": "new", "AIKB_KNOWLEDGE_HOME": "new-k"})
         with self.assertRaises(module.WindowsEnvironmentExecutionError):
             self.adapter.verify(self.transaction.change_id, "environment")
+
+    def test_registry_write_preserves_existing_string_value_types_and_defaults_missing(self):
+        """写入固定变量时保留 REG_SZ/REG_EXPAND_SZ，缺失值默认 REG_EXPAND_SZ。"""
+        class _Key:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        class _Winreg:
+            HKEY_CURRENT_USER = object()
+            KEY_QUERY_VALUE = 0x0001
+            KEY_SET_VALUE = 0x0002
+            REG_SZ = 1
+            REG_EXPAND_SZ = 2
+            REG_MULTI_SZ = 7
+
+            def __init__(self, value):
+                self.values = {} if value is None else {"AIKB_KNOWLEDGE_HOME": ("old", value)}
+                self.open_access = []
+                self.writes = []
+
+            def CreateKeyEx(self, _root, subkey, _reserved, access):
+                self.open_access.append((subkey, access))
+                return _Key()
+
+            def QueryValueEx(self, _key, name):
+                try:
+                    return self.values[name]
+                except KeyError:
+                    raise FileNotFoundError(name) from None
+
+            def SetValueEx(self, _key, name, _reserved, value_type, value):
+                self.writes.append((name, value_type, value))
+                self.values[name] = (value, value_type)
+
+            def DeleteValue(self, _key, name):
+                self.values.pop(name, None)
+
+        for existing_type in (1, 2, None):
+            with self.subTest(existing_type=existing_type):
+                fake_winreg = _Winreg(existing_type)
+                with patch.dict(sys.modules, {"winreg": fake_winreg}):
+                    module.WindowsEnvironmentMaintenanceAdapter._write_user_environment(
+                        "AIKB_KNOWLEDGE_HOME", "new"
+                    )
+                expected_type = existing_type or _Winreg.REG_EXPAND_SZ
+                self.assertEqual(fake_winreg.writes, [("AIKB_KNOWLEDGE_HOME", expected_type, "new")])
+                self.assertEqual(fake_winreg.open_access, [("Environment", _Winreg.KEY_QUERY_VALUE | _Winreg.KEY_SET_VALUE)])
+
+    def test_registry_write_rejects_unexpected_type_and_supports_delete(self):
+        """意外类型 fail-closed；删除仍只作用于固定目标名称。"""
+        class _Key:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        class _Winreg:
+            HKEY_CURRENT_USER = object()
+            KEY_QUERY_VALUE = 1
+            KEY_SET_VALUE = 2
+            REG_SZ = 1
+            REG_EXPAND_SZ = 2
+            REG_DWORD = 4
+
+            def __init__(self):
+                self.deleted = []
+
+            def CreateKeyEx(self, *_args):
+                return _Key()
+
+            def QueryValueEx(self, _key, _name):
+                return 1, self.REG_DWORD
+
+            def SetValueEx(self, *_args):
+                raise AssertionError("意外类型不得写入")
+
+            def DeleteValue(self, _key, name):
+                self.deleted.append(name)
+
+        fake_winreg = _Winreg()
+        with patch.dict(sys.modules, {"winreg": fake_winreg}):
+            with self.assertRaises(module.WindowsEnvironmentExecutionError):
+                module.WindowsEnvironmentMaintenanceAdapter._write_user_environment("UNRELATED", "new")
+            with self.assertRaises(module.WindowsEnvironmentExecutionError):
+                module.WindowsEnvironmentMaintenanceAdapter._write_user_environment("AIKB_HOME", "new")
+            module.WindowsEnvironmentMaintenanceAdapter._write_user_environment("AIKB_HOME", None)
+        self.assertEqual(fake_winreg.deleted, ["AIKB_HOME"])
 
 
 if __name__ == "__main__":

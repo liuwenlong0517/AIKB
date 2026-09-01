@@ -63,6 +63,28 @@ describe('TasksPage', () => {
     expect(screen.getByRole('button', { name: '取消任务' })).toBeInTheDocument();
   });
 
+  it('维护任务列表显示明确的用户配置写入风险级别', () => {
+    mocks.tasks.mockReturnValue(queryResult({ items: [
+      { task_id: 'maintenance-environment', action_id: 'maintenance.environment.update', status: 'succeeded', risk_level: 'user_config_write', timeout_seconds: 120 },
+      { task_id: 'maintenance-codex', action_id: 'maintenance.agent.codex.repair', status: 'failed', risk_level: 'user_config_write', timeout_seconds: 120 },
+      { task_id: 'maintenance-claude', action_id: 'maintenance.agent.claude-code.repair', status: 'queued', risk_level: 'user_config_write', timeout_seconds: 120 },
+    ], total: 3 }));
+    render(<MemoryRouter initialEntries={['/tasks']}><Routes><Route path="/tasks" element={<TasksPage />} /></Routes></MemoryRouter>);
+    expect(screen.getAllByText('maintenance.environment.update')).not.toHaveLength(0);
+    expect(screen.getByText('maintenance.agent.codex.repair')).toBeInTheDocument();
+    expect(screen.getByText('maintenance.agent.claude-code.repair')).toBeInTheDocument();
+    expect(screen.getAllByText('用户配置写入')).toHaveLength(3);
+    expect(screen.queryByText('风险级别未说明')).not.toBeInTheDocument();
+  });
+
+  it('维护任务详情显示明确的用户配置写入风险级别', () => {
+    mocks.task.mockReturnValue(queryResult({ task: { task_id: 'maintenance-environment', action_id: 'maintenance.environment.update', status: 'succeeded', risk_level: 'user_config_write', timeout_seconds: 120 } }));
+    render(<MemoryRouter initialEntries={['/tasks/maintenance-environment']}><Routes><Route path="/tasks/:taskId" element={<TasksPage />} /></Routes></MemoryRouter>);
+    expect(screen.getAllByText('maintenance.environment.update')).not.toHaveLength(0);
+    expect(screen.getByText('用户配置写入')).toBeInTheDocument();
+    expect(screen.queryByText('风险级别未说明')).not.toBeInTheDocument();
+  });
+
   it('详情按顺序合并同一响应块中的快照、多个输出和结果', async () => {
     mocks.events.mockReturnValue({
       events: [

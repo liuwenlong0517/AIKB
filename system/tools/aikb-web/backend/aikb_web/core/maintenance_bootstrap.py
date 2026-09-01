@@ -85,8 +85,21 @@ class _WindowsMaintenanceDispatchAdapter:
 
     def capture(self, plan: Any) -> Any:
         """按目标捕获私有材料，返回值只交给准备服务。"""
-        target = self._target(plan.target_id)
-        return target.capture_environment(plan) if plan.target_id == "environment" else target.capture_agent(plan)
+        # environment 的捕获属于只读适配器：它负责从当前环境生成受指纹约束的
+        # 私有材料；执行适配器只消费 prepared 事务，不能被误当成材料提供器。
+        if plan.target_id == "environment":
+            return self._readonly.capture_environment(plan)
+        return self._target(plan.target_id).capture_agent(plan)
+
+    def managed_fingerprint_part(self, target_id: str, leaf_id: str, raw: bytes | None) -> str:
+        """委托 Agent 专属适配器验证给定正文中的受管摘要，保持生产边界固定。"""
+        if target_id == "environment":
+            raise ValueError("环境目标没有 Agent 受管摘要")
+        verifier = self._target(target_id)
+        method = getattr(verifier, "managed_fingerprint_part", None)
+        if not callable(method):
+            raise ValueError("Agent 受管摘要验证器未装配")
+        return method(target_id, leaf_id, raw)
 
     def apply_step(self, change_id: str, target_id: str, step: MaintenanceStep) -> Any:
         """转发已校验的固定写步骤，不接受浏览器自由参数。"""

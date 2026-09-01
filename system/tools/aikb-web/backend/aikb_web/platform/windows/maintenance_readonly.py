@@ -385,6 +385,33 @@ class WindowsMaintenanceAdapter:
             )
         return status, leaves, environments
 
+    def managed_fingerprint_part(self, target_id: str, leaf_id: str, raw: bytes | None) -> str:
+        """从给定叶子字节重新解析受管片段，生成与 inspect 一致的摘要分片。
+
+        Agent 材料同时保存整文件摘要和正文；整文件可能包含用户内容，不能用于
+        对比受管基线。此接口只复用固定解析器，不读取路径或修改现场，供准备服务
+        在 TOCTOU 窗口内验证捕获字节确实绑定到预览 fingerprint。
+        """
+        target = self._target(target_id)
+        if leaf_id not in target.logical_leaves:
+            raise MaintenanceTargetError("逻辑叶子与维护目标不匹配")
+        if raw is None:
+            return f"{leaf_id}:missing"
+        agent = "codex" if target_id == "agent.codex" else "claude-code"
+        try:
+            if leaf_id.endswith("root_instructions"):
+                observation = self._observe_root(leaf_id, raw)
+            elif leaf_id.endswith(".mcp"):
+                observation = self._observe_codex_mcp(leaf_id, raw) if agent == "codex" else self._observe_claude_mcp(leaf_id, raw)
+            else:
+                observation = self._observe_hooks(agent, leaf_id, raw)
+        except (OSError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError, json.JSONDecodeError) as error:
+            raise MaintenanceTargetError("Agent 受管材料无法解析") from error
+        part = observation.get("fingerprint_part")
+        if not isinstance(part, str) or not part.startswith(f"{leaf_id}:"):
+            raise MaintenanceTargetError("Agent 受管摘要格式无效")
+        return part
+
     def _target(self, target_id: str):
         """通过静态注册表解析目标，不提供路径或动态 fallback。"""
 
@@ -656,7 +683,9 @@ class WindowsMaintenanceAdapter:
         agent = "codex" if target_id == "agent.codex" else "claude-code"
         expected = {
             "root_instructions": _expected_root(),
-            "mcp": _expected_codex_mcp() if agent == "codex" else _canonical_json(_expected_claude_mcp()),
+            # Claude 的受管摘要按语义键名折叠计算，期望侧必须使用同一规范化，
+            # 否则 ``AIKB_MANAGED`` 与 ``aikb_managed`` 会造成无法材料化的伪漂移。
+            "mcp": _expected_codex_mcp() if agent == "codex" else _canonical_json(_semantic_json(_expected_claude_mcp())),
             "hooks": _canonical_json(_expected_hooks(agent)),
         }
         return _sha256("\n".join(f"{leaf}:{_sha256(expected['root_instructions' if leaf.endswith('root_instructions') else 'mcp' if leaf.endswith('mcp') else 'hooks'])}" for leaf in MAINTENANCE_LEAVES_BY_TARGET[target_id]).encode())

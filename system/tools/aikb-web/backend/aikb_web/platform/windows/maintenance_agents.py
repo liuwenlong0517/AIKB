@@ -44,6 +44,7 @@ from .maintenance_readonly import (
     _find_json_key,
     _json_pairs_preserving_keys,
     _managed_block_pattern,
+    _semantic_json,
     _sha256,
     _load_json_preserving_keys,
     WindowsMaintenanceAdapter,
@@ -325,7 +326,12 @@ def _merge_claude_mcp(raw: bytes | None) -> bytes:
         marker_key = _find_json_key(env, "AIKB_MANAGED") if isinstance(env, dict) else None
         if marker_key is None or env.get(marker_key) != "1":
             raise WindowsAgentMaintenanceError("Claude MCP 同名服务冲突")
-    managed = _merge_owned_object(existing, _expected_claude_mcp())
+    expected = _expected_claude_mcp()
+    # 结构、键名歧义和 AIKB_MANAGED 标记已经在上面完成校验；语义完全一致时
+    # 原样保留整个文件，避免无关第三方配置、空白和换行被不必要地重写。
+    if raw is not None and isinstance(existing, dict) and _semantic_json(existing) == _semantic_json(expected):
+        return raw
+    managed = _merge_owned_object(existing, expected)
     if aikb_key is None:
         servers["aikb"] = managed
     else:
@@ -459,6 +465,10 @@ class WindowsAgentMaintenanceAdapter:
     # 便于上层准备服务按 Agent 目标使用统一 provider 名称。
     capture = capture_agent
     capture_configuration = capture_agent
+
+    def managed_fingerprint_part(self, target_id: str, leaf_id: str, raw: bytes | None) -> str:
+        """委托只读适配器按受管结构解析材料，整文件摘要仍由执行器保留。"""
+        return self._readonly.managed_fingerprint_part(target_id, leaf_id, raw)
 
     def apply_step(self, change_id: str, target_id: str, step: MaintenanceStep) -> MaintenanceStepResult:
         """执行 preflight/backup 或单个固定配置叶子写入。"""

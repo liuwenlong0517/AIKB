@@ -214,18 +214,36 @@ class WindowsEnvironmentMaintenanceAdapter:
 
     @staticmethod
     def _write_user_environment(name: str, value: str | None) -> None:
-        """仅写入 HKCU 的两个固定环境名称。"""
+        """仅写入 HKCU 的两个固定环境名称，并保留已有字符串值类型。
 
+        ``REG_SZ`` 与 ``REG_EXPAND_SZ`` 都是受支持的字符串类型；缺失值采用
+        ``REG_EXPAND_SZ``，以保持默认配置对展开变量的兼容性。其他注册表类型
+        不属于本适配器的目标，直接拒绝，避免把无关值转换成字符串。
+        """
+
+        if name not in _ENV_NAMES:
+            raise WindowsEnvironmentExecutionError("环境名称不受支持")
         import winreg
 
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+        access = winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment", 0, access) as key:
             if value is None:
                 try:
                     winreg.DeleteValue(key, name)
                 except FileNotFoundError:
                     pass
             else:
-                winreg.SetValueEx(key, name, 0, winreg.REG_EXPAND_SZ, value)
+                value_type = winreg.REG_EXPAND_SZ
+                try:
+                    _current_value, current_type = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    # 新建值默认可展开字符串；这是唯一允许的缺失值降级。
+                    pass
+                else:
+                    if current_type not in (winreg.REG_SZ, winreg.REG_EXPAND_SZ):
+                        raise WindowsEnvironmentExecutionError("环境值注册表类型不受支持")
+                    value_type = current_type
+                winreg.SetValueEx(key, name, 0, value_type, value)
 
     @staticmethod
     def _broadcast_environment() -> bool:

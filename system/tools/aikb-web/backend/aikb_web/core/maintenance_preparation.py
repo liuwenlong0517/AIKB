@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 import uuid
 from dataclasses import dataclass
@@ -21,6 +22,16 @@ from .maintenance_materials import MaintenanceEnvironmentMaterial, MaintenanceLe
 from .maintenance_targets import MaintenanceTargetStatus
 from .maintenance_targets import MAINTENANCE_TARGET_REGISTRY
 from .maintenance_transaction_store import MaintenanceTransactionStore
+
+_MANAGED_FINGERPRINT_SUFFIX_RE = re.compile(r"^(?:missing|[0-9a-f]{64})$")
+
+
+def _is_valid_managed_fingerprint_part(leaf_id: str, part: object) -> bool:
+    """只接受固定叶子前缀和 missing/SHA-256 摘要，拒绝自由 provider 文本。"""
+    if not isinstance(part, str):
+        return False
+    prefix = f"{leaf_id}:"
+    return part.startswith(prefix) and bool(_MANAGED_FINGERPRINT_SUFFIX_RE.fullmatch(part[len(prefix):]))
 
 
 class MaintenancePreparationError(ValueError):
@@ -195,7 +206,7 @@ class MaintenancePreparationService:
                 raise MaintenancePreparationError("可信叶子材料不完整")
             if plan.target_id != "environment" and environments:
                 raise MaintenancePreparationError("Agent 材料不得携带环境值")
-            self._validate_captured_material(plan, leaves, environments)
+            self._validate_captured_material(plan, provider, leaves, environments)
             change_id = change_id or f"maintenance-{uuid.uuid4().hex}"
             leaf_order = tuple(getattr(plan, "logical_leaves", MAINTENANCE_TARGET_REGISTRY.get(plan.target_id).logical_leaves))
             leaf_states = tuple(MaintenanceLeafState(key, leaves[key].existence, leaves[key].before_hash, leaves[key].expected_hash) for key in leaf_order)
@@ -226,16 +237,25 @@ class MaintenancePreparationService:
     @staticmethod
     def _validate_captured_material(
         plan: MaintenancePlan,
+        provider: MaintenanceMaterialProvider,
         leaves: Mapping[str, MaintenanceLeafMaterial],
         environments: Mapping[str, MaintenanceEnvironmentMaterial],
     ) -> None:
-        """用材料正文重算前后整体指纹，拒绝 provider 仅口头声明绑定。"""
+        """用材料正文重算前后整体指纹，拒绝 provider 仅口头声明绑定。
+
+        Agent 文件允许携带用户的非受管内容，因此通过生产只读适配器的固定
+        ``managed_fingerprint_part`` 重新解析受管片段；整文件摘要仍单独校验，
+        供 preflight/rollback 防止第三方在 apply 前后替换整个文件。
+        """
         leaf_order = tuple(getattr(plan, "logical_leaves", MAINTENANCE_TARGET_REGISTRY.get(plan.target_id).logical_leaves))
         names = ("AIKB_HOME", "AIKB_KNOWLEDGE_HOME")
         if plan.target_id == "environment" and tuple(environments) != names:
             raise MaintenancePreparationError("可信环境材料不完整")
         if plan.target_id != "environment" and environments:
             raise MaintenancePreparationError("Agent 材料不得携带环境值")
+        managed_part_provider = getattr(provider, "managed_fingerprint_part", None)
+        if plan.target_id != "environment" and not callable(managed_part_provider):
+            raise MaintenancePreparationError("Agent 材料缺少受管指纹验证器")
         before_parts: list[str] = []
         after_parts: list[str] = []
         for index, leaf_id in enumerate(leaf_order):
@@ -248,8 +268,17 @@ class MaintenancePreparationService:
             if hashlib.sha256(leaf.expected_bytes).hexdigest() != leaf.expected_hash:
                 raise MaintenancePreparationError("期望材料摘要无效")
             if plan.target_id != "environment":
-                before_parts.append(f"{leaf_id}:{hashlib.sha256(before_bytes).hexdigest()}")
-                after_parts.append(f"{leaf_id}:{hashlib.sha256(leaf.expected_bytes).hexdigest()}")
+                if leaf.before_hash is not None and hashlib.sha256(before_bytes).hexdigest() != leaf.before_hash:
+                    raise MaintenancePreparationError("事务前摘要无效")
+                try:
+                    before_part = managed_part_provider(plan.target_id, leaf_id, None if leaf.existence == "missing" else leaf.before_bytes)
+                    after_part = managed_part_provider(plan.target_id, leaf_id, leaf.expected_bytes)
+                except Exception as error:
+                    raise MaintenancePreparationError("Agent 受管材料无法安全验证") from error
+                if not _is_valid_managed_fingerprint_part(leaf_id, before_part) or not _is_valid_managed_fingerprint_part(leaf_id, after_part):
+                    raise MaintenancePreparationError("Agent 受管摘要无效")
+                before_parts.append(before_part)
+                after_parts.append(after_part)
                 continue
             name = names[index]
             environment = environments[name]

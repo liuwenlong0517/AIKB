@@ -98,6 +98,12 @@ class _AgentProvider:
             )
         return SimpleNamespace(target_id=plan.target_id, base_fingerprint=plan.before_fingerprint), leaves, {}
 
+    def managed_fingerprint_part(self, target_id, leaf_id, raw):
+        """测试提供器复现固定摘要接口，避免准备服务回退到整文件摘要。"""
+        assert target_id.startswith("agent.")
+        digest = __import__("hashlib").sha256(b"<missing>" if raw is None else raw).hexdigest()
+        return f"{leaf_id}:{digest}"
+
 
 class _MaterializeTransactions:
     """记录 apply 阶段才创建的事务，测试不使用正式事务目录。"""

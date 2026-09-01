@@ -93,7 +93,44 @@ describe('MaintenancePage', () => {
     mocks.preview.mockReturnValue(mutation());
     renderPage();
     expect(screen.getByRole('button', { name: '查看结构化预览' })).toBeDisabled();
-    expect(screen.getByText('当前状态不具备安全预览条件。')).toBeInTheDocument();
+    expect(screen.getByText('当前目标存在冲突，无法安全预览。')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['ready', '当前状态已就绪，无需预览。'],
+    ['invalid', '当前目标配置无效，无法安全预览。'],
+    ['unsupported', '当前目标或平台不支持结构化预览。'],
+    ['restart_required', '配置已写入，请手动重启对应 Agent，无需再次预览。'],
+  ] as const)('%s 状态禁用预览并显示安全原因', (status, reason) => {
+    const item = { ...targetItems[0], status };
+    const platform = { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false };
+    mocks.targets.mockReturnValue(query({ items: [item, targetItems[1], targetItems[2]], platform }));
+    mocks.statuses.mockReturnValue([statusQuery(item), statusQuery(targetItems[1]), statusQuery(targetItems[2])]);
+    mocks.target.mockReturnValue(query({ target: item, platform, status: { target_id: item.target_id, status, logical_leaves: [], steps: [], base_fingerprint: 'a'.repeat(64), restart_required: status === 'restart_required' } }));
+    mocks.preview.mockReturnValue(mutation());
+    renderPage();
+    expect(screen.getByRole('button', { name: '查看结构化预览' })).toBeDisabled();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+  });
+
+  it('missing 和 drifted 状态允许发起结构化预览', () => {
+    const statuses = ['missing', 'drifted'] as const;
+    const items = targetItems.map((item, index) => ({ ...item, status: statuses[index] ?? item.status }));
+    const platform = { platform: 'windows', supported: false, inspection_supported: true, preview_supported: true, apply_supported: false };
+    mocks.targets.mockReturnValue(query({ items, platform }));
+    mocks.statuses.mockReturnValue(items.map(statusQuery));
+    mocks.target.mockImplementation((targetId: string) => {
+      const item = items.find((candidate) => candidate.target_id === targetId) ?? items[0];
+      return query({ target: item, platform, status: { target_id: item.target_id, status: item.status, logical_leaves: [], steps: [], base_fingerprint: 'a'.repeat(64) } });
+    });
+    const mutate = vi.fn();
+    mocks.preview.mockReturnValue(mutation(mutate));
+    renderPage();
+    expect(screen.getByRole('button', { name: '查看结构化预览' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /Codex/ }));
+    expect(screen.getByRole('button', { name: '查看结构化预览' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '查看结构化预览' }));
+    expect(mutate).toHaveBeenCalledWith({ targetId: 'agent.codex', base_fingerprint: 'a'.repeat(64) }, expect.anything());
   });
 
   it('macOS inspection_supported=false 时明确不支持只读检查', () => {

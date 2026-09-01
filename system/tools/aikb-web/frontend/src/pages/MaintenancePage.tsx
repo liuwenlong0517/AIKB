@@ -19,6 +19,38 @@ const STATUS_VIEW: Record<string, { label: string; color: string; description: s
 const DIFF_LABELS: Record<string, string> = { unchanged: '无变化', missing: '目标缺失', drifted: '受管内容将更新', conflict: '存在受管冲突', invalid: '受管内容无效' };
 const TERMINAL_CHANGE_STATUSES = ['succeeded', 'rolled_back', 'recovery_required'];
 
+/**
+ * 预览只对确实需要安装或修复的目标开放；ready 已与期望版本一致，
+ * restart_required 则表示写入已完成，两者再次请求预览都会制造无意义的 409 风险。
+ */
+function isPreviewableMaintenanceStatus(status?: MaintenanceTargetStatus): boolean {
+  return status === 'missing' || status === 'drifted';
+}
+
+/** 将平台能力、基线和目标状态映射为明确的禁用原因，避免用户只能看到“不能点”。 */
+function getPreviewAvailability({ status, baseFingerprint, inspectionSupported, previewSupported }: { status?: MaintenanceTargetStatus; baseFingerprint?: string; inspectionSupported: boolean; previewSupported: boolean }): { enabled: boolean; reason?: string } {
+  if (!inspectionSupported) return { enabled: false, reason: '当前平台不支持只读检查。' };
+  if (!previewSupported) return { enabled: false, reason: '当前平台不支持结构化预览。' };
+  if (!baseFingerprint) return { enabled: false, reason: '当前状态缺少基线指纹，暂不可预览。' };
+  switch (status) {
+    case 'missing':
+    case 'drifted':
+      return { enabled: true };
+    case 'ready':
+      return { enabled: false, reason: '当前状态已就绪，无需预览。' };
+    case 'restart_required':
+      return { enabled: false, reason: '配置已写入，请手动重启对应 Agent，无需再次预览。' };
+    case 'conflict':
+      return { enabled: false, reason: '当前目标存在冲突，无法安全预览。' };
+    case 'invalid':
+      return { enabled: false, reason: '当前目标配置无效，无法安全预览。' };
+    case 'unsupported':
+      return { enabled: false, reason: '当前目标或平台不支持结构化预览。' };
+    default:
+      return { enabled: false, reason: '当前状态不具备安全预览条件。' };
+  }
+}
+
 /** 阶段 4B 安装与修复页面：先看服务端预览，再逐目标确认并跟踪受控事务。 */
 export function MaintenancePage() {
   const targetsQuery = useMaintenanceTargets();
@@ -68,7 +100,8 @@ export function MaintenancePage() {
   /** 只提交详情中的基线指纹；页面没有正文、路径、命令或环境值输入框。 */
   const requestPreview = () => {
     const baseFingerprint = detail?.status.base_fingerprint ?? selectedSummary?.base_fingerprint;
-    if (!baseFingerprint || detail?.status.status === 'unsupported') return;
+    const currentStatus = detail?.status.status ?? selectedSummary?.status;
+    if (!baseFingerprint || !isPreviewableMaintenanceStatus(currentStatus)) return;
     setPreview(undefined); setPreviewCreatedAt(undefined); setConfirmed(false); setApplySubmitted(false); setApplyResult(undefined); resetApply();
     previewMutation.mutate({ targetId: selectedTargetId, base_fingerprint: baseFingerprint }, { onSuccess: (response) => { setPreview(response.data); setPreviewCreatedAt(Date.now()); setConfirmed(false); } });
   };
@@ -112,9 +145,9 @@ function MaintenanceDetail(props: MaintenanceDetailProps) {
   const target = detail?.target ?? fallback; if (!target) return null;
   const state = detail?.status; const currentStatus = state?.status ?? target.status; const status = getStatusView(currentStatus); const baseFingerprint = state?.base_fingerprint ?? target.base_fingerprint;
   const inspectionSupported = detail?.platform.inspection_supported ?? detail?.platform.supported ?? true; const previewSupported = detail?.platform.preview_supported ?? inspectionSupported;
-  const canPreview = Boolean(baseFingerprint) && inspectionSupported && previewSupported && !['unsupported', 'conflict', 'invalid'].includes(currentStatus ?? ''); const leaves: MaintenanceLeafData[] = detail?.leaves ?? (state?.logical_leaves ?? target.logical_leaves ?? []).map((leaf_id) => ({ leaf_id }));
+  const previewAvailability = getPreviewAvailability({ status: currentStatus, baseFingerprint: baseFingerprint ?? undefined, inspectionSupported, previewSupported }); const canPreview = previewAvailability.enabled; const leaves: MaintenanceLeafData[] = detail?.leaves ?? (state?.logical_leaves ?? target.logical_leaves ?? []).map((leaf_id) => ({ leaf_id }));
   const previewChangeId = getPreviewChangeId(preview); const canApply = Boolean(preview && previewChangeId && preview.confirmation_token && !previewExpired && applySupported && !applySubmitted);
-  return <Card title={target.title ?? TARGET_LABELS[target.target_id] ?? '维护目标'} className="maintenance-detail-card"><Space wrap className="maintenance-detail-heading"><Tag color={status.color}>{status.label}</Tag><Typography.Text type="secondary">{target.target_id}</Typography.Text>{(target.restart_required || state?.restart_required || change?.restart_required || applyResult?.restart_required) && <Tag color="blue">需要人工重启</Tag>}</Space><Typography.Paragraph type="secondary">{status.description}</Typography.Paragraph>{(change?.restart_required || applyResult?.restart_required) ? <Alert className="section-gap" type="info" showIcon message="配置已更新，需要人工重启对应 Agent" description="页面不会尝试控制或关闭用户进程；请在任务完成后手动重启对应 Agent。" /> : null}<Descriptions column={1} size="small"><Descriptions.Item label="风险级别">{target.risk_level ?? 'user_config_write'}</Descriptions.Item><Descriptions.Item label="安全说明">{target.description}</Descriptions.Item>{baseFingerprint && <Descriptions.Item label="当前基线指纹"><Typography.Text copyable>{baseFingerprint}</Typography.Text></Descriptions.Item>}</Descriptions><Typography.Title level={5} className="section-gap">受管逻辑叶子</Typography.Title><List size="small" className="maintenance-leaf-list" dataSource={leaves} locale={{ emptyText: '暂无叶子状态' }} renderItem={(leaf) => <List.Item><span className="maintenance-leaf-id">{leaf.leaf_id}</span><Space>{leaf.existence && <Tag>{leaf.existence === 'missing' ? '缺失' : '存在'}</Tag>}{leaf.progress && <Tag color="blue">{leaf.progress}</Tag>}</Space></List.Item>} /><div className="maintenance-preview-action"><Button type="primary" ghost disabled={!canPreview || previewLoading} loading={previewLoading} onClick={onPreview}>查看结构化预览</Button>{!canPreview && <Typography.Text type="secondary">{inspectionSupported ? '当前状态不具备安全预览条件。' : '当前平台不支持只读检查。'}</Typography.Text>}</div>{previewError && <Alert className="section-gap" type="error" showIcon message={getPreviewErrorTitle(previewError)} description={getPreviewErrorDescription(previewError)} />}{preview && <MaintenancePreview preview={preview} expired={previewExpired} applySupported={applySupported} confirmed={confirmed} applying={applyLoading} applySubmitted={applySubmitted} canApply={canApply} applyError={applyError} applyResult={applyResult} change={change} changeResponse={changeResponse} changeLoading={changeLoading} changeError={changeError} onConfirmChange={onConfirmChange} onApply={onApply} onRestart={onRestart} />}</Card>;
+  return <Card title={target.title ?? TARGET_LABELS[target.target_id] ?? '维护目标'} className="maintenance-detail-card"><Space wrap className="maintenance-detail-heading"><Tag color={status.color}>{status.label}</Tag><Typography.Text type="secondary">{target.target_id}</Typography.Text>{(target.restart_required || state?.restart_required || change?.restart_required || applyResult?.restart_required) && <Tag color="blue">需要人工重启</Tag>}</Space><Typography.Paragraph type="secondary">{status.description}</Typography.Paragraph>{(change?.restart_required || applyResult?.restart_required) ? <Alert className="section-gap" type="info" showIcon message="配置已更新，需要人工重启对应 Agent" description="页面不会尝试控制或关闭用户进程；请在任务完成后手动重启对应 Agent。" /> : null}<Descriptions column={1} size="small"><Descriptions.Item label="风险级别">{target.risk_level ?? 'user_config_write'}</Descriptions.Item><Descriptions.Item label="安全说明">{target.description}</Descriptions.Item>{baseFingerprint && <Descriptions.Item label="当前基线指纹"><Typography.Text copyable>{baseFingerprint}</Typography.Text></Descriptions.Item>}</Descriptions><Typography.Title level={5} className="section-gap">受管逻辑叶子</Typography.Title><List size="small" className="maintenance-leaf-list" dataSource={leaves} locale={{ emptyText: '暂无叶子状态' }} renderItem={(leaf) => <List.Item><span className="maintenance-leaf-id">{leaf.leaf_id}</span><Space>{leaf.existence && <Tag>{leaf.existence === 'missing' ? '缺失' : '存在'}</Tag>}{leaf.progress && <Tag color="blue">{leaf.progress}</Tag>}</Space></List.Item>} /><div className="maintenance-preview-action"><Button type="primary" ghost disabled={!canPreview || previewLoading} loading={previewLoading} onClick={onPreview}>查看结构化预览</Button>{!canPreview && <Typography.Text type="secondary">{previewAvailability.reason}</Typography.Text>}</div>{previewError && <Alert className="section-gap" type="error" showIcon message={getPreviewErrorTitle(previewError)} description={getPreviewErrorDescription(previewError)} />}{preview && <MaintenancePreview preview={preview} expired={previewExpired} applySupported={applySupported} confirmed={confirmed} applying={applyLoading} applySubmitted={applySubmitted} canApply={canApply} applyError={applyError} applyResult={applyResult} change={change} changeResponse={changeResponse} changeLoading={changeLoading} changeError={changeError} onConfirmChange={onConfirmChange} onApply={onApply} onRestart={onRestart} />}</Card>;
 }
 
 interface MaintenancePreviewProps { preview: MaintenancePreviewData; expired: boolean; applySupported: boolean; confirmed: boolean; applying: boolean; applySubmitted: boolean; canApply: boolean; applyError: Error | null; applyResult?: MaintenanceApplyData; change?: MaintenanceChangeData; changeResponse?: { blocked?: boolean; recovery_required?: boolean; warning?: string | null }; changeLoading: boolean; changeError: Error | null; onConfirmChange: (checked: boolean) => void; onApply: () => void; onRestart: () => void }
