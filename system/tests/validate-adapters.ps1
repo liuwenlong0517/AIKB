@@ -142,7 +142,29 @@ try {
     Set-Content -LiteralPath (Join-Path $codexHome 'config.toml') -Value 'model = "preserve-me"' -Encoding utf8NoBOM
     Set-Content -LiteralPath (Join-Path $codexHome 'hooks.json') -Value '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"preserve-codex-hook"}]}]}}' -Encoding utf8NoBOM
     Set-Content -LiteralPath (Join-Path $claudeHome 'settings.json') -Value '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"preserve-claude-hook"}]}]}}' -Encoding utf8NoBOM
-    Set-Content -LiteralPath $claudeConfig -Value '{"mcpServers":{"other":{"type":"stdio","command":"other.exe"}}}' -Encoding utf8NoBOM
+    # 覆盖 Claude Code 实际产生的两个仅大小写不同的模型统计键，验证安装器不会丢弃任一统计节点。
+    Set-Content -LiteralPath $claudeConfig -Value @'
+{
+  "mcpServers": {
+    "other": {
+      "type": "stdio",
+      "command": "other.exe"
+    }
+  },
+  "projects": {
+    "E:/CodeSpace/claude": {
+      "lastModelUsage": {
+        "deepseek-v4-flash[1m]": {
+          "inputTokens": 11
+        },
+        "deepseek-v4-flash[1M]": {
+          "inputTokens": 22
+        }
+      }
+    }
+  }
+}
+'@ -Encoding utf8NoBOM
     & (Join-Path $repoRoot 'system\adapters\install-all.ps1') -CodexHome $codexHome -ClaudeHome $claudeHome -ClaudeUserConfig $claudeConfig | Out-Null
     $codexToml = Get-Content -Raw -LiteralPath (Join-Path $codexHome 'config.toml')
     if ($codexToml -notmatch '\[mcp_servers\.aikb\]' -or $codexToml -notmatch 'AIKB_HOME' -or $codexToml -notmatch 'AIKB_KNOWLEDGE_HOME') {
@@ -151,9 +173,10 @@ try {
     if ($codexToml -notmatch 'serve --agent codex') { throw 'Codex MCP 未显式传递审计 Agent 身份' }
     & python -c "import sys,tomllib; tomllib.load(open(sys.argv[1], 'rb'))" (Join-Path $codexHome 'config.toml')
     if ($LASTEXITCODE -ne 0) { throw 'Codex MCP TOML 配置无法解析' }
-    foreach ($path in @((Join-Path $codexHome 'hooks.json'), (Join-Path $claudeHome 'settings.json'), $claudeConfig)) {
+    foreach ($path in @((Join-Path $codexHome 'hooks.json'), (Join-Path $claudeHome 'settings.json'))) {
         Get-Content -Raw -LiteralPath $path | ConvertFrom-Json | Out-Null
     }
+    Get-Content -Raw -LiteralPath $claudeConfig | ConvertFrom-Json -AsHashtable | Out-Null
     if ($codexToml -notmatch 'preserve-me') { throw 'Codex 原有配置未保留' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $codexHome 'hooks.json')) -notmatch 'preserve-codex-hook') { throw 'Codex 原有 hook 未保留' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $claudeHome 'settings.json')) -notmatch 'preserve-claude-hook') { throw 'Claude 原有 hook 未保留' }
@@ -168,9 +191,17 @@ try {
         }
     }
 
-    $claudeObject = Get-Content -Raw -LiteralPath $claudeConfig | ConvertFrom-Json
+    $claudeObject = Get-Content -Raw -LiteralPath $claudeConfig | ConvertFrom-Json -AsHashtable
+    $modelUsage = $claudeObject['projects']['E:/CodeSpace/claude']['lastModelUsage']
+    $modelUsageKeys = @($modelUsage.Keys | ForEach-Object { [string]$_ })
+    if ($modelUsageKeys.Count -ne 2 -or $modelUsageKeys -notcontains 'deepseek-v4-flash[1m]' -or $modelUsageKeys -notcontains 'deepseek-v4-flash[1M]') {
+        throw 'Claude 原有大小写不同的模型统计键未完整保留'
+    }
+    if ($modelUsage['deepseek-v4-flash[1m]']['inputTokens'] -ne 11 -or $modelUsage['deepseek-v4-flash[1M]']['inputTokens'] -ne 22) {
+        throw 'Claude 原有大小写不同的模型统计值发生变化'
+    }
     # 从生成配置实际启动 MCP，避免只验证文本而漏掉命令行或环境传递错误。
-    $server = $claudeObject.mcpServers.aikb
+    $server = $claudeObject['mcpServers']['aikb']
     if (($server.args -join ' ') -notmatch 'serve --agent claude-code') {
         throw 'Claude Code MCP 未显式传递审计 Agent 身份'
     }

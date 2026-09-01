@@ -7,29 +7,102 @@ $script:CodexMarkerStart = '# >>> AIKB managed MCP >>>'
 $script:CodexMarkerEnd = '# <<< AIKB managed MCP <<<'
 $script:HookScriptName = 'aikb-hook.ps1'
 
-function Add-ObjectProperty {
-    # 对 PSCustomObject 执行新增或覆盖，统一处理 ConvertFrom-Json 的动态属性。
-    param([object]$Object, [string]$Name, [object]$Value)
-    $property = $Object.PSObject.Properties[$Name]
-    if ($null -eq $property) {
-        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+function New-JsonObject {
+    # 使用有序字典作为新建 JSON 对象，既保持原有字段顺序，也允许后续按原始键名精确更新。
+    return [ordered]@{}
+}
+
+function Find-JsonPropertyName {
+    # 按“精确匹配优先、忽略大小写兜底”的规则定位字典键。
+    # 只要同一结构字段出现多个大小写变体，就拒绝静默选取其中一个，避免读写落到错误节点。
+    param([System.Collections.IDictionary]$Object, [string]$Name)
+    $matches = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $Object.Keys) {
+        $keyText = [string]$key
+        if ($keyText.Equals($Name, [StringComparison]::Ordinal)) {
+            $matches.Add($keyText)
+        }
+        elseif ($keyText.Equals($Name, [StringComparison]::OrdinalIgnoreCase)) {
+            $matches.Add($keyText)
+        }
+    }
+    if ($matches.Count -gt 1) {
+        throw "JSON 对象包含多个仅大小写不同的结构键 '$Name'：$($matches -join ', ')"
+    }
+    if ($matches.Count -eq 1) {
+        return $matches[0]
+    }
+    return $null
+}
+
+function Set-JsonProperty {
+    # 按结构字段名新增或更新字典项；更新时保留用户文件中已有的键大小写。
+    param([System.Collections.IDictionary]$Object, [string]$Name, [object]$Value)
+    $propertyName = Find-JsonPropertyName -Object $Object -Name $Name
+    if ($null -eq $propertyName) {
+        $Object.Add($Name, $Value)
     }
     else {
-        $property.Value = $Value
+        $Object[$propertyName] = $Value
     }
 }
 
+function Remove-JsonProperty {
+    # 按与读取相同的大小写规则移除一个字典项；不存在时保持幂等。
+    param([System.Collections.IDictionary]$Object, [string]$Name)
+    $propertyName = Find-JsonPropertyName -Object $Object -Name $Name
+    if ($null -ne $propertyName) {
+        $Object.Remove($propertyName)
+    }
+}
+
+function ConvertTo-JsonPreservingKeys {
+    # 递归序列化 JSON 对象，逐项写出字典键，避免 ConvertTo-Json 将仅大小写不同的键折叠。
+    # 标量仍交给 PowerShell 负责转义、数字格式和布尔/null 表示；对象/数组由本函数递归处理。
+    param([object]$Value)
+    if ($null -eq $Value) {
+        return 'null'
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $members = [System.Collections.Generic.List[string]]::new()
+        foreach ($key in $Value.Keys) {
+            $encodedKey = ConvertTo-JsonPreservingKeys -Value ([string]$key)
+            $encodedValue = ConvertTo-JsonPreservingKeys -Value $Value[$key]
+            $members.Add($encodedKey + ':' + $encodedValue)
+        }
+        return '{' + ($members -join ',') + '}'
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        $items = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in $Value) {
+            $items.Add((ConvertTo-JsonPreservingKeys -Value $item))
+        }
+        return '[' + ($items -join ',') + ']'
+    }
+    return [string](ConvertTo-Json -InputObject $Value -Compress -Depth 10)
+}
+
+function Add-ObjectProperty {
+    # 对 JSON 字典执行新增或覆盖；保留旧函数名以减少调用方变化，但不再依赖 PSCustomObject 属性。
+    param([System.Collections.IDictionary]$Object, [string]$Name, [object]$Value)
+    Set-JsonProperty -Object $Object -Name $Name -Value $Value
+}
+
 function Read-JsonObject {
-    # 缺失或空文件按空对象处理；已有内容必须是合法 JSON 才能继续修改。
+    # 缺失或空文件按空对象处理；已有内容以保留大小写键的字典解析，并要求根节点为对象。
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return [pscustomobject]@{}
+        return New-JsonObject
     }
     $text = Get-Content -Raw -LiteralPath $Path
     if ([string]::IsNullOrWhiteSpace($text)) {
-        return [pscustomobject]@{}
+        return New-JsonObject
     }
-    return $text | ConvertFrom-Json
+    $value = $text | ConvertFrom-Json -AsHashtable
+    if ($value -isnot [System.Collections.IDictionary]) {
+        throw "JSON 配置根节点必须是对象：$Path"
+    }
+    return $value
 }
 
 function Backup-ConfigFile {
@@ -59,37 +132,37 @@ function Write-TextAtomic {
 }
 
 function Write-JsonAtomic {
-    # 使用固定深度序列化 JSON，并复用文本原子写入和备份策略。
+    # 使用保留重复大小写键的序列化，并复用文本原子写入和备份策略。
     param([string]$Path, [object]$Value)
-    $json = $Value | ConvertTo-Json -Depth 30
+    $json = ConvertTo-JsonPreservingKeys -Value $Value
     Write-TextAtomic -Path $Path -Content ($json + [Environment]::NewLine)
 }
 
 function Remove-AikbHookHandlers {
     # 删除命令中引用 aikb-hook.ps1 的组，同时保留同组内的非 AIKB handlers。
     param([object]$Hooks, [string]$Event)
-    $property = $Hooks.PSObject.Properties[$Event]
-    if ($null -eq $property) {
+    $propertyName = Find-JsonPropertyName -Object $Hooks -Name $Event
+    if ($null -eq $propertyName) {
         return
     }
     $keptGroups = [System.Collections.Generic.List[object]]::new()
-    foreach ($group in @($property.Value)) {
+    foreach ($group in @($Hooks[$propertyName])) {
         if ($null -eq $group) { continue }
-        $handlersProperty = $group.PSObject.Properties['hooks']
-        if ($null -eq $handlersProperty) {
+        $handlersPropertyName = Find-JsonPropertyName -Object $group -Name 'hooks'
+        if ($null -eq $handlersPropertyName) {
             $keptGroups.Add($group)
             continue
         }
-        $keptHandlers = @($handlersProperty.Value | Where-Object {
-            $commandProperty = $_.PSObject.Properties['command']
-            $null -eq $commandProperty -or [string]$commandProperty.Value -notmatch [regex]::Escape($script:HookScriptName)
+        $keptHandlers = @($group[$handlersPropertyName] | Where-Object {
+            $commandPropertyName = Find-JsonPropertyName -Object $_ -Name 'command'
+            $null -eq $commandPropertyName -or [string]$_[$commandPropertyName] -notmatch [regex]::Escape($script:HookScriptName)
         })
         if ($keptHandlers.Count -gt 0) {
-            $handlersProperty.Value = [object[]]$keptHandlers
+            $group[$handlersPropertyName] = [object[]]$keptHandlers
             $keptGroups.Add($group)
         }
     }
-    $property.Value = [object[]]$keptGroups.ToArray()
+    $Hooks[$propertyName] = [object[]]$keptGroups.ToArray()
 }
 
 function Add-AikbHookHandler {
@@ -103,36 +176,44 @@ function Add-AikbHookHandler {
         [string]$Shell = ''
     )
     Remove-AikbHookHandlers -Hooks $Hooks -Event $Event
-    $handler = [pscustomobject]@{ type = 'command'; command = $Command; timeout = $Timeout }
+    $handler = New-JsonObject
+    Set-JsonProperty -Object $handler -Name 'type' -Value 'command'
+    Set-JsonProperty -Object $handler -Name 'command' -Value $Command
+    Set-JsonProperty -Object $handler -Name 'timeout' -Value $Timeout
     if ($Shell) {
-        Add-ObjectProperty -Object $handler -Name 'shell' -Value $Shell
+        Set-JsonProperty -Object $handler -Name 'shell' -Value $Shell
     }
     $group = if ($Matcher) {
-        [pscustomobject]@{ matcher = $Matcher; hooks = [object[]]@($handler) }
+        $newGroup = New-JsonObject
+        Set-JsonProperty -Object $newGroup -Name 'matcher' -Value $Matcher
+        Set-JsonProperty -Object $newGroup -Name 'hooks' -Value ([object[]]@($handler))
+        $newGroup
     }
     else {
-        [pscustomobject]@{ hooks = [object[]]@($handler) }
+        $newGroup = New-JsonObject
+        Set-JsonProperty -Object $newGroup -Name 'hooks' -Value ([object[]]@($handler))
+        $newGroup
     }
-    $property = $Hooks.PSObject.Properties[$Event]
     $groups = [System.Collections.Generic.List[object]]::new()
-    if ($null -ne $property) {
-        foreach ($existingGroup in @($property.Value)) { $groups.Add($existingGroup) }
+    $propertyName = Find-JsonPropertyName -Object $Hooks -Name $Event
+    if ($null -ne $propertyName) {
+        foreach ($existingGroup in @($Hooks[$propertyName])) { $groups.Add($existingGroup) }
     }
     $groups.Add($group)
-    Add-ObjectProperty -Object $Hooks -Name $Event -Value ([object[]]$groups.ToArray())
+    Set-JsonProperty -Object $Hooks -Name $Event -Value ([object[]]$groups.ToArray())
 }
 
 function Update-HooksJson {
     # 根据 Agent 生成对应 shell 语法的生命周期 hooks，并保留用户其他 hooks。
     param([string]$Path, [string]$Agent)
     $config = Read-JsonObject -Path $Path
-    $hooksProperty = $config.PSObject.Properties['hooks']
-    if ($null -eq $hooksProperty) {
-        $hooks = [pscustomobject]@{}
-        Add-ObjectProperty -Object $config -Name 'hooks' -Value $hooks
+    $hooksPropertyName = Find-JsonPropertyName -Object $config -Name 'hooks'
+    if ($null -eq $hooksPropertyName) {
+        $hooks = New-JsonObject
+        Set-JsonProperty -Object $config -Name 'hooks' -Value $hooks
     }
     else {
-        $hooks = $hooksProperty.Value
+        $hooks = $config[$hooksPropertyName]
     }
     $hookCommand = "& (Join-Path `$env:AIKB_HOME 'system/adapters/shared/aikb-hook.ps1') -Agent $Agent -Event"
     if ($Agent -eq 'claude-code') {
@@ -156,10 +237,10 @@ function Remove-HooksJson {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $config = Read-JsonObject -Path $Path
-    $hooksProperty = $config.PSObject.Properties['hooks']
-    if ($null -eq $hooksProperty) { return }
+    $hooksPropertyName = Find-JsonPropertyName -Object $config -Name 'hooks'
+    if ($null -eq $hooksPropertyName) { return }
     foreach ($event in @('SessionStart', 'PreCompact', 'Stop', 'SessionEnd')) {
-        Remove-AikbHookHandlers -Hooks $hooksProperty.Value -Event $event
+        Remove-AikbHookHandlers -Hooks $config[$hooksPropertyName] -Event $event
     }
     Write-JsonAtomic -Path $Path -Value $config
 }
@@ -205,30 +286,32 @@ function Update-ClaudeMcp {
     # 写入带 AIKB_MANAGED 标记的 Claude MCP 对象，冲突对象不强行覆盖。
     param([string]$Path)
     $config = Read-JsonObject -Path $Path
-    $serversProperty = $config.PSObject.Properties['mcpServers']
-    if ($null -eq $serversProperty) {
-        $servers = [pscustomobject]@{}
-        Add-ObjectProperty -Object $config -Name 'mcpServers' -Value $servers
+    $serversPropertyName = Find-JsonPropertyName -Object $config -Name 'mcpServers'
+    if ($null -eq $serversPropertyName) {
+        $servers = New-JsonObject
+        Set-JsonProperty -Object $config -Name 'mcpServers' -Value $servers
     }
     else {
-        $servers = $serversProperty.Value
+        $servers = $config[$serversPropertyName]
     }
-    $existingAikb = $servers.PSObject.Properties['aikb']
-    if ($null -ne $existingAikb) {
-        $existingEnv = $existingAikb.Value.PSObject.Properties['env']
-        $managedMarker = if ($null -ne $existingEnv) { $existingEnv.Value.PSObject.Properties['AIKB_MANAGED'] } else { $null }
-        if ($null -eq $managedMarker -or [string]$managedMarker.Value -ne '1') {
+    $aikbPropertyName = Find-JsonPropertyName -Object $servers -Name 'aikb'
+    if ($null -ne $aikbPropertyName) {
+        $aikb = $servers[$aikbPropertyName]
+        $envPropertyName = Find-JsonPropertyName -Object $aikb -Name 'env'
+        $managedMarkerName = if ($null -ne $envPropertyName) { Find-JsonPropertyName -Object $aikb[$envPropertyName] -Name 'AIKB_MANAGED' } else { $null }
+        if ($null -eq $managedMarkerName -or [string]$aikb[$envPropertyName][$managedMarkerName] -ne '1') {
             throw "Claude Code 已存在非 AIKB 安装器管理的 mcpServers.aikb：$Path"
         }
     }
     $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve --agent claude-code"
-    $server = [pscustomobject]@{
-        type = 'stdio'
-        command = 'pwsh'
-        args = [object[]]@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $launcherCommand)
-        env = [pscustomobject]@{ AIKB_MANAGED = '1' }
-    }
-    Add-ObjectProperty -Object $servers -Name 'aikb' -Value $server
+    $server = New-JsonObject
+    Set-JsonProperty -Object $server -Name 'type' -Value 'stdio'
+    Set-JsonProperty -Object $server -Name 'command' -Value 'pwsh'
+    Set-JsonProperty -Object $server -Name 'args' -Value ([object[]]@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $launcherCommand))
+    $serverEnvironment = New-JsonObject
+    Set-JsonProperty -Object $serverEnvironment -Name 'AIKB_MANAGED' -Value '1'
+    Set-JsonProperty -Object $server -Name 'env' -Value $serverEnvironment
+    Set-JsonProperty -Object $servers -Name 'aikb' -Value $server
     Write-JsonAtomic -Path $Path -Value $config
 }
 
@@ -237,14 +320,16 @@ function Remove-ClaudeMcp {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $config = Read-JsonObject -Path $Path
-    $serversProperty = $config.PSObject.Properties['mcpServers']
-    if ($null -ne $serversProperty) {
-        $aikbProperty = $serversProperty.Value.PSObject.Properties['aikb']
-        if ($null -ne $aikbProperty) {
-            $envProperty = $aikbProperty.Value.PSObject.Properties['env']
-            $managedMarker = if ($null -ne $envProperty) { $envProperty.Value.PSObject.Properties['AIKB_MANAGED'] } else { $null }
-            if ($null -ne $managedMarker -and [string]$managedMarker.Value -eq '1') {
-                $serversProperty.Value.PSObject.Properties.Remove('aikb')
+    $serversPropertyName = Find-JsonPropertyName -Object $config -Name 'mcpServers'
+    if ($null -ne $serversPropertyName) {
+        $servers = $config[$serversPropertyName]
+        $aikbPropertyName = Find-JsonPropertyName -Object $servers -Name 'aikb'
+        if ($null -ne $aikbPropertyName) {
+            $aikb = $servers[$aikbPropertyName]
+            $envPropertyName = Find-JsonPropertyName -Object $aikb -Name 'env'
+            $managedMarkerName = if ($null -ne $envPropertyName) { Find-JsonPropertyName -Object $aikb[$envPropertyName] -Name 'AIKB_MANAGED' } else { $null }
+            if ($null -ne $managedMarkerName -and [string]$aikb[$envPropertyName][$managedMarkerName] -eq '1') {
+                Remove-JsonProperty -Object $servers -Name 'aikb'
                 Write-JsonAtomic -Path $Path -Value $config
             }
         }
