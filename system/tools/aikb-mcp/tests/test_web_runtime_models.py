@@ -102,6 +102,17 @@ class WebRuntimeModelTests(unittest.TestCase):
         self.assertEqual(item["ownership_mode"], "session-bound")
         self.assertEqual(item["participant_count"], 0)
 
+    def test_web_projects_complete_session_id_with_case_and_punctuation(self) -> None:
+        """只读 Web 投影保留 160 字符内完整会话值，不回退到旧 120 上限。"""
+        session_id = "Case/Session?" + "x" * (160 - len("Case/Session?"))
+        created = self.store.checkpoint(
+            {"project_path": str(self.root), "goal": "完整 Web 会话", "agent": "codex", "session_id": session_id}
+        )
+        item = self.store.web_work_state(created["work_id"])["item"]
+        self.assertEqual(item["owner_session_id"], session_id)
+        self.assertEqual(item["author_session_id"], session_id)
+        self.assertEqual(item["session_id"], session_id)
+
     def test_legacy_work_has_no_guessed_owner_and_latest_author_is_explicit(self) -> None:
         """旧 v1 文档保留兼容作者字段，但 owner 必须为空且标记未认领。"""
         work_file = next((self.settings.workspace_root / "active").rglob("work.md"))

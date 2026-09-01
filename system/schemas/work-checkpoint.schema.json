@@ -10,15 +10,15 @@
     "status": {"enum": ["planned", "active", "blocked", "completed", "abandoned", "superseded"]},
     "work_schema_version": {"type": "string", "enum": ["1", "2"]},
     "agent": {"type": "string", "description": "开放的 Agent 标识，不使用封闭枚举"},
-    "session_id": {"type": "string"},
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"},
     "role": {"type": "string"},
     "author_agent": {"type": "string"},
-    "author_session_id": {"type": "string"},
+    "author_session_id": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"},
     "author_role": {"type": "string"},
     "owner_agent": {"type": "string"},
-    "owner_session_id": {"type": "string"},
+    "owner_session_id": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"},
     "ownership_mode": {"type": "string", "enum": ["session-bound", "shared", "handed-off", "legacy-unbound"]},
-    "ownership_binding": {"type": "string", "enum": ["", "agent+declared-session"]},
+    "ownership_binding": {"type": "string", "enum": ["", "agent+declared-session", "agent+exact-session"]},
     "participants": {
       "type": "array",
       "maxItems": 16,
@@ -27,7 +27,7 @@
         "required": ["agent", "session_id", "role"],
         "properties": {
           "agent": {"type": "string"},
-          "session_id": {"type": "string"},
+          "session_id": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"},
           "role": {"type": "string"},
           "authorized_at": {"type": "string"}
         },

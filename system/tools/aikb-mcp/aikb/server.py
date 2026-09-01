@@ -85,7 +85,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "project_path": {"type": "string"}, "work_id": {"type": "string"}, "goal": {"type": "string"},
                 "status": {"type": "string", "enum": ["planned", "active", "blocked"], "default": "active"},
-                "agent": {"type": "string"}, "session_id": {"type": "string"}, "role": {"type": "string"},
+                "agent": {"type": "string"}, "session_id": {"type": "string", "minLength": 1, "maxLength": 160}, "role": {"type": "string"},
                 "decisions": {"type": "array", "items": {"type": "string"}},
                 "verified_facts": {"type": "array", "items": {"type": "string"}},
                 "current_state": {"type": "string"}, "completed": {"type": "array", "items": {"type": "string"}},
@@ -121,7 +121,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "work_id": {"type": "string"},
                 "status": {"type": "string", "enum": ["completed", "abandoned", "superseded"]},
-                "agent": {"type": "string"}, "session_id": {"type": "string"}, "note": {"type": "string"},
+                "agent": {"type": "string"}, "session_id": {"type": "string", "minLength": 1, "maxLength": 160}, "note": {"type": "string"},
             },
             "required": ["work_id", "status", "agent", "session_id"],
             "additionalProperties": False,
@@ -130,10 +130,10 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "claim_work_state",
-        "description": "显式认领无 owner 的旧活动任务。",
+        "description": "显式认领旧活动任务。",
         "inputSchema": {
             "type": "object",
-            "properties": {"work_id": {"type": "string"}, "agent": {"type": "string"}, "session_id": {"type": "string"}},
+            "properties": {"work_id": {"type": "string"}, "agent": {"type": "string"}, "session_id": {"type": "string", "minLength": 1, "maxLength": 160}, "upgrade_legacy_session": {"type": "boolean", "default": False}},
             "required": ["work_id", "agent", "session_id"],
             "additionalProperties": False,
         },
@@ -145,8 +145,8 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "work_id": {"type": "string"}, "owner_agent": {"type": "string"}, "owner_session_id": {"type": "string"},
-                "participant_agent": {"type": "string"}, "participant_session_id": {"type": "string"}, "role": {"type": "string"},
+                "work_id": {"type": "string"}, "owner_agent": {"type": "string"}, "owner_session_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                "participant_agent": {"type": "string"}, "participant_session_id": {"type": "string", "minLength": 1, "maxLength": 160}, "role": {"type": "string"},
                 "mode": {"type": "string", "enum": ["shared", "handed-off", "revoke"], "default": "shared"},
             },
             "required": ["work_id", "owner_agent", "owner_session_id", "participant_agent", "participant_session_id"],
@@ -285,6 +285,7 @@ class MCPServer:
                     str(arguments.get("work_id") or ""),
                     agent=str(arguments.get("agent") or ""),
                     session_id=str(arguments.get("session_id") or ""),
+                    upgrade_legacy_session=bool(arguments.get("upgrade_legacy_session", False)),
                 )
             elif name == "authorize_work_participant":
                 mode = str(arguments.get("mode") or "shared")

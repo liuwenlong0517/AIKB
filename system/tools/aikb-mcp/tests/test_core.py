@@ -613,6 +613,100 @@ class WorkStateTests(unittest.TestCase):
         self.assertEqual(final_checkpoint.metadata["status"], "completed")
         self.assertEqual(self.store.get(project_path=str(self.fixture.root))["count"], 0)
 
+    def test_session_id_roundtrip_validation_and_safe_checkpoint_filename(self) -> None:
+        """会话 ID 保留原值；控制字符/超长拒绝，检查点文件名不携带原文。"""
+        session_id = "AbC!session/42?" + "x" * 20
+        created = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "会话原值", "agent": "codex", "session_id": session_id}
+        )
+        source = parse_markdown(Path(created["path"]))
+        assert source is not None
+        self.assertEqual(source.metadata["session_id"], session_id)
+        self.assertEqual(source.metadata["owner_session_id"], session_id)
+        self.assertEqual(source.metadata["ownership_binding"], "agent+exact-session")
+        self.assertNotIn(session_id, Path(created["path"]).parent.joinpath("checkpoints", f"{created['checkpoint_id']}.md").name)
+        self.assertRegex(created["checkpoint_id"], r"^[a-z0-9-]+$")
+        for invalid in ("bad\nline", "bad\x00value", "x" * 161):
+            with self.assertRaises((PermissionError, ValueError)):
+                self.store.checkpoint(
+                    {"project_path": str(self.fixture.root), "goal": "非法会话", "agent": "codex", "session_id": invalid}
+                )
+
+    def test_exact_session_collision_cannot_cross_authorize_or_hook(self) -> None:
+        """相同旧式前缀的两个完整会话不能互相越权。"""
+        prefix = "a" * 32
+        first = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "精确碰撞", "agent": "codex", "session_id": prefix + "-first"}
+        )
+        with self.assertRaises(PermissionError):
+            self.store.checkpoint(
+                {"project_path": str(self.fixture.root), "work_id": first["work_id"], "agent": "codex", "session_id": prefix + "-second"}
+            )
+        self.assertFalse(WorkStateStore.is_authorized_actor(
+            parse_markdown(Path(first["path"])).metadata, "codex", prefix + "-second"
+        ))
+        hook = handle_hook(
+            "codex", "session-start", {"cwd": str(self.fixture.root), "session_id": prefix + "-second"}, self.fixture.settings
+        )
+        self.assertNotIn("精确碰撞", json.dumps(hook, ensure_ascii=False))
+
+    def test_invalid_hook_session_is_not_echoed_or_authorized(self) -> None:
+        """非法 Hook 会话安全降级，不回显控制字符也不触发 Stop 门禁。"""
+        self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "非法 Hook 会话", "agent": "codex", "session_id": "valid-session"}
+        )
+        invalid = "injected\nline"
+        started = handle_hook(
+            "codex", "session-start", {"cwd": str(self.fixture.root), "session_id": invalid}, self.fixture.settings
+        )
+        encoded = json.dumps(started, ensure_ascii=False)
+        self.assertNotIn(invalid, encoded)
+        self.assertIn("不符合精确绑定约束", encoded)
+        stopped = handle_hook(
+            "codex", "stop", {"cwd": str(self.fixture.root), "session_id": "x" * 161}, self.fixture.settings
+        )
+        self.assertNotIn("decision", stopped)
+
+    def test_legacy_declared_session_requires_explicit_upgrade_and_rejects_participant_migration(self) -> None:
+        """旧 32 字符归属只能由明确升级迁移；存在 participant 时 fail closed。"""
+        full_session = "B" * 32 + "-legacy-tail"
+        created = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "旧归属升级", "agent": "codex", "session_id": full_session}
+        )
+        work_path = Path(created["path"])
+        document = parse_markdown(work_path)
+        assert document is not None
+        metadata = dict(document.metadata)
+        metadata.update({"owner_session_id": "b" * 32, "ownership_binding": "agent+declared-session"})
+        work_path.write_text(render_frontmatter(metadata) + "\n\n" + document.body, encoding="utf-8")
+        self.store.rebuild_index()
+        with self.assertRaises(PermissionError):
+            self.store.claim(created["work_id"], agent="codex", session_id=full_session)
+        upgraded = self.store.claim(
+            created["work_id"], agent="codex", session_id=full_session, upgrade_legacy_session=True
+        )
+        self.assertEqual(upgraded["owner_session_id"], full_session)
+        self.assertEqual(self.store.get(work_id=created["work_id"])["items"][0]["ownership_binding"], "agent+exact-session")
+        with self.assertRaises(PermissionError):
+            self.store.claim(created["work_id"], agent="codex", session_id=full_session, upgrade_legacy_session=True)
+
+        participant = self.store.checkpoint(
+            {"project_path": str(self.fixture.root), "goal": "旧参与者升级", "agent": "codex", "session_id": full_session}
+        )
+        participant_path = Path(participant["path"])
+        participant_doc = parse_markdown(participant_path)
+        assert participant_doc is not None
+        participant_metadata = dict(participant_doc.metadata)
+        participant_metadata.update({
+            "owner_session_id": "b" * 32,
+            "ownership_binding": "agent+declared-session",
+            "participants": [{"agent": "claude-code", "session_id": "claude-old", "role": "participant"}],
+        })
+        participant_path.write_text(render_frontmatter(participant_metadata) + "\n\n" + participant_doc.body, encoding="utf-8")
+        self.store.rebuild_index()
+        with self.assertRaisesRegex(PermissionError, "participant"):
+            self.store.claim(participant["work_id"], agent="codex", session_id=full_session, upgrade_legacy_session=True)
+
     def test_explicit_work_id_cannot_reuse_archived_task(self) -> None:
         """确认显式工作 ID 一旦归档就不能重新创建活动任务。"""
         created = self.store.checkpoint(
@@ -1032,12 +1126,37 @@ class MCPTests(unittest.TestCase):
         self.assertTrue(response["result"]["isError"])
         self.assertIn("不一致", response["result"]["content"][0]["text"])
 
+    def test_claim_tool_explicitly_upgrades_legacy_session_binding(self) -> None:
+        """真实 tools/call 只有携带升级开关时才把旧截断 owner 迁移为完整会话。"""
+        full_session = "A" * 32 + "-exact-tail"
+        created = self.server.work.checkpoint({
+            "project_path": str(self.fixture.root), "goal": "MCP 迁移", "agent": "codex", "session_id": full_session,
+        })
+        work_path = Path(created["path"])
+        document = parse_markdown(work_path)
+        assert document is not None
+        metadata = dict(document.metadata)
+        metadata.update({"owner_session_id": "a" * 32, "ownership_binding": "agent+declared-session"})
+        work_path.write_text(render_frontmatter(metadata) + "\n\n" + document.body, encoding="utf-8")
+        self.server.work.rebuild_index()
+        response = self.server.handle({
+            "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+            "params": {"name": "claim_work_state", "arguments": {
+                "work_id": created["work_id"], "agent": "codex", "session_id": full_session,
+                "upgrade_legacy_session": True,
+            }},
+        })
+        self.assertFalse(response["result"]["isError"], response)
+        payload = json.loads(response["result"]["content"][0]["text"])
+        self.assertEqual(payload["owner_session_id"], full_session)
+        self.assertEqual(payload["ownership_binding"], "agent+exact-session")
+
     def test_client_visible_budget(self) -> None:
         """确认服务说明和工具声明不会超过客户端上下文预算。"""
         self.assertLessEqual(len(SERVER_INSTRUCTIONS), 512)
         # Working State v2 增加所有权工具；保留每个工具的安全 annotations 后将
         # 客户端声明预算提升到 5 KiB，仍远小于常规 MCP 上下文预算。
-        self.assertLessEqual(len(json.dumps(TOOLS, ensure_ascii=False, separators=(",", ":"))), 5000)
+        self.assertLessEqual(len(json.dumps(TOOLS, ensure_ascii=False, separators=(",", ":"))), 5120)
         self.assertEqual([tool["name"] for tool in TOOLS], [
             "search_knowledge", "review_knowledge", "read_knowledge", "get_work_state", "checkpoint_work_state",
             "close_work_state", "claim_work_state", "authorize_work_participant",
@@ -1047,6 +1166,9 @@ class MCPTests(unittest.TestCase):
         self.assertIn("自行核对项目", work_tool["description"])
         ownership_tool = next(tool for tool in TOOLS if tool["name"] == "authorize_work_participant")
         self.assertIn("revoke", ownership_tool["inputSchema"]["properties"]["mode"]["enum"])
+        claim_tool = next(tool for tool in TOOLS if tool["name"] == "claim_work_state")
+        self.assertIn("upgrade_legacy_session", claim_tool["inputSchema"]["properties"])
+        self.assertEqual(claim_tool["inputSchema"]["properties"]["session_id"]["maxLength"], 160)
 
 
 if __name__ == "__main__":

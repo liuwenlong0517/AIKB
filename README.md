@@ -233,7 +233,7 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 定义本机检查点的核心元数据：任务 ID、项目 ID、状态、Agent、Session、角色、更新时间、检查点 ID、项目路径和工作区是否有未提交变化。
 
-`owner_agent`/`owner_session_id` 是不可由普通检查点覆盖的任务归属；每次检查点另记录 `author_agent`/`author_session_id`/`role`。跨 Agent 只有 owner 显式登记 `shared` 或 `handed-off` participant 后才能续写；`revoke` 可撤销精确会话。`agent` 仍是开放字符串而不是封闭枚举。缺少 owner 的旧任务标记为 `legacy-unbound`，必须先显式 claim。会话 ID 由 Hook 提供，是技术关联标签而非密码学凭据。
+`owner_agent`/`owner_session_id` 是不可由普通检查点覆盖的任务归属；每次检查点另记录 `author_agent`/`author_session_id`/`role`。跨 Agent 只有 owner 显式登记 `shared` 或 `handed-off` participant 后才能续写；`revoke` 可撤销精确会话。`agent` 仍是开放字符串而不是封闭枚举。缺少 owner 的旧任务标记为 `legacy-unbound`，必须先显式 claim。新任务使用 `ownership_binding=agent+exact-session`；会话 ID 由 Hook 提供，按原值保留大小写和合法标点，长度限制为 1 至 160，控制字符拒绝，是技术关联标签而非密码学凭据。旧 `agent+declared-session` 只通过显式 `upgrade_legacy_session=true` 升级，存在 participant 时拒绝迁移。
 
 任务状态分为：
 

@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,12 @@ ALLOWED_WORK_STATUS = {"planned", "active", "blocked", "completed", "abandoned",
 OPEN_STATUS = {"planned", "active", "blocked"}
 OWNERSHIP_MODES = {"session-bound", "shared", "handed-off", "legacy-unbound"}
 MAX_PARTICIPANTS = 16
+# Hook/MCP 的会话标识是关联凭据而非路径名：保留原始大小写和合法标点，
+# 但设置与审计 schema 相同的明确边界，避免无限输入进入 Markdown、SQLite 或 Web。
+SESSION_ID_MAX_LENGTH = 160
+LEGACY_SESSION_ID_MAX_LENGTH = 32
+SESSION_BINDING_DECLARED = "agent+declared-session"
+SESSION_BINDING_EXACT = "agent+exact-session"
 SECRET_PATTERN = re.compile(
     r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|private[_-]?key)\s*[:=]\s*([^\s,;]+)"
 )
@@ -35,6 +42,7 @@ TOKEN_VALUE_PATTERN = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0
 # 只需要有限摘要；将上限集中在共享核心，避免各个 HTTP 路由各自裁剪出不同契约。
 WEB_TEXT_LIMIT = 12000
 WEB_CHECKPOINT_TEXT_LIMIT = 4000
+WEB_SESSION_ID_LIMIT = SESSION_ID_MAX_LENGTH
 WEB_LIST_LIMIT = 50
 WEB_MAX_PAGE = 100000
 WEB_CHECKPOINT_DETAIL_FIELDS = ("goal", "current_state", "next_steps", "blockers", "verification", "changed_files")
@@ -223,23 +231,67 @@ class WorkStateStore:
 
     @staticmethod
     def _actor(agent: str, session_id: str) -> tuple[str, str]:
-        """规范化写入者身份；所有写入操作都要求显式、非空的会话标识。"""
+        """规范化 Agent 并验证原始会话标识；会话 ID 不得 slug 化或静默截断。
+
+        Agent 仍使用既有安全 slug，便于稳定索引；session_id 则是 Hook/MCP
+        提供的精确关联值，必须原样保存和比较。空白可以是合法标点的一部分，
+        但纯空白不能作为会话身份；控制字符和过长值直接拒绝，避免 Markdown
+        front matter、日志行或 Web 投影边界被绕过。
+        """
         normalized_agent = _safe_slug(str(agent or ""), "")
-        normalized_session = _safe_slug(str(session_id or ""), "")[:32]
         if not normalized_agent or normalized_agent == "unknown":
             raise PermissionError("Working State 写入必须绑定可信 Agent（MCP 服务需使用 serve --agent）")
-        if not normalized_session:
-            raise PermissionError("Working State 写入必须提供 session_id")
+        normalized_session = WorkStateStore._validate_session_id(session_id)
         return normalized_agent, normalized_session
+
+    @staticmethod
+    def _validate_session_id(value: Any) -> str:
+        """验证并返回未改写的 session_id，供所有归属比较复用。"""
+        if not isinstance(value, str):
+            raise ValueError("session_id 必须是字符串")
+        if not value or not value.strip():
+            raise PermissionError("Working State 写入必须提供 session_id")
+        if len(value) > SESSION_ID_MAX_LENGTH:
+            raise ValueError(f"session_id 长度不得超过 {SESSION_ID_MAX_LENGTH} 个字符")
+        if any(unicodedata.category(char) == "Cc" for char in value):
+            raise ValueError("session_id 不得包含 NUL、换行或其他控制字符")
+        return value
+
+    @staticmethod
+    def _legacy_session_id(value: str) -> str:
+        """重现 v2 的 32 字符 slug，仅用于显式升级旧 declared 绑定。"""
+        return _safe_slug(value, "")[:LEGACY_SESSION_ID_MAX_LENGTH]
+
+    @staticmethod
+    def _session_matches(binding: str, stored: str, presented: str) -> bool:
+        """按绑定契约比较会话；旧 declared 仅保留兼容，不影响 exact 隔离。"""
+        if binding == SESSION_BINDING_EXACT:
+            return stored == presented
+        if binding == SESSION_BINDING_DECLARED:
+            return stored == WorkStateStore._legacy_session_id(presented)
+        return False
 
     @staticmethod
     def _ownership(data: dict[str, Any] | None) -> dict[str, Any]:
         """读取 v2 所有权；缺少持久 owner 的旧文档一律视为未认领。"""
         source = data or {}
         owner_agent = _safe_slug(str(source.get("owner_agent") or ""), "")
-        owner_session = _safe_slug(str(source.get("owner_session_id") or ""), "")[:32]
+        owner_session = str(source.get("owner_session_id") or "")
         mode = str(source.get("ownership_mode") or "").strip()
-        if mode not in OWNERSHIP_MODES or mode == "legacy-unbound" or not owner_agent or not owner_session:
+        binding = str(source.get("ownership_binding") or "").strip()
+        # v2 旧文档可能没有显式 binding；其 session 曾经由 declared 算法写入，
+        # 因而按旧语义读，不把不明确的数据伪装成精确绑定。
+        if owner_agent and owner_session and mode in {"session-bound", "shared", "handed-off"} and not binding:
+            binding = SESSION_BINDING_DECLARED
+        if binding not in {SESSION_BINDING_DECLARED, SESSION_BINDING_EXACT}:
+            binding = ""
+        if owner_session and (
+            not owner_session.strip()
+            or len(owner_session) > SESSION_ID_MAX_LENGTH
+            or any(unicodedata.category(char) == "Cc" for char in owner_session)
+        ):
+            owner_session = ""
+        if mode not in OWNERSHIP_MODES or mode == "legacy-unbound" or not owner_agent or not owner_session or not binding:
             owner_agent = ""
             owner_session = ""
             mode = "legacy-unbound"
@@ -255,8 +307,14 @@ class WorkStateStore:
                 if not isinstance(raw, dict):
                     continue
                 participant_agent = _safe_slug(str(raw.get("agent") or ""), "")
-                participant_session = _safe_slug(str(raw.get("session_id") or ""), "")[:32]
+                participant_session = str(raw.get("session_id") or "")
                 if not participant_agent or not participant_session:
+                    continue
+                if (
+                    not participant_session.strip()
+                    or len(participant_session) > SESSION_ID_MAX_LENGTH
+                    or any(unicodedata.category(char) == "Cc" for char in participant_session)
+                ):
                     continue
                 item = {
                     "agent": participant_agent,
@@ -272,7 +330,7 @@ class WorkStateStore:
             "owner_session_id": owner_session,
             "ownership_mode": mode,
             "participants": participants,
-            "ownership_binding": str(source.get("ownership_binding") or ""),
+            "ownership_binding": binding,
         }
 
     @classmethod
@@ -280,17 +338,19 @@ class WorkStateStore:
         """判断当前会话是否拥有或被显式授权处理工作项。"""
         try:
             normalized_agent, normalized_session = cls._actor(agent, session_id)
-        except PermissionError:
+        except (PermissionError, ValueError):
             return False
         ownership = cls._ownership(data)
         if ownership["ownership_mode"] == "legacy-unbound":
             return False
-        if (normalized_agent, normalized_session) == (
-            ownership["owner_agent"], ownership["owner_session_id"]
+        if normalized_agent == ownership["owner_agent"] and cls._session_matches(
+            ownership["ownership_binding"], ownership["owner_session_id"], normalized_session
         ):
             return True
         return any(
-            participant["agent"] == normalized_agent and participant["session_id"] == normalized_session
+            participant["agent"] == normalized_agent and cls._session_matches(
+                ownership["ownership_binding"], participant["session_id"], normalized_session
+            )
             for participant in ownership["participants"]
         )
 
@@ -309,7 +369,9 @@ class WorkStateStore:
         ownership = self._ownership(current)
         if ownership["ownership_mode"] == "legacy-unbound":
             raise PermissionError("旧工作项尚未认领；请先显式调用 claim_work_state")
-        if actor != (ownership["owner_agent"], ownership["owner_session_id"]):
+        if actor[0] != ownership["owner_agent"] or not self._session_matches(
+            ownership["ownership_binding"], ownership["owner_session_id"], actor[1]
+        ):
             raise PermissionError("当前会话不是工作项 owner，无权授权、交接或关闭")
         return actor
 
@@ -363,12 +425,20 @@ class WorkStateStore:
                 "owner_session_id": session_id,
                 "ownership_mode": "session-bound",
                 "participants": [],
-                "ownership_binding": "agent+declared-session",
+                "ownership_binding": SESSION_BINDING_EXACT,
             }
         elif not self.is_authorized_actor(previous, agent, session_id):
             raise PermissionError("当前会话未获授权写入该工作项；旧任务请先显式认领，跨 Agent 请先交接")
         based_on = payload.get("based_on") or (previous or {}).get("checkpoint_id") or ""
-        checkpoint_id = f"{datetime.now().astimezone().strftime('%Y%m%dT%H%M%S%f')[:18]}-{agent}-{session_id[:8]}"
+        # 文件名只使用稳定短哈希，不把原始 session_id（可能含空格、大小写或
+        # 合法标点）拼入路径；完整值仍写入 front matter 供精确授权比较。
+        session_marker = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
+        # 时间戳和会话哈希便于人工定位；随机后缀防止同一微秒重试覆盖历史
+        # 检查点，同时只使用 Web 允许的 ASCII 标识字符。
+        checkpoint_id = (
+            f"{datetime.now().astimezone().strftime('%Y%m%dT%H%M%S%f')[:18]}-"
+            f"{agent}-{session_marker}-{uuid.uuid4().hex[:8]}"
+        ).lower()
         metadata = {
             "work_id": work_id,
             "project_id": p_id,
@@ -384,7 +454,7 @@ class WorkStateStore:
             "owner_session_id": ownership["owner_session_id"],
             "ownership_mode": ownership["ownership_mode"],
             "participants": ownership["participants"],
-            "ownership_binding": ownership.get("ownership_binding") or "agent+declared-session",
+            "ownership_binding": ownership.get("ownership_binding") or SESSION_BINDING_EXACT,
             "updated_at": updated_at,
             "checkpoint_id": checkpoint_id,
             "based_on": str(based_on),
@@ -429,28 +499,58 @@ class WorkStateStore:
             "owner_agent": ownership["owner_agent"],
             "owner_session_id": ownership["owner_session_id"],
             "ownership_mode": ownership["ownership_mode"],
+            "ownership_binding": ownership.get("ownership_binding") or "",
             "participants": ownership["participants"],
         }
 
-    def claim(self, work_id: str, *, agent: str, session_id: str) -> dict[str, Any]:
-        """显式认领缺少 owner 的旧任务；认领不会把旧作者伪装成新 owner。"""
+    def claim(self, work_id: str, *, agent: str, session_id: str, upgrade_legacy_session: bool = False) -> dict[str, Any]:
+        """显式认领未绑定任务，或在明确开关下升级旧的 32 字符 declared 绑定。
+
+        升级只接受同 Agent 且完整会话经旧算法恰好对应已存 owner 的情况；有
+        participant 时无法无歧义迁移，必须先由 owner 撤销并重新授权。默认不
+        升级，避免普通 ``claim`` 调用悄然改变既有归属语义。
+        """
         actor = self._actor(agent, session_id)
         work_dir = self._active_work_dir(work_id)
         current = self._load_work(work_dir / "work.md")
         ownership = self._ownership(current)
-        if ownership["ownership_mode"] != "legacy-unbound":
+        if ownership["ownership_mode"] == "legacy-unbound":
+            result = self._persist_ownership(
+                work_dir,
+                current,
+                {
+                    "owner_agent": actor[0],
+                    "owner_session_id": actor[1],
+                    "ownership_mode": "session-bound",
+                    "participants": [],
+                    "ownership_binding": SESSION_BINDING_EXACT,
+                },
+            )
+            result["upgraded"] = False
+            return result
+        if not upgrade_legacy_session:
             raise PermissionError("工作项已经有 owner；请由 owner 显式授权或交接")
-        return self._persist_ownership(
+        if ownership["ownership_binding"] != SESSION_BINDING_DECLARED:
+            raise PermissionError("工作项不是旧 declared 会话绑定，不能走升级路径")
+        if ownership["owner_agent"] != actor[0] or not self._session_matches(
+            SESSION_BINDING_DECLARED, ownership["owner_session_id"], actor[1]
+        ):
+            raise PermissionError("完整 session_id 未与旧 owner 的 declared 值精确对应，拒绝升级")
+        if ownership["participants"]:
+            raise PermissionError("旧绑定存在 participant，无法无歧义迁移；请先撤销参与者并重新授权")
+        result = self._persist_ownership(
             work_dir,
             current,
             {
                 "owner_agent": actor[0],
                 "owner_session_id": actor[1],
-                "ownership_mode": "session-bound",
+                "ownership_mode": ownership["ownership_mode"],
                 "participants": [],
-                "ownership_binding": "agent+declared-session",
+                "ownership_binding": SESSION_BINDING_EXACT,
             },
         )
+        result["upgraded"] = True
+        return result
 
     def authorize_participant(
         self, work_id: str, *, owner_agent: str, owner_session_id: str,
@@ -462,8 +562,14 @@ class WorkStateStore:
         self._require_owner(current, owner_agent, owner_session_id)
         target = self._actor(participant_agent, participant_session_id)
         ownership = self._ownership(current)
+        if ownership["ownership_binding"] == SESSION_BINDING_DECLARED:
+            raise PermissionError("旧 declared 会话绑定不能新增 participant；请先显式升级 owner，再重新授权")
         participants = list(ownership["participants"])
-        if not any(item["agent"] == target[0] and item["session_id"] == target[1] for item in participants):
+        if not any(
+            item["agent"] == target[0]
+            and self._session_matches(ownership["ownership_binding"], item["session_id"], target[1])
+            for item in participants
+        ):
             if len(participants) >= MAX_PARTICIPANTS:
                 raise ValueError(f"participant 数量不得超过 {MAX_PARTICIPANTS}")
             participants.append(
@@ -488,12 +594,17 @@ class WorkStateStore:
         self._require_owner(current, owner_agent, owner_session_id)
         target = self._actor(participant_agent, participant_session_id)
         ownership = self._ownership(current)
-        if target == (ownership["owner_agent"], ownership["owner_session_id"]):
+        if target[0] == ownership["owner_agent"] and self._session_matches(
+            ownership["ownership_binding"], ownership["owner_session_id"], target[1]
+        ):
             raise PermissionError("不能撤销工作项 owner；只能撤销 participant")
         participants = ownership["participants"]
         retained = [
             item for item in participants
-            if (item["agent"], item["session_id"]) != target
+            if not (
+                item["agent"] == target[0]
+                and self._session_matches(ownership["ownership_binding"], item["session_id"], target[1])
+            )
         ]
         removed = len(retained) != len(participants)
         ownership["participants"] = retained
@@ -938,13 +1049,13 @@ class WorkStateStore:
             # owner 缺失时保持 null，不能从最新作者或项目路径推断归属。
             "work_schema_version": self._web_text(row.get("work_schema_version") or "1", max_length=20),
             "agent": self._web_text(row.get("agent"), max_length=120),
-            "session_id": self._web_optional_text(row.get("session_id"), max_length=120),
+            "session_id": self._web_optional_text(row.get("session_id"), max_length=WEB_SESSION_ID_LIMIT),
             "role": self._web_text(row.get("role"), max_length=120),
             "author_agent": self._web_text(row.get("author_agent") or row.get("agent"), max_length=120),
-            "author_session_id": self._web_optional_text(row.get("author_session_id") or row.get("session_id"), max_length=120),
+            "author_session_id": self._web_optional_text(row.get("author_session_id") or row.get("session_id"), max_length=WEB_SESSION_ID_LIMIT),
             "author_role": self._web_text(row.get("author_role") or row.get("role"), max_length=120),
             "owner_agent": self._web_optional_text(row.get("owner_agent"), max_length=120),
-            "owner_session_id": self._web_optional_text(row.get("owner_session_id"), max_length=120),
+            "owner_session_id": self._web_optional_text(row.get("owner_session_id"), max_length=WEB_SESSION_ID_LIMIT),
             "ownership_mode": self._web_text(row.get("ownership_mode") or "legacy-unbound", max_length=40),
             "ownership_binding": self._web_optional_text(row.get("ownership_binding"), max_length=80),
             "participants": self._web_participants(row.get("participants")),
@@ -1018,11 +1129,11 @@ class WorkStateStore:
             "status": self._web_text(data.get("status"), max_length=40),
             "work_schema_version": self._web_text(data.get("work_schema_version") or "1", max_length=20),
             "agent": self._web_text(data.get("agent"), max_length=120),
-            "session_id": self._web_optional_text(data.get("session_id"), max_length=120),
+            "session_id": self._web_optional_text(data.get("session_id"), max_length=WEB_SESSION_ID_LIMIT),
             "role": self._web_text(data.get("role"), max_length=120),
             # 检查点作者取事实源中的 author 字段；旧检查点仅有兼容字段时才回退。
             "author_agent": self._web_text(data.get("author_agent") or data.get("agent"), max_length=120),
-            "author_session_id": self._web_optional_text(data.get("author_session_id") or data.get("session_id"), max_length=120),
+            "author_session_id": self._web_optional_text(data.get("author_session_id") or data.get("session_id"), max_length=WEB_SESSION_ID_LIMIT),
             "author_role": self._web_text(data.get("author_role") or data.get("role"), max_length=120),
             "updated_at": self._web_text(data.get("updated_at"), max_length=80),
             "workspace_dirty": bool(data.get("workspace_dirty")),
@@ -1061,7 +1172,7 @@ class WorkStateStore:
             if not isinstance(item, dict):
                 continue
             agent = self._web_optional_text(item.get("agent"), max_length=120)
-            session_id = self._web_optional_text(item.get("session_id"), max_length=120)
+            session_id = self._web_optional_text(item.get("session_id"), max_length=WEB_SESSION_ID_LIMIT)
             if not agent or not session_id:
                 continue
             result.append({

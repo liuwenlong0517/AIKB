@@ -245,7 +245,7 @@ PowerShell 脚本推荐使用以下形式启动，以避免当前 PowerShell 配
 | `-Agent` | 是 | 任意非空字符串，安装器当前传 `codex` 或 `claude-code`；用于审计身份。 |
 | `-Event` | 是 | `session-start`、`sessionstart`、`pre-compact`、`precompact`、`stop`、`session-end`、`sessionend` 或其他字符串。下划线会归一化为短横线；未知事件返回空对象。 |
 
-stdin payload 常用字段：`cwd` 或 `project_path`（项目路径）、`session_id`/`sessionId`/`conversation_id`（会话标识）、`stop_hook_active`（Stop 递归保护）。空 stdin 会按 `{}` 处理。
+stdin payload 常用字段：`cwd` 或 `project_path`（项目路径）、`session_id`/`sessionId`/`conversation_id`（会话标识，按原值保留，1 至 160 个字符；控制字符拒绝）、`stop_hook_active`（Stop 递归保护）。空 stdin 会按 `{}` 处理。
 
 结果：
 
@@ -627,7 +627,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 | `project_path` | 字符串，必填 |
 | `work_id`、`goal`、`current_state` | 字符串；新工作项需要 `goal`，续写已有 `work_id` 可省略 goal |
 | `status` | `planned`、`active`、`blocked`；默认 `active` |
-| `agent`、`session_id`、`role`、`based_on`、`sensitivity` | 字符串；`agent`/`session_id` 必填，`sensitivity` 默认 `normal` |
+| `agent`、`session_id`、`role`、`based_on`、`sensitivity` | 字符串；`agent`/`session_id` 必填，session_id 原值保留且限 1..160 字符，`sensitivity` 默认 `normal` |
 | `decisions`、`verified_facts`、`completed`、`changed_files`、`verification`、`assumptions`、`blockers`、`next_steps`、`candidate_knowledge`、`resume_checks` | 字符串数组 |
 | `repositories` | 最多 8 项的对象数组；每项必填 `path`，可选 `role` |
 
@@ -651,9 +651,13 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 场景：旧格式活动任务缺少可靠 owner 时，当前会话显式认领后才允许恢复、检查点和 Stop 门禁。
 
-必填参数：`work_id`、`agent`、`session_id`。`session_id` 必须使用当前 Hook 提供的精确值，不要自行生成或借用其他会话标签。
+必填参数：`work_id`、`agent`、`session_id`。`session_id` 必须使用当前 Hook 提供的精确值（1..160 字符），不要自行生成或借用其他会话标签。旧 `agent+declared-session` 绑定不会自动升级；仅在无 participant、同 Agent 且旧 32 字符映射一致时显式传 `upgrade_legacy_session=true`，迁移有歧义则失败关闭。
 
     {"name":"claim_work_state","arguments":{"work_id":"legacy-task-a1b2c3d4","agent":"codex","session_id":"<本次 Hook 原样提供的 session_id>"}}
+
+升级旧绑定时：
+
+    {"name":"claim_work_state","arguments":{"work_id":"legacy-task-a1b2c3d4","agent":"codex","session_id":"<完整 Hook session_id>","upgrade_legacy_session":true}}
 
 ### 6.7 `authorize_work_participant`
 

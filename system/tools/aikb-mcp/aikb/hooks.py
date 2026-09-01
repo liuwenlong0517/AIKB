@@ -8,7 +8,7 @@ from typing import Any
 from .audit import AuditStore, audit_project_id
 from .config import Settings
 from .indexer import review_report
-from .workstate import WorkStateStore
+from .workstate import SESSION_ID_MAX_LENGTH, WorkStateStore
 
 
 def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
@@ -23,6 +23,15 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
     session_id = str(
         payload.get("session_id") or payload.get("sessionId") or payload.get("conversation_id") or ""
     ) or None
+    session_id_valid = False
+    if session_id is not None:
+        try:
+            # Hook 不修改会话标识；这里只判断能否进入精确绑定链路。非法值仍可
+            # 参与有限审计，但不得回显到提示或参与 Working State 授权。
+            WorkStateStore._validate_session_id(session_id)
+            session_id_valid = True
+        except (PermissionError, ValueError):
+            session_id_valid = False
     project = audit_project_id(project_path)
     session_label = audit.resolve_session_label(
         agent=agent, source="hook", session_id=session_id, connection_id=None, project_id=project,
@@ -98,11 +107,18 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
 
     def session_binding_hint() -> str:
         """向 Agent 暴露本次 Hook 观测到的会话绑定；缺失时明确安全降级。"""
-        if session_id:
-            safe_session = session_id.replace("\r", " ").replace("\n", " ")[:120]
+        if session_id_valid and session_id is not None:
+            # Hook 提示与 Working State 共用 160 字符投影；原始值仍由 MCP
+            # 校验并写入，提示只做长度边界保护，不把会话 ID slug 化。
+            safe_session = session_id[:SESSION_ID_MAX_LENGTH]
             return (
                 f"AIKB 当前会话绑定：agent={agent}，session_id={safe_session}。"
                 "创建或续写 checkpoint 时请原样传递该 session_id。"
+            )
+        if session_id is not None:
+            return (
+                "AIKB 当前 Hook 提供的 session_id 不符合精确绑定约束，已降级为不自动注入/"
+                "不执行任务归属门禁；不会回显该值，也不会按 Agent 单独接管 Working State。"
             )
         return (
             "AIKB 当前 Hook 未提供 session_id，已降级为不自动注入/不执行任务归属门禁；"
@@ -138,6 +154,7 @@ def handle_hook(agent: str, event: str, payload: dict[str, Any], settings: Setti
                     # 只能降级为不触碰，绝不退化为 agent-only 自动接管。
                     "binding_strength": "agent+exact-session-required",
                     "session_observed": bool(session_id),
+                    "session_valid": session_id_valid,
                 },
             )
             if normalized_event == "session-start":

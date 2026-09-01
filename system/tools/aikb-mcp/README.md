@@ -34,7 +34,8 @@ python -m aikb audit diagnostic <调用ID>
 
 `serve --agent` 是 Working State 写入的服务端 Agent 边界：必须显式绑定当前进程
 的 Agent，不能由请求参数自报另一身份。`session_id` 是 Hook 提供的会话关联标签，
-命令示例和 MCP 调用必须原样传递该值；它不是密码学凭据，无法抵御同一用户下能
+命令示例和 MCP 调用必须原样传递和比较该值（保留大小写及合法标点，1 至 160 个
+字符；NUL、换行及其他控制字符拒绝）；它不是密码学凭据，无法抵御同一用户下能
 直接读写 `workspace/` 的恶意进程。平台 Hook 没有提供会话 ID 时，系统宁可不自动
 恢复、不执行归属门禁，也不会退化成仅按 Agent 接管。
 
@@ -43,6 +44,10 @@ Working State v2 把 `owner_agent/owner_session_id` 与每次检查点的
 `shared` 或 `handed-off` participant；可用 `revoke` 撤销精确的 Agent/会话。缺少
 owner 的 legacy 工作项标记为 `legacy-unbound`，需要先由当前会话显式
 `claim_work_state`，不会自动注入或阻断。
+新任务和显式认领使用 `ownership_binding=agent+exact-session`。早期
+`agent+declared-session` 任务保持兼容，但不会自动迁移；只有显式传入
+`upgrade_legacy_session=true`，且完整会话经旧 32 字符算法恰好对应 owner、没有
+participant 时才可升级。有 participant 时必须先撤销并重新授权，迁移失败保持原状。
 
 `review`/`review_knowledge` 是只读审查入口：返回 candidate 总数、逾期、无 owner、
 声明可能重复和已结案仍留 Inbox 的摘要；v2 candidate 只投影有限生命周期字段，

@@ -46,7 +46,7 @@
 
 SessionStart 自动恢复、Stop hook 阻断、检查点写入和任务关闭，只能作用于当前 owner 或已登记的 participant。发现项目有其他会话的活动任务时，不注入任务正文、不阻断当前会话、不自动写入或关闭；只记录外来任务摘要和 `foreign_active_work` 审计结果。跨 Agent 续写必须有用户明确要求、owner 显式交接或预先登记的参与关系；同仓库、同项目或唯一候选不能代替授权。
 
-所有权和参与关系通过控制面登记，不能由调用者仅凭请求参数自称：MCP 服务启动时的 `--agent` 必须与请求中的 Agent 身份一致；`session_id` 必须原样使用当前 Hook 观测到的值，用于防止误把其他会话的任务归入当前会话，但不是密码学凭据。不得把 Agent-only 匹配伪装成 `session-bound`。同一 Windows 用户下能够直接修改工作区或伪造调用的恶意进程不在本规则的信任边界内；需要强身份认证时，另行使用 OS ACL、可信 broker 或其他进程级隔离。交接应绑定任务 ID、接收会话、授权范围和时间，并可撤销。旧任务无法确定 owner 时标记为 `legacy-unbound`，在重新认领前不得自动恢复或阻断。
+所有权和参与关系通过控制面登记，不能由调用者仅凭请求参数自称：MCP 服务启动时的 `--agent` 必须与请求中的 Agent 身份一致；`session_id` 必须原样使用当前 Hook 观测到的值（保留大小写及合法标点，1 至 160 个字符，拒绝 NUL/换行/控制字符），用于防止误把其他会话的任务归入当前会话，但不是密码学凭据。新绑定必须标记 `ownership_binding=agent+exact-session`，不得把 Agent-only 匹配伪装成 `session-bound`。旧 `agent+declared-session` 仅在显式升级、同 Agent、完整值经旧算法对应 owner 且无 participant 时迁移；有 participant 必须先撤销并重新授权。 同一 Windows 用户下能够直接修改工作区或伪造调用的恶意进程不在本规则的信任边界内；需要强身份认证时，另行使用 OS ACL、可信 broker 或其他进程级隔离。交接应绑定任务 ID、接收会话、授权范围和时间，并可撤销。旧任务无法确定 owner 时标记为 `legacy-unbound`，在重新认领前不得自动恢复或阻断。
 
 ## 7. 明确授权与不可豁免操作
 
