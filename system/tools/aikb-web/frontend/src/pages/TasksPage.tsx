@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AsyncState } from '../components/AsyncState';
 import { PageHeader } from '../components/PageHeader';
 import { useActions, useCancelTask, useCreateTask, usePreviewAction, useTask, useTaskEvents, useTasks } from '../hooks/useApi';
-import type { ActionPreview, ActionSpec, ApiMeta, TaskEvent, TaskSnapshot, TaskStatus } from '../types/api';
+import type { ActionPreview, ActionPreviewData, ActionSpec, ApiMeta, TaskEvent, TaskSnapshot, TaskStatus } from '../types/api';
 
 const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   queued: '排队中', running: '运行中', cancelling: '取消中', succeeded: '成功',
@@ -122,13 +122,23 @@ function TaskCenter() {
   const previewMutation = usePreviewAction();
   const createMutation = useCreateTask();
   const [previewAction, setPreviewAction] = useState<ActionSpec>();
-  const previewData = previewMutation.data?.data;
+  const [acceptedPreviewData, setAcceptedPreviewData] = useState<ActionPreviewData>();
+  const previewGeneration = useRef(0);
+  const previewData = acceptedPreviewData;
   const actions = actionsQuery.data?.data.items ?? [];
   const tasks = tasksQuery.data?.data.items ?? [];
-  const requestPreview = (action: ActionSpec) => { setPreviewAction(action); previewMutation.reset(); previewMutation.mutate(action.action_id); };
+  const requestPreview = (action: ActionSpec) => {
+    const generation = ++previewGeneration.current;
+    setPreviewAction(action);
+    setAcceptedPreviewData(undefined);
+    previewMutation.reset();
+    previewMutation.mutate(action.action_id, { onSuccess: (response) => { if (generation === previewGeneration.current && response.data.preview.action_id === action.action_id) setAcceptedPreviewData(response.data); } });
+  };
   const submitPreview = () => {
-    if (!previewData) return;
-    createMutation.mutate({ action_id: previewData.preview.action_id, parameters: previewData.preview.parameters, preview_digest: previewData.preview.preview_digest, confirmation_token: previewData.confirmation_token }, { onSuccess: (response) => { const id = response.data.task.task_id; if (id) navigate(`/tasks/${encodeURIComponent(id)}`); } });
+    if (!previewData || !previewAction || previewData.preview.action_id !== previewAction.action_id) return;
+    const generation = previewGeneration.current;
+    const submittedActionId = previewAction.action_id;
+    createMutation.mutate({ action_id: previewData.preview.action_id, parameters: previewData.preview.parameters, preview_digest: previewData.preview.preview_digest, confirmation_token: previewData.confirmation_token }, { onSuccess: (response) => { if (generation !== previewGeneration.current || submittedActionId !== previewAction?.action_id) return; const id = response.data.task.task_id; if (id) navigate(`/tasks/${encodeURIComponent(id)}`); } });
   };
   return <>
     <PageHeader title="任务中心" description="通过服务端预览运行已注册的本机只读动作，并观察任务安全状态。" />
@@ -138,7 +148,7 @@ function TaskCenter() {
         {!actions.length ? <Empty description="当前没有可用动作。" /> : <Row gutter={[16, 16]}>{actions.map((action) => <Col key={action.action_id} xs={24} lg={12} xl={8}><ActionCard action={action} onPreview={requestPreview} loading={previewMutation.isPending && previewAction?.action_id === action.action_id} /></Col>)}</Row>}
       </AsyncState>
       {previewMutation.error && <Alert className="section-gap" type="error" showIcon message="预览失败" description={previewMutation.error.message} />}
-      {previewData && previewAction && <PreviewPanel preview={previewData.preview} tokenReady={Boolean(previewData.confirmation_token)} expires={previewData.expires_in_seconds} submitting={createMutation.isPending} onSubmit={submitPreview} onClose={() => { setPreviewAction(undefined); previewMutation.reset(); }} />}
+      {previewData && previewAction && previewData.preview.action_id === previewAction.action_id && <PreviewPanel preview={previewData.preview} tokenReady={Boolean(previewData.confirmation_token)} expires={previewData.expires_in_seconds} submitting={createMutation.isPending} onSubmit={submitPreview} onClose={() => { previewGeneration.current += 1; setPreviewAction(undefined); setAcceptedPreviewData(undefined); previewMutation.reset(); }} />}
       {createMutation.error && <Alert className="section-gap" type="error" showIcon message="任务创建失败" description={createMutation.error.message} />}
     </Card>
     <Card title={<span>最近任务 <Typography.Text type="secondary">{tasksQuery.data?.data.total ?? tasks.length} 项</Typography.Text></span>} className="section-gap">

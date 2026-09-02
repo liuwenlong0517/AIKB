@@ -7,6 +7,29 @@ import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
 
+type PollingQuery = { state: { data?: unknown; error: unknown; fetchFailureCount: number } };
+const POLLING_RETRY_LIMIT = 3;
+
+function getHttpStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const status = (error as { httpStatus?: unknown }).httpStatus;
+  return typeof status === 'number' ? status : undefined;
+}
+
+/** 轮询只对短暂故障有限重试；资源不存在或请求不可恢复时立即停止，避免 404 死循环。 */
+function pollingInterval(query: PollingQuery, status: string | undefined, terminalStatuses: readonly string[]): number | false {
+  if (status && terminalStatuses.includes(status)) return false;
+  const error = query.state.error;
+  const httpStatus = getHttpStatus(error);
+  if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500 && ![408, 429].includes(httpStatus)) return false;
+  if (error) {
+    const failures = query.state.fetchFailureCount;
+    if (failures >= POLLING_RETRY_LIMIT) return false;
+    return Math.min(15_000, 2_000 * 2 ** Math.max(0, failures - 1));
+  }
+  return 2_000;
+}
+
 export const useOverview = () => useQuery({ queryKey: ['knowledge-overview'], queryFn: api.overview });
 /** 深层手册路由刷新后独立恢复正文；未知逻辑 ID 由后端安全拒绝。 */
 export const useManual = (manualId: string | undefined): UseQueryResult<ManualData> =>
@@ -52,7 +75,7 @@ export const useRuleChange = (changeId: string | undefined, enabled = true): Use
     enabled: Boolean(changeId) && enabled,
     refetchInterval: (query) => {
       const status = query.state.data?.data.change.status;
-      return status && ['succeeded', 'expired', 'rejected', 'rolled_back', 'recovery_required'].includes(status) ? false : 2_000;
+      return pollingInterval(query, status, ['succeeded', 'expired', 'rejected', 'rolled_back', 'recovery_required']);
     },
   });
 
@@ -94,7 +117,7 @@ export const useMaintenanceChange = (changeId: string | undefined, enabled = tru
     enabled: Boolean(changeId) && enabled,
     refetchInterval: (query) => {
       const status = query.state.data?.data.change.status;
-      return status && ['succeeded', 'rolled_back', 'recovery_required'].includes(status) ? false : 2_000;
+      return pollingInterval(query, status, ['succeeded', 'rolled_back', 'recovery_required']);
     },
   });
 
@@ -177,7 +200,7 @@ export const useTask = (taskId: string | undefined): UseQueryResult<ApiResponse<
     // SSE 可能因网络、代理或浏览器限制中断；非终态每两秒轮询一次作为最终状态兜底。
     refetchInterval: (query) => {
       const status = query.state.data?.data.task.status;
-      return status && ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(status) ? false : 2_000;
+      return pollingInterval(query, status, ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted']);
     },
   });
 

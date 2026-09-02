@@ -37,13 +37,15 @@ import type {
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
 export class ApiClientError extends Error {
   readonly code?: string;
+  readonly httpStatus?: number;
   readonly requestId?: string;
   readonly details?: unknown;
 
-  constructor(message: string, code?: string, requestId?: string, details?: unknown) {
+  constructor(message: string, code?: string, requestId?: string, details?: unknown, httpStatus?: number) {
     super(message);
     this.name = 'ApiClientError';
     this.code = code;
+    this.httpStatus = httpStatus;
     this.requestId = requestId;
     this.details = details;
   }
@@ -111,14 +113,14 @@ export class ApiClient {
     try {
       body = (await response.json()) as ApiResponse<T> | ApiErrorBody;
     } catch {
-      throw new ApiClientError(`服务返回了无法解析的响应（HTTP ${response.status}）`);
+      throw new ApiClientError(`服务返回了无法解析的响应（HTTP ${response.status}）`, undefined, undefined, undefined, response.status);
     }
-    if (!body || typeof body !== 'object') throw new ApiClientError(`服务返回了无效的响应结构（HTTP ${response.status}）`);
+    if (!body || typeof body !== 'object') throw new ApiClientError(`服务返回了无效的响应结构（HTTP ${response.status}）`, undefined, undefined, undefined, response.status);
     if (!response.ok || 'error' in body) {
       const error = 'error' in body ? body.error : undefined;
-      throw new ApiClientError(error?.message ?? `请求失败（HTTP ${response.status}）`, error?.code, body.meta?.request_id, error?.details);
+      throw new ApiClientError(error?.message ?? `请求失败（HTTP ${response.status}）`, error?.code, body.meta?.request_id, error?.details, response.status);
     }
-    if (!('data' in body)) throw new ApiClientError(`服务返回了无效的数据包络（HTTP ${response.status}）`);
+    if (!('data' in body)) throw new ApiClientError(`服务返回了无效的数据包络（HTTP ${response.status}）`, undefined, undefined, undefined, response.status);
     return body as ApiResponse<T>;
   }
 }

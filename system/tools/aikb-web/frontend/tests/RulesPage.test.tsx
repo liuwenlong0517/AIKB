@@ -99,4 +99,25 @@ describe('RulesPage', () => {
     expect(refetchDetail).toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: '确认并提交规则应用' })).not.toBeInTheDocument();
   });
+
+  it('规则切换后晚到的旧预览响应不会显示或进入确认流', async () => {
+    let resolvePreview: ((response: { data: object }) => void) | undefined;
+    const previewMutate = vi.fn((_input: unknown, options: { onSuccess: (response: { data: object }) => void }) => { resolvePreview = options.onSuccess; });
+    mocks.list.mockReturnValue(query({ items: [user, agent] }));
+    mocks.detail.mockImplementation((id: string | undefined) => query(id === 'agent' ? { ...agent, content: '# AIKB Agent 规则\n' } : { ...user, content: '# 个人规则\n' }));
+    mocks.preview.mockReturnValue({ ...mutation(), mutate: previewMutate });
+    const applyMutate = vi.fn();
+    mocks.apply.mockReturnValue({ ...mutation(), mutate: applyMutate });
+    mocks.change.mockReturnValue(query(undefined));
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: '编辑正文' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '规则正文编辑器' }), { target: { value: '# 待审阅修改\n' } });
+    fireEvent.click(screen.getByRole('button', { name: '生成完整预览' }));
+    fireEvent.click(screen.getByRole('link', { name: /AIKB Agent 规则/ }));
+    resolvePreview?.({ data: { rule_id: 'user', change_id: 'stale-change', diff: '旧规则差异', validation: { valid: true, errors: [] }, preview_digest: 'd'.repeat(64), confirmation_token: 'stale-token' } });
+    await waitFor(() => expect(screen.getByText('只读规则')).toBeInTheDocument());
+    expect(screen.queryByText('旧规则差异')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '确认并提交规则应用' })).not.toBeInTheDocument();
+    expect(applyMutate).not.toHaveBeenCalled();
+  });
 });

@@ -13,7 +13,7 @@ describe('ApiClient', () => {
 
   it('exposes structured backend errors', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: { code: 'INDEX_DOWN', message: '索引不可用' }, meta: { request_id: 'r-2' } }), { status: 503 }));
-    await expect(new ApiClient().get('/system')).rejects.toMatchObject({ message: '索引不可用', code: 'INDEX_DOWN', requestId: 'r-2' });
+    await expect(new ApiClient().get('/system')).rejects.toMatchObject({ message: '索引不可用', code: 'INDEX_DOWN', requestId: 'r-2', httpStatus: 503 });
   });
 
   it('uses the versioned knowledge routes and unwraps the tree root', async () => {

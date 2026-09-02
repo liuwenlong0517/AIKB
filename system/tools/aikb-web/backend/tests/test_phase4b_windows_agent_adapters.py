@@ -13,6 +13,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from aikb_web.core.actions import ConfirmationTokenService
 from aikb_web.core.maintenance_changes import MaintenanceChange, MaintenanceLeafState
@@ -116,6 +117,33 @@ class WindowsAgentAdapterTests(unittest.TestCase):
         self.assertEqual(updated["McpServers"]["AIKB"]["ENV"]["aikb_managed"], "1")
         self.assertEqual(updated["McpServers"]["other"], {"x": 1})
         self.assertEqual(updated["private"], "保留")
+
+    def test_atomic_write_checks_existing_parent_chain_before_creating_directories(self) -> None:
+        """重解析点在现存父链时应先拒绝，拒绝前不得留下新目录。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            readonly = self._readonly(root)
+            adapter = object.__new__(WindowsAgentMaintenanceAdapter)
+            adapter._readonly = readonly
+            path = root / "codex" / "new" / "config.toml"
+            with patch.object(readonly, "_has_reparse_component", return_value=True):
+                with self.assertRaises(WindowsAgentMaintenanceError):
+                    adapter._atomic_write(path, b"model = 'x'\n", None)
+            self.assertFalse(path.parent.exists())
+
+    def test_atomic_write_rechecks_parent_chain_after_creating_directories(self) -> None:
+        """创建缺失父目录后若边界复核失败，仍不得创建临时配置文件。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            readonly = self._readonly(root)
+            adapter = object.__new__(WindowsAgentMaintenanceAdapter)
+            adapter._readonly = readonly
+            path = root / "codex" / "new" / "config.toml"
+            with patch.object(readonly, "_has_reparse_component", side_effect=[False, True]):
+                with self.assertRaises(WindowsAgentMaintenanceError):
+                    adapter._atomic_write(path, b"model = 'x'\n", None)
+            self.assertTrue(path.parent.exists())
+            self.assertFalse(path.exists())
 
     def test_claude_ready_mcp_merge_is_byte_for_byte_noop(self) -> None:
         """受管 MCP 已就绪时不重写整个配置文件，保留第三方格式和正文。"""

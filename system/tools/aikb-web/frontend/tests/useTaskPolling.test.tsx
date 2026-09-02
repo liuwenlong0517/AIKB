@@ -38,4 +38,13 @@ describe('useTask polling fallback', () => {
     await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('succeeded'), { timeout: 3_500, interval: 50 });
     expect(mocks.task).toHaveBeenCalledTimes(2);
   });
+
+  it('404 资源不会继续启动轮询', async () => {
+    mocks.task.mockRejectedValue(Object.assign(new Error('任务不存在'), { httpStatus: 404 }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><Probe /></QueryClientProvider>);
+    await waitFor(() => expect(mocks.task).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
+    expect(mocks.task).toHaveBeenCalledTimes(1);
+  });
 });

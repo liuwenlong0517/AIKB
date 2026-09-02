@@ -198,4 +198,24 @@ describe('MaintenancePage', () => {
     expect(screen.getByText('配置已更新，需要人工重启对应 Agent')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '查看任务中心' })).toHaveAttribute('href', '/tasks/task-1');
   });
+
+  it('维护目标切换后晚到的旧预览响应不会显示或进入确认流', async () => {
+    let resolvePreview: ((response: { data: object }) => void) | undefined;
+    const previewMutate = vi.fn((_input: unknown, options: { onSuccess: (response: { data: object }) => void }) => { resolvePreview = options.onSuccess; });
+    const platform = { platform: 'windows', supported: true, inspection_supported: true, preview_supported: true, apply_supported: true };
+    const applyMutate = vi.fn();
+    mocks.apply.mockReturnValue(mutation(applyMutate));
+    mocks.targets.mockReturnValue(query({ items: targetItems, platform }));
+    mocks.statuses.mockReturnValue(targetItems.map((item) => query({ target: item, platform, status: { target_id: item.target_id, status: item.status, logical_leaves: [], steps: [], base_fingerprint: item.base_fingerprint } })));
+    mocks.target.mockImplementation((targetId: string) => { const item = targetItems.find((candidate) => candidate.target_id === targetId) ?? targetItems[0]; return query({ target: item, platform, status: { target_id: item.target_id, status: item.status, logical_leaves: [], steps: [], base_fingerprint: item.base_fingerprint }, leaves: [] }); });
+    mocks.preview.mockReturnValue(mutation(previewMutate));
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: '查看结构化预览' }));
+    fireEvent.click(screen.getByRole('button', { name: /Codex agent\.codex/ }));
+    resolvePreview?.({ data: { plan: { target_id: 'environment', preview_digest: 'stale-digest', differences: [] }, target: targetItems[0], platform, inspection: {}, change_id: 'stale-change', confirmation_token: 'stale-token' } });
+    await waitFor(() => expect(screen.getByText('Codex')).toBeInTheDocument());
+    expect(screen.queryByText('stale-digest')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '确认并应用当前目标' })).not.toBeInTheDocument();
+    expect(applyMutate).not.toHaveBeenCalled();
+  });
 });

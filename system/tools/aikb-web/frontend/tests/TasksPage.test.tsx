@@ -22,7 +22,9 @@ describe('TasksPage', () => {
     mocks.tasks.mockReturnValue(queryResult({ items: [], total: 0 }));
     mocks.task.mockReturnValue(queryResult({ task: { task_id: 'task-1', action_id: 'validate.structure', status: 'queued', risk_level: 'read_only', timeout_seconds: 120 } }));
     mocks.events.mockReturnValue({ events: [], event: undefined, connected: false, error: null });
-    mocks.preview.mockReturnValue(mutationResult({ preview: { action_id: 'validate.structure', parameters: {}, steps: ['读取双仓安全摘要'], risk_level: 'read_only', effects: ['只读'], timeout_seconds: 120, preview_digest: 'digest' }, confirmation_token: 'secret-token', expires_in_seconds: 300 }));
+    const previewResponse = { preview: { action_id: 'validate.structure', parameters: {}, steps: ['读取双仓安全摘要'], risk_level: 'read_only', effects: ['只读'], timeout_seconds: 120, preview_digest: 'digest' }, confirmation_token: 'secret-token', expires_in_seconds: 300 };
+    const previewMutate = vi.fn((_actionId: string, options: { onSuccess: (response: { data: typeof previewResponse }) => void }) => options.onSuccess({ data: previewResponse }));
+    mocks.preview.mockReturnValue({ ...mutationResult(), mutate: previewMutate });
     mocks.create.mockReturnValue(mutationResult());
     mocks.cancel.mockReturnValue(mutationResult());
   });
@@ -131,5 +133,21 @@ describe('TasksPage', () => {
     await waitFor(() => expect(screen.getAllByText('new-action').length).toBeGreaterThan(0));
     expect(screen.getByText('暂无输出')).toBeInTheDocument();
     expect(screen.queryByText('旧缓存输出')).not.toBeInTheDocument();
+  });
+
+  it('动作切换后晚到的旧预览响应不会显示或提交', async () => {
+    let resolvePreview: ((response: { data: object }) => void) | undefined;
+    const previewMutate = vi.fn((_actionId: string, options: { onSuccess: (response: { data: object }) => void }) => { resolvePreview = options.onSuccess; });
+    const createMutation = mutationResult();
+    mocks.preview.mockReturnValue({ ...mutationResult(), data: undefined, mutate: previewMutate });
+    mocks.create.mockReturnValue(createMutation);
+    render(<MemoryRouter initialEntries={['/tasks']}><Routes><Route path="/tasks" element={<TasksPage />} /></Routes></MemoryRouter>);
+    fireEvent.click(screen.getAllByRole('button', { name: '查看并预览' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: '查看并预览' })[1]);
+    resolvePreview?.({ data: { preview: { action_id: 'validate.structure', parameters: {}, steps: [], risk_level: 'read_only', effects: [], timeout_seconds: 120, preview_digest: 'stale-digest' }, confirmation_token: 'stale-token', expires_in_seconds: 300 } });
+    await waitFor(() => expect(screen.getByText('可用动作')).toBeInTheDocument());
+    expect(screen.queryByText('stale-digest')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '执行预览' })).not.toBeInTheDocument();
+    expect(createMutation.mutate).not.toHaveBeenCalled();
   });
 });

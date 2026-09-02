@@ -25,10 +25,15 @@ export function RulesPage() {
   const [applySubmitted, setApplySubmitted] = useState(false);
   const [applyResult, setApplyResult] = useState<RuleApplyData>();
   const detail = detailQuery.data?.data;
+  const previewGeneration = useRef(0);
+  const appliedRuleId = useRef<string>();
   const refetchDetail = detailQuery.refetch;
   const summaries = rulesQuery.data?.data.items ?? [];
   const canEdit = detail?.rule_id === 'user' && detail.writable;
-  const appliedChangeId = applyResult?.change_id;
+  const previewMatchesRule = Boolean(preview && detail && ruleId && preview.rule_id === detail.rule_id && preview.rule_id === ruleId);
+  const displayedPreview = previewMatchesRule ? preview : undefined;
+  const displayedApplyResult = applyResult && appliedRuleId.current === ruleId ? applyResult : undefined;
+  const appliedChangeId = displayedApplyResult?.change_id;
   const changeQuery = useRuleChange(appliedChangeId, Boolean(appliedChangeId));
   const changeResponse = changeQuery.data?.data;
   const change = changeResponse?.change;
@@ -38,6 +43,8 @@ export function RulesPage() {
 
   // 路由切换或刷新进入新规则时，清空旧预览/令牌；不会因刷新自动重放 apply。
   useEffect(() => {
+    // reset 不会取消在途请求；代际号让旧响应即使晚到也不能回写新规则页面。
+    previewGeneration.current += 1;
     setEditing(false);
     setCandidate('');
     setPreview(undefined);
@@ -45,6 +52,7 @@ export function RulesPage() {
     setConfirmed(false);
     setApplySubmitted(false);
     setApplyResult(undefined);
+    appliedRuleId.current = undefined;
     terminalRefreshKey.current = undefined;
     resetPreviewMutation();
     resetApplyMutation();
@@ -86,11 +94,17 @@ export function RulesPage() {
   }, [clock, preview, previewCreatedAt]);
 
   /** 选择规则后保留深层 URL，支持刷新恢复和浏览器前进/后退。 */
-  const selectRule = (item: RuleSummary) => navigate(`/rules/${encodeURIComponent(item.rule_id)}`);
+  const selectRule = (item: RuleSummary) => {
+    // 先失效当前预览，再切换路由；这覆盖点击到 passive effect 执行前的竞态窗口。
+    previewGeneration.current += 1;
+    navigate(`/rules/${encodeURIComponent(item.rule_id)}`);
+  };
 
   /** 只提交服务端详情中的哈希和受控候选正文；页面没有保存或应用入口。 */
   const requestPreview = () => {
     if (!detail || !canEdit || candidate === detail.content) return;
+    const generation = ++previewGeneration.current;
+    const requestedRuleId = detail.rule_id;
     setPreview(undefined);
     setPreviewCreatedAt(undefined);
     setConfirmed(false);
@@ -102,6 +116,7 @@ export function RulesPage() {
       { ruleId: detail.rule_id, base_content_hash: detail.content_hash, candidate_content: candidate },
       {
         onSuccess: (response) => {
+          if (generation !== previewGeneration.current || requestedRuleId !== ruleId || response.data.rule_id !== requestedRuleId) return;
           setPreview(response.data);
           setPreviewCreatedAt(Date.now());
           setConfirmed(false);
@@ -114,8 +129,9 @@ export function RulesPage() {
 
   /** 编辑正文时清理旧 diff，避免把不属于当前候选的预览误认为最新结果。 */
   const updateCandidate = (value: string) => {
+    previewGeneration.current += 1;
     setCandidate(value);
-    if (preview) {
+    if (preview || previewMutation.isPending || applyMutation.isPending) {
       setPreview(undefined);
       setPreviewCreatedAt(undefined);
       setConfirmed(false);
@@ -128,7 +144,11 @@ export function RulesPage() {
 
   /** 仅在完整、未过期预览上提交 change_id 与短期令牌；正文和路径永不进入 apply 请求。 */
   const submitApply = () => {
-    if (!detail || !preview || expired || !preview.confirmation_token || !confirmed || applySubmitted) return;
+    if (!detail || !preview || !previewMatchesRule || expired || !preview.confirmation_token || !confirmed || applySubmitted) return;
+    const generation = previewGeneration.current;
+    const submittedRuleId = detail.rule_id;
+    const submittedChangeId = preview.change_id;
+    appliedRuleId.current = submittedRuleId;
     setApplySubmitted(true);
     applyMutation.mutate(
       {
@@ -136,12 +156,13 @@ export function RulesPage() {
         change_id: preview.change_id,
         confirmation_token: preview.confirmation_token,
       },
-      { onSuccess: (response) => setApplyResult(response.data) },
+      { onSuccess: (response) => { if (generation === previewGeneration.current && submittedRuleId === ruleId && response.data.change_id === submittedChangeId) setApplyResult(response.data); } },
     );
   };
 
   /** 失败后重新读取正式正文并清除旧令牌；用户必须重新编辑和生成预览，页面不自动重放。 */
   const restartAfterApplyFailure = () => {
+    previewGeneration.current += 1;
     setPreview(undefined);
     setPreviewCreatedAt(undefined);
     setConfirmed(false);
@@ -200,7 +221,7 @@ export function RulesPage() {
                       建议 {(detail.recommended_chars ?? detail.max_chars).toLocaleString()} / 最多 {detail.max_chars.toLocaleString()} 字符
                     </Typography.Text>
                     {canEdit && !editing && <Button onClick={() => setEditing(true)}>编辑正文</Button>}
-                    {canEdit && editing && <Button onClick={() => { setEditing(false); setCandidate(detail.content); setPreview(undefined); previewMutation.reset(); }}>取消编辑</Button>}
+                    {canEdit && editing && <Button onClick={() => { previewGeneration.current += 1; setEditing(false); setCandidate(detail.content); setPreview(undefined); previewMutation.reset(); }}>取消编辑</Button>}
                     {canEdit && editing && <Button type="primary" disabled={!candidate || candidate === detail.content} loading={previewMutation.isPending} onClick={requestPreview}>生成完整预览</Button>}
                   </Space>
                   {canEdit && <Alert className="section-gap" type="warning" showIcon message="修改只影响新会话，已运行 Agent 不会自动重载。" description="正式写入必须先完成右侧完整 diff 审阅和高风险确认；不会产生 Git 提交。" />}
@@ -226,16 +247,16 @@ export function RulesPage() {
 
         <Col xs={24} lg={7} xl={8}>
           <PreviewPanel
-            preview={preview}
+            preview={displayedPreview}
             expired={expired}
             loading={previewMutation.isPending}
             error={previewMutation.error}
             confirmed={confirmed}
-            canApply={Boolean(preview && !expired && preview.confirmation_token && preview.validation?.valid !== false && !applySubmitted)}
+            canApply={Boolean(previewMatchesRule && !expired && preview?.confirmation_token && preview.validation?.valid !== false && !applySubmitted)}
             applying={applyMutation.isPending}
             applySubmitted={applySubmitted}
             applyError={applyMutation.error}
-            applyResult={applyResult}
+            applyResult={displayedApplyResult}
             change={change}
             changeTaskId={changeResponse?.task?.task_id}
             changeBlocked={changeResponse?.blocked}

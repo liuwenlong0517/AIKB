@@ -668,8 +668,13 @@ class WindowsAgentMaintenanceAdapter:
 
         parent = path.parent
         try:
+            # 先检查现存父链，再创建缺失目录；否则父级被重解析点替换时，
+            # 拒绝请求前已经可能在越界位置留下目录副作用。
+            if self._readonly._has_reparse_component(path) or path.is_symlink() or (path.exists() and not path.is_file()):
+                raise WindowsAgentMaintenanceError("Agent 配置边界无效")
             if not parent.exists():
                 parent.mkdir(parents=True, exist_ok=True)
+            # mkdir 后复核完整父链，覆盖创建期间父目录被替换的边界窗口。
             if self._readonly._has_reparse_component(path) or path.is_symlink() or (path.exists() and not path.is_file()):
                 raise WindowsAgentMaintenanceError("Agent 配置边界无效")
             fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(parent))

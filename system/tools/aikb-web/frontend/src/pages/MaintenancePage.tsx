@@ -64,6 +64,8 @@ export function MaintenancePage() {
   const [applySubmitted, setApplySubmitted] = useState(false);
   const [applyResult, setApplyResult] = useState<MaintenanceApplyData>();
   const terminalRefreshKey = useRef<string>();
+  const previewGeneration = useRef(0);
+  const appliedTargetId = useRef<string>();
   const summaries = targetsQuery.data?.data.items ?? [];
   const platform = targetsQuery.data?.data.platform;
   const summaryMap = new Map(summaries.map((item) => [item.target_id, item]));
@@ -73,17 +75,23 @@ export function MaintenancePage() {
   const detail = detailQuery.data?.data;
   const refetchDetail = detailQuery.refetch;
   const refetchTargets = targetsQuery.refetch;
-  const previewChangeId = getPreviewChangeId(preview);
-  const appliedChangeId = applyResult?.change_id ?? (applySubmitted ? previewChangeId : undefined);
+  const previewMatchesTarget = Boolean(preview?.plan?.target_id === selectedTargetId);
+  const displayedPreview = previewMatchesTarget ? preview : undefined;
+  const displayedApplyResult = applyResult && appliedTargetId.current === selectedTargetId ? applyResult : undefined;
+  const previewChangeId = getPreviewChangeId(displayedPreview);
+  const appliedChangeId = displayedApplyResult?.change_id ?? (applySubmitted ? previewChangeId : undefined);
   const changeQuery = useMaintenanceChange(appliedChangeId, Boolean(appliedChangeId));
   const changeResponse = changeQuery.data?.data;
   const change = changeResponse?.change;
-  const previewExpired = usePreviewExpired(preview, previewCreatedAt);
+  const previewExpired = usePreviewExpired(displayedPreview, previewCreatedAt);
   const resetPreview = previewMutation.reset;
   const resetApply = applyMutation.reset;
 
   useEffect(() => {
+    // reset 不会取消在途请求；代际号阻止旧目标的预览响应回写当前页面。
+    previewGeneration.current += 1;
     setPreview(undefined); setPreviewCreatedAt(undefined); setConfirmed(false); setApplySubmitted(false); setApplyResult(undefined); terminalRefreshKey.current = undefined;
+    appliedTargetId.current = undefined;
     resetPreview(); resetApply();
   }, [resetApply, resetPreview, selectedTargetId]);
 
@@ -102,26 +110,33 @@ export function MaintenancePage() {
     const baseFingerprint = detail?.status.base_fingerprint ?? selectedSummary?.base_fingerprint;
     const currentStatus = detail?.status.status ?? selectedSummary?.status;
     if (!baseFingerprint || !isPreviewableMaintenanceStatus(currentStatus)) return;
+    const generation = ++previewGeneration.current;
+    const requestedTargetId = selectedTargetId;
     setPreview(undefined); setPreviewCreatedAt(undefined); setConfirmed(false); setApplySubmitted(false); setApplyResult(undefined); resetApply();
-    previewMutation.mutate({ targetId: selectedTargetId, base_fingerprint: baseFingerprint }, { onSuccess: (response) => { setPreview(response.data); setPreviewCreatedAt(Date.now()); setConfirmed(false); } });
+    previewMutation.mutate({ targetId: requestedTargetId, base_fingerprint: baseFingerprint }, { onSuccess: (response) => { if (generation !== previewGeneration.current || requestedTargetId !== selectedTargetId || response.data.plan?.target_id !== requestedTargetId) return; setPreview(response.data); setPreviewCreatedAt(Date.now()); setConfirmed(false); } });
   };
 
   /** 仅在完整、未过期预览上提交变更 ID 和一次性令牌；不会自动重放。 */
   const submitApply = () => {
     const token = preview?.confirmation_token;
-    if (!preview || !previewChangeId || !token || previewExpired || !confirmed || applySubmitted || !isApplySupported(preview.platform)) return;
-    setApplySubmitted(true); applyMutation.mutate({ changeId: previewChangeId, confirmation_token: token }, { onSuccess: (response) => setApplyResult(response.data) });
+    if (!preview || !previewMatchesTarget || !previewChangeId || !token || previewExpired || !confirmed || applySubmitted || !isApplySupported(preview.platform)) return;
+    const generation = previewGeneration.current;
+    const submittedTargetId = selectedTargetId;
+    const submittedChangeId = previewChangeId;
+    appliedTargetId.current = submittedTargetId;
+    setApplySubmitted(true); applyMutation.mutate({ changeId: submittedChangeId, confirmation_token: token }, { onSuccess: (response) => { if (generation === previewGeneration.current && submittedTargetId === selectedTargetId && (response.data.change_id ?? submittedChangeId) === submittedChangeId) setApplyResult(response.data); } });
   };
 
   /** 失败或过期后清理旧令牌，强制重新读取基线并生成新的预览。 */
   const restartAfterApplyFailure = () => {
+    previewGeneration.current += 1;
     setPreview(undefined); setPreviewCreatedAt(undefined); setConfirmed(false); setApplySubmitted(false); setApplyResult(undefined); resetPreview(); resetApply(); void detailQuery.refetch();
   };
 
   return <>
     <PageHeader title="安装与修复" description="按目标查看 AIKB 用户环境和 Agent 配置状态；写入前必须完成逐目标预览和高风险确认。" extra={<Tag color="blue">阶段 4B · 受控维护</Tag>} />
     <AsyncMaintenanceState loading={targetsQuery.isLoading} error={targetsQuery.error} empty={!summaries.length} onRetry={() => void targetsQuery.refetch()}>
-      <Row gutter={[16, 16]} className="maintenance-layout"><Col xs={24} lg={8} xl={7}><Card title="固定维护目标" className="maintenance-target-list-card"><nav aria-label="维护目标目录" className="maintenance-target-list">{TARGET_ORDER.map((targetId) => { const item = summaryMap.get(targetId); const status = getStatusView(statusMap.get(targetId)?.status ?? item?.status); return <button type="button" key={targetId} className={`maintenance-target-item${targetId === selectedTargetId ? ' is-selected' : ''}`} onClick={() => setSelectedTargetId(targetId)}><span className="maintenance-target-item-title">{TARGET_LABELS[targetId]}</span><span className="maintenance-target-item-id">{targetId}</span><span className="maintenance-target-item-status"><Tag color={status.color}>{status.label}</Tag></span></button>; })}</nav></Card></Col><Col xs={24} lg={16} xl={17}><MaintenanceDetail detail={detail} fallback={selectedSummary} loading={detailQuery.isLoading} error={detailQuery.error} preview={preview} previewExpired={previewExpired} previewLoading={previewMutation.isPending} previewError={previewMutation.error} applySupported={isApplySupported(detail?.platform ?? platform)} applyLoading={applyMutation.isPending} applySubmitted={applySubmitted} applyError={applyMutation.error} applyResult={applyResult} change={change} changeResponse={changeResponse} changeLoading={changeQuery.isLoading} changeError={changeQuery.error} confirmed={confirmed} onConfirmChange={setConfirmed} onPreview={requestPreview} onApply={submitApply} onRetry={() => void detailQuery.refetch()} onRestart={restartAfterApplyFailure} /></Col></Row>
+      <Row gutter={[16, 16]} className="maintenance-layout"><Col xs={24} lg={8} xl={7}><Card title="固定维护目标" className="maintenance-target-list-card"><nav aria-label="维护目标目录" className="maintenance-target-list">{TARGET_ORDER.map((targetId) => { const item = summaryMap.get(targetId); const status = getStatusView(statusMap.get(targetId)?.status ?? item?.status); return <button type="button" key={targetId} className={`maintenance-target-item${targetId === selectedTargetId ? ' is-selected' : ''}`} onClick={() => { previewGeneration.current += 1; setSelectedTargetId(targetId); }}><span className="maintenance-target-item-title">{TARGET_LABELS[targetId]}</span><span className="maintenance-target-item-id">{targetId}</span><span className="maintenance-target-item-status"><Tag color={status.color}>{status.label}</Tag></span></button>; })}</nav></Card></Col><Col xs={24} lg={16} xl={17}><MaintenanceDetail detail={detail} fallback={selectedSummary} loading={detailQuery.isLoading} error={detailQuery.error} preview={displayedPreview} previewExpired={previewExpired} previewLoading={previewMutation.isPending} previewError={previewMutation.error} applySupported={isApplySupported(detail?.platform ?? platform)} applyLoading={applyMutation.isPending} applySubmitted={applySubmitted} applyError={applyMutation.error} applyResult={displayedApplyResult} change={change} changeResponse={changeResponse} changeLoading={changeQuery.isLoading} changeError={changeQuery.error} confirmed={confirmed} onConfirmChange={setConfirmed} onPreview={requestPreview} onApply={submitApply} onRetry={() => void detailQuery.refetch()} onRestart={restartAfterApplyFailure} /></Col></Row>
     </AsyncMaintenanceState>
     {platform && <div className="maintenance-post-notices">
       <PlatformCapabilityAlert platform={platform} />
