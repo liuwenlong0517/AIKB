@@ -1,13 +1,15 @@
 import { Alert, Button, Card, Col, Descriptions, Empty, Input, List, Pagination as AntPagination, Row, Select, Space, Tag, Typography } from 'antd';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AsyncState } from '../components/AsyncState';
 import { PageHeader } from '../components/PageHeader';
 import { useRuntimeArchivedCheckpoint, useRuntimeArchivedCheckpoints, useRuntimeArchivedWorkingState, useRuntimeArchivedWorkingStates, useRuntimeCheckpoint, useRuntimeCheckpoints, useRuntimeWorkingState, useRuntimeWorkingStates } from '../hooks/useApi';
 import type { ApiMeta, CheckpointDetail, RuntimeRepositorySummary, RuntimeWorkingStateStatus } from '../types/api';
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const STATUS_LABELS: Record<string, string> = { planned: '计划中', active: '进行中', blocked: '已阻塞', completed: '已完成', abandoned: '已放弃', superseded: '已替代' };
 const STATUS_COLORS: Record<string, string> = { planned: 'blue', active: 'green', blocked: 'red', completed: 'green', abandoned: 'orange', superseded: 'purple' };
+function pageNumber(value: string | null): number { const parsed = Number(value); return Number.isInteger(parsed) && parsed > 0 ? parsed : 1; }
 
 /** 将后端降级元信息转为稳定的人类提示；绝不展示底层路径、异常或诊断正文。 */
 function WarningBar({ meta, audit = false }: { meta?: ApiMeta; audit?: boolean }) {
@@ -64,6 +66,16 @@ function Sections({ sections }: { sections?: Record<string, string | string[] | 
   return <List size="small" dataSource={entries} renderItem={([name, value]) => <List.Item><div><Typography.Text strong>{name}</Typography.Text><Typography.Paragraph className="runtime-section-value">{text(value)}</Typography.Paragraph></div></List.Item>} />;
 }
 
+/** total 不可用时只展示真实可知的前后页，避免把估算数量伪装成精确分页总数。 */
+function RuntimePagination({ pagination, page, pageSize, onChange }: { pagination: { total: number | null; has_next: boolean }; page: number; pageSize: number; onChange: (page: number) => void }) {
+  if (pagination.total !== null) {
+    if (pagination.total <= pageSize) return null;
+    return <AntPagination className="section-gap" current={page} pageSize={pageSize} total={pagination.total} showSizeChanger={false} onChange={onChange} />;
+  }
+  if (!pagination.has_next && page <= 1) return null;
+  return <Space className="section-gap"><Button disabled={page <= 1} onClick={() => onChange(page - 1)}>上一页</Button><Typography.Text>第 {page} 页</Typography.Text><Button disabled={!pagination.has_next} onClick={() => onChange(page + 1)}>下一页</Button></Space>;
+}
+
 /** 运行状态页面同时承担列表、任务详情和检查点深链，刷新深层 URL 仍会回到同一只读页面。 */
 export function RuntimePage() {
   const { workId, checkpointId, historyWorkId, historyCheckpointId } = useParams<{ workId?: string; checkpointId?: string; historyWorkId?: string; historyCheckpointId?: string }>();
@@ -74,44 +86,91 @@ export function RuntimePage() {
 
 function RuntimeList({ view }: { view: 'active' | 'history' }) {
   const navigate = useNavigate();
-  const [project, setProject] = useState('');
-  const [agent, setAgent] = useState('');
-  const [status, setStatus] = useState<string>();
-  const [page, setPage] = useState(1);
   const pageSize = 20;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlString = searchParams.toString();
+  const urlProject = searchParams.get('project') ?? '';
+  const urlAgent = searchParams.get('agent') ?? '';
+  const urlStatus = searchParams.get('status') || undefined;
+  const urlPage = pageNumber(searchParams.get('page'));
+  const [project, setProject] = useState(urlProject);
+  const [agent, setAgent] = useState(urlAgent);
+  const [status, setStatus] = useState<string | undefined>(urlStatus);
+  const [page, setPage] = useState(urlPage);
+  const urlSyncRef = useRef(false);
+  const draftRef = useRef({ project: urlProject, agent: urlAgent });
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
+  const textDraft = useMemo(() => ({ project, agent }), [project, agent]);
+  const debouncedText = useDebouncedValue(textDraft);
+  useEffect(() => {
+    const textChanged = urlProject !== project || urlAgent !== agent;
+    if (textChanged) urlSyncRef.current = true;
+    draftRef.current = { project: urlProject, agent: urlAgent };
+    setProject(urlProject); setAgent(urlAgent); setStatus(urlStatus); setPage(urlPage);
+  // URL 字符串是筛选/分页的恢复边界，浏览器后退和前进均从这里重建页面状态。
+  // 仅监听 URL，文本草稿由下方防抖 effect 负责写回，避免输入时触发同步回写。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlString]);
+  useEffect(() => {
+    if (urlSyncRef.current) { urlSyncRef.current = false; return; }
+    if (debouncedText.project === urlProject && debouncedText.agent === urlAgent) return;
+    const next = new URLSearchParams(searchParamsRef.current);
+    if (debouncedText.project) next.set('project', debouncedText.project); else next.delete('project');
+    if (debouncedText.agent) next.set('agent', debouncedText.agent); else next.delete('agent');
+    next.delete('page');
+    setSearchParams(next, { replace: true });
+  // 防抖 effect 只依赖防抖值，URL 变化由同步 effect 处理，避免反写尚未切换的旧草稿。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedText]);
+  const writeImmediate = (changes: Record<string, string | undefined>) => {
+    const next = new URLSearchParams(searchParamsRef.current);
+    // 选择状态或翻页时同步当前文本草稿，避免用户刚输入的条件被旧 URL 覆盖。
+    Object.entries(draftRef.current).forEach(([key, value]) => value ? next.set(key, value) : next.delete(key));
+    Object.entries(changes).forEach(([key, value]) => value ? next.set(key, value) : next.delete(key));
+    setSearchParams(next);
+  };
+  const switchView = (nextView: 'active' | 'history') => {
+    const next = new URLSearchParams(searchParamsRef.current);
+    Object.entries(draftRef.current).forEach(([key, value]) => value ? next.set(key, value) : next.delete(key));
+    next.delete('status'); next.delete('page');
+    const query = next.toString();
+    navigate(`/runtime${nextView === 'history' ? '/history' : ''}${query ? `?${query}` : ''}`);
+  };
   // 两类列表严格按当前路由二选一启用，避免历史筛选被误发给活动接口，
   // 也避免普通活动页无意义读取归档数据。
-  const activeQuery = useRuntimeWorkingStates({ project_id: project || undefined, agent: agent || undefined, status, page, page_size: pageSize }, view === 'active');
-  const archivedQuery = useRuntimeArchivedWorkingStates({ project_id: project || undefined, agent: agent || undefined, status, page, page_size: pageSize }, view === 'history');
+  const activeQuery = useRuntimeWorkingStates({ project_id: urlProject || undefined, agent: urlAgent || undefined, status: urlStatus, page: urlPage, page_size: pageSize }, view === 'active');
+  const archivedQuery = useRuntimeArchivedWorkingStates({ project_id: urlProject || undefined, agent: urlAgent || undefined, status: urlStatus, page: urlPage, page_size: pageSize }, view === 'history');
   const query = view === 'history' ? archivedQuery : activeQuery;
   const data = query.data?.data;
   return <>
     <PageHeader title="运行状态" description="查看活动和历史 Working State 的只读安全摘要。" />
     <Card className="search-controls">
       <Space>
-        <Button type={view === 'active' ? 'primary' : 'default'} onClick={() => { setPage(1); setStatus(undefined); navigate('/runtime'); }}>活动任务</Button>
-        <Button type={view === 'history' ? 'primary' : 'default'} onClick={() => { setPage(1); setStatus(undefined); navigate('/runtime/history'); }}>历史任务</Button>
+        <Button type={view === 'active' ? 'primary' : 'default'} onClick={() => switchView('active')}>活动任务</Button>
+        <Button type={view === 'history' ? 'primary' : 'default'} onClick={() => switchView('history')}>历史任务</Button>
       </Space>
     </Card>
     <Card className="search-controls">
       <Space wrap>
-        <Input aria-label="按项目筛选" placeholder="项目逻辑 ID" value={project} onChange={(event) => { setProject(event.target.value); setPage(1); }} />
-        <Input aria-label="按最新作者筛选" placeholder="最新检查点作者 Agent" value={agent} onChange={(event) => { setAgent(event.target.value); setPage(1); }} />
-        <Select aria-label="按任务状态筛选" allowClear placeholder={view === 'history' ? '全部历史状态' : '全部活动状态'} style={{ width: 170 }} value={status} onChange={(value) => { setStatus(value); setPage(1); }} options={Object.entries(view === 'history' ? { completed: STATUS_LABELS.completed, abandoned: STATUS_LABELS.abandoned, superseded: STATUS_LABELS.superseded } : { planned: STATUS_LABELS.planned, active: STATUS_LABELS.active, blocked: STATUS_LABELS.blocked }).map(([value, label]) => ({ value, label }))} />
-        <Button onClick={() => { setProject(''); setAgent(''); setStatus(undefined); setPage(1); }}>清除筛选</Button>
+        <Input aria-label="按项目筛选" placeholder="项目逻辑 ID" value={project} onChange={(event) => { const value = event.target.value; draftRef.current = { ...draftRef.current, project: value }; setProject(value); }} />
+        <Input aria-label="按最新作者筛选" placeholder="最新检查点作者 Agent" value={agent} onChange={(event) => { const value = event.target.value; draftRef.current = { ...draftRef.current, agent: value }; setAgent(value); }} />
+        <Select aria-label="按任务状态筛选" allowClear placeholder={view === 'history' ? '全部历史状态' : '全部活动状态'} style={{ width: 170 }} value={status} onChange={(value) => writeImmediate({ status: value, page: undefined })} options={Object.entries(view === 'history' ? { completed: STATUS_LABELS.completed, abandoned: STATUS_LABELS.abandoned, superseded: STATUS_LABELS.superseded } : { planned: STATUS_LABELS.planned, active: STATUS_LABELS.active, blocked: STATUS_LABELS.blocked }).map(([value, label]) => ({ value, label }))} />
+        <Button onClick={() => setSearchParams(new URLSearchParams())}>清除筛选</Button>
       </Space>
     </Card>
     <WarningBar meta={query.data?.meta} />
     <AsyncState loading={query.isLoading} error={query.error} onRetry={() => void query.refetch()} empty={!data}>
-      {data && <Card title={<span>{view === 'history' ? '历史任务' : '活动任务'} <Typography.Text type="secondary">{data.pagination.total ?? data.items.length} 项</Typography.Text></span>}>
+      {data && <Card title={<span>{view === 'history' ? '历史任务' : '活动任务'} <Typography.Text type="secondary">{data.pagination.total === null ? `本页 ${data.items.length} 项` : `${data.pagination.total} 项`}</Typography.Text></span>}>
         {!data.items.length ? <Empty description={view === 'history' ? '当前没有历史任务。' : '当前没有活动任务。'} /> : <List itemLayout="vertical" dataSource={data.items} renderItem={(item) => <List.Item actions={[<Link key="detail" to={view === 'history' ? `/runtime/history/${encodeURIComponent(item.work_id)}` : `/runtime/${encodeURIComponent(item.work_id)}`}>查看详情</Link>]}> <List.Item.Meta title={<Space><Link to={view === 'history' ? `/runtime/history/${encodeURIComponent(item.work_id)}` : `/runtime/${encodeURIComponent(item.work_id)}`}>{item.work_id}</Link><StatusTag status={item.status} /><OwnershipTag mode={item.ownership_mode} /></Space>} description={<Space wrap><Typography.Text type="secondary">项目：{text(item.project_id)}</Typography.Text><Typography.Text type="secondary">Owner：{text(item.owner_agent)}</Typography.Text><Typography.Text type="secondary">最新作者：{text(item.author_agent ?? item.agent)}</Typography.Text><Typography.Text type="secondary">参与会话：{item.participant_count ?? item.participants?.length ?? 0}</Typography.Text></Space>} /><Typography.Paragraph ellipsis={{ rows: 2 }}>{text(item.goal)}</Typography.Paragraph><Space wrap><Typography.Text type="secondary">{view === 'history' ? '关闭/最后活动' : '更新'}：{date(item.updated_at)}</Typography.Text><Typography.Text type="secondary">检查点：{text(item.checkpoint_id)}</Typography.Text>{item.workspace_dirty ? <Tag color="orange">工作区有改动</Tag> : <Tag color="green">工作区干净</Tag>}</Space></List.Item>} />}
-        {data.pagination.total !== null && data.pagination.total > pageSize && <AntPagination className="section-gap" current={page} pageSize={pageSize} total={data.pagination.total} showSizeChanger={false} onChange={setPage} />}
+        <RuntimePagination pagination={data.pagination} page={page} pageSize={pageSize} onChange={(nextPage) => writeImmediate({ page: String(nextPage) })} />
       </Card>}
     </AsyncState>
   </>;
 }
 
 function RuntimeDetail({ workId, checkpointId, archived = false }: { workId: string; checkpointId?: string; archived?: boolean }) {
+  const navigate = useNavigate();
   const activeDetailQuery = useRuntimeWorkingState(workId, !archived);
   const archivedDetailQuery = useRuntimeArchivedWorkingState(workId, archived);
   const detailQuery = archived ? archivedDetailQuery : activeDetailQuery;
@@ -127,7 +186,7 @@ function RuntimeDetail({ workId, checkpointId, archived = false }: { workId: str
   const detail = detailQuery.data?.data;
   const checkpoint = checkpointQuery.data?.data;
   return <>
-    <PageHeader title={detail?.work_id ?? '任务详情'} description={archived ? '仅展示已归档任务的安全历史信息。' : '仅展示活动任务的安全恢复信息。'} extra={<Button href={archived ? '/runtime/history' : '/runtime'}>← 返回{archived ? '历史任务' : '活动任务'}</Button>} />
+    <PageHeader title={detail?.work_id ?? '任务详情'} description={archived ? '仅展示已归档任务的安全历史信息。' : '仅展示活动任务的安全恢复信息。'} extra={<Button onClick={() => navigate(archived ? '/runtime/history' : '/runtime')}>← 返回{archived ? '历史任务' : '活动任务'}</Button>} />
     <WarningBar meta={detailQuery.data?.meta} />
     <AsyncState loading={detailQuery.isLoading} error={detailQuery.error} onRetry={() => void detailQuery.refetch()} empty={!detail} emptyDescription={archived ? '未找到该任务或它已不在历史归档范围内。' : '未找到该任务或它已不在活动范围内。'}>
       {detail && <>

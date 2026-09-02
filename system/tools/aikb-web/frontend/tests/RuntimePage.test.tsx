@@ -43,6 +43,7 @@ describe('RuntimePage', () => {
     expect(screen.getByText('任务概览')).toBeInTheDocument();
     expect(screen.getAllByText('未提供会话 ID').length).toBeGreaterThan(0);
     expect(screen.getByText('检查点详情')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /返回活动任务/ })).toBeInTheDocument();
   });
 
   it('检查点列表可翻页并请求后续页，而不是始终读取第一页', async () => {
@@ -73,5 +74,19 @@ describe('RuntimePage', () => {
     expect(screen.getByRole('link', { name: '查看详情' })).toHaveAttribute('href', '/runtime/history/history-task');
     expect(mocks.list).toHaveBeenLastCalledWith(expect.any(Object), false);
     expect(mocks.archivedList).toHaveBeenLastCalledWith(expect.any(Object), true);
+  });
+
+  it('total 不可用时仍依据 has_next 显示下一页并把页码写入 URL', async () => {
+    mocks.list.mockImplementation((params: { page: number }) => result({
+      items: [{ work_id: `active-${params.page}`, status: 'active', goal: '只读观察' }],
+      pagination: { page: params.page, page_size: 20, total: null, has_next: params.page === 1 },
+    }));
+    render(<MemoryRouter initialEntries={['/runtime?project=demo&page=1']}><Routes><Route path="/runtime" element={<RuntimePage />} /></Routes></MemoryRouter>);
+    expect(await screen.findByText('active-1')).toBeInTheDocument();
+    expect(screen.getByText('本页 1 项')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '下一页' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith({ project_id: 'demo', agent: undefined, status: undefined, page: 2, page_size: 20 }, true));
+    expect(await screen.findByText('active-2')).toBeInTheDocument();
   });
 });

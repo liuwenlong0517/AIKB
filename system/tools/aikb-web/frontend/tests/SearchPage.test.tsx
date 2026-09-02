@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SearchPage } from '../src/pages/SearchPage';
 import { useOverview, useSearch } from '../src/hooks/useApi';
@@ -65,5 +65,20 @@ describe('SearchPage', () => {
     await user.click(screen.getByRole('button', { name: '清除筛选' }));
     await waitFor(() => expect(vi.mocked(useSearch)).toHaveBeenLastCalledWith('部署', {}));
     expect(screen.getByRole('button', { name: '清除筛选' })).toBeDisabled();
+  });
+
+  it('从 URL 恢复已生效关键词和筛选，并支持后退恢复上一组条件', async () => {
+    function HistoryButton() { const navigate = useNavigate(); return <button onClick={() => navigate(-1)}>后退</button>; }
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/search?q=旧&type=decision', '/search?q=新&tag=windows']} initialIndex={1}>
+      <Routes><Route path="/search" element={<><SearchPage /><HistoryButton /></>} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole('textbox', { name: '搜索关键词' })).toHaveValue('新');
+    expect(vi.mocked(useSearch)).toHaveBeenLastCalledWith('新', { tag: 'windows' });
+    await user.click(screen.getByRole('button', { name: '后退' }));
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: '搜索关键词' })).toHaveValue('旧');
+      expect(vi.mocked(useSearch)).toHaveBeenLastCalledWith('旧', { type: 'decision' });
+    });
   });
 });

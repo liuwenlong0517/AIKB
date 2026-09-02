@@ -189,16 +189,26 @@ export const useCreateTask = () => {
 
 /** 读取任务列表，并让执行后列表能够及时反映新建任务。 */
 export const useTasks = (): UseQueryResult<ApiResponse<TasksData>> =>
-  useQuery({ queryKey: ['tasks'], queryFn: api.tasks, refetchInterval: 10_000 });
+  useQuery({
+    queryKey: ['tasks'],
+    queryFn: api.tasks,
+    // 任务列表只需在存在活动任务时自动刷新；无活动任务时由用户手动重试或创建任务触发失效。
+    refetchInterval: (query) => {
+      const items = query.state.data?.data.items;
+      if (!items) return 10_000;
+      return items.some((task) => !['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(task.status)) ? 10_000 : false;
+    },
+  });
 
 /** 读取单个任务的安全快照。 */
-export const useTask = (taskId: string | undefined): UseQueryResult<ApiResponse<TaskData>> =>
+export const useTask = (taskId: string | undefined, sseConnected = false): UseQueryResult<ApiResponse<TaskData>> =>
   useQuery({
     queryKey: ['task', taskId],
     queryFn: () => api.task(taskId as string),
     enabled: Boolean(taskId),
-    // SSE 可能因网络、代理或浏览器限制中断；非终态每两秒轮询一次作为最终状态兜底。
+    // SSE 正常连接时不重复轮询；连接失败或尚未建立时保留状态兜底。
     refetchInterval: (query) => {
+      if (sseConnected) return false;
       const status = query.state.data?.data.task.status;
       return pollingInterval(query, status, ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted']);
     },

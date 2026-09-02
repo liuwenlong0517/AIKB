@@ -13,8 +13,8 @@ vi.mock('../src/api/taskEvents', () => ({
   },
 }));
 
-function Probe({ taskId }: { taskId: string }) {
-  const state = useTaskEvents(taskId, true);
+function Probe({ taskId, enabled = true }: { taskId: string; enabled?: boolean }) {
+  const state = useTaskEvents(taskId, enabled);
   const checkpoint = state.events.find((event) => event.replay_reset);
   return <><output data-testid="events">{state.events.map((event) => event.event_id).join(',')}</output><output data-testid="output">{checkpoint?.snapshot?.output?.length ?? 0}</output><output data-testid="error">{state.error?.message ?? ''}</output></>;
 }
@@ -54,5 +54,11 @@ describe('useTaskEvents', () => {
     // 检查点携带此前已折叠的输出，后续事件仍可按顺序继续应用。
     expect(Number(screen.getByTestId('output').textContent)).toBeGreaterThan(0);
     view.unmount();
+  });
+
+  it('禁用时不建立 SSE 连接，供未知或终态详情保持静默', async () => {
+    render(<Probe taskId="missing-task" enabled={false} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(streamState.subscriptions).toHaveLength(0);
   });
 });

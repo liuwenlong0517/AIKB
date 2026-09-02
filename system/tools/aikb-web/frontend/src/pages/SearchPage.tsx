@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Empty, Input, List, Select, Space, Tag, Typography } from 'antd';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AsyncState } from '../components/AsyncState';
 import { PageHeader } from '../components/PageHeader';
 import { useOverview, useSearch } from '../hooks/useApi';
@@ -17,17 +17,30 @@ const TYPE_LABELS: Record<string, string> = {
 
 /** 搜索参数保留为语义筛选条件，交由后端索引实现，避免前端复制搜索算法。 */
 export function SearchPage() {
-  const location = useLocation();
   const navigate = useNavigate();
-  const initialQuery = new URLSearchParams(location.search).get('q') ?? '';
-  const [input, setInput] = useState(initialQuery);
-  const [filters, setFilters] = useState<SearchFilters>({});
+  const [searchParams] = useSearchParams();
+  const effectiveQuery = searchParams.get('q') ?? '';
+  const filters: SearchFilters = {};
+  const typeFilter = searchParams.get('type');
+  const tagFilter = searchParams.get('tag');
+  if (typeFilter) filters.type = typeFilter;
+  if (tagFilter) filters.tag = tagFilter;
+  const [input, setInput] = useState(effectiveQuery);
+  useEffect(() => setInput(effectiveQuery), [effectiveQuery]);
   const overview = useOverview();
-  const query = useSearch(initialQuery, filters);
-  const submit = () => navigate(`/search${input.trim() ? `?q=${encodeURIComponent(input.trim())}` : ''}`);
+  const query = useSearch(effectiveQuery, filters);
+  const updateUrl = (next: { q?: string; type?: string; tag?: string }) => {
+    const params = new URLSearchParams();
+    if (next.q) params.set('q', next.q);
+    if (next.type) params.set('type', next.type);
+    if (next.tag) params.set('tag', next.tag);
+    const queryString = params.toString();
+    navigate(`/search${queryString ? `?${queryString}` : ''}`);
+  };
+  const submit = () => updateUrl({ q: input.trim() || undefined, type: filters.type, tag: filters.tag });
   const updateFilter = (key: keyof SearchFilters, value?: string) => {
     // 空值统一转换为 undefined，避免把“清空”误传给后端成为一个实际筛选词。
-    setFilters((current) => ({ ...current, [key]: value || undefined }));
+    updateUrl({ q: effectiveQuery || undefined, type: key === 'type' ? value : filters.type, tag: key === 'tag' ? value : filters.tag });
   };
   const typeOptions = Object.entries(overview.data?.by_type ?? {})
     .sort(([left], [right]) => left.localeCompare(right))
@@ -69,7 +82,7 @@ export function SearchPage() {
             value={filters.tag}
             onChange={(value) => updateFilter('tag', value)}
           />
-          <Button disabled={!filters.type && !filters.tag} onClick={() => setFilters({})}>清除筛选</Button>
+          <Button disabled={!filters.type && !filters.tag} onClick={() => updateUrl({ q: effectiveQuery || undefined })}>清除筛选</Button>
         </Space>
         <Alert
           type="info"
@@ -79,7 +92,7 @@ export function SearchPage() {
           style={{ marginTop: 16 }}
         />
       </Card>
-      {!initialQuery.trim() ? <Empty className="search-empty" description="输入关键词开始搜索" /> : (
+      {!effectiveQuery.trim() ? <Empty className="search-empty" description="输入关键词开始搜索" /> : (
         <AsyncState loading={query.isLoading} error={query.error} onRetry={() => void query.refetch()} empty={!query.data?.results.length} emptyDescription="没有找到匹配的知识文档">
           <Card title={<span>搜索结果 <Typography.Text type="secondary">{query.data?.count ?? 0} 条</Typography.Text></span>} className="section-gap">
             <List itemLayout="vertical" dataSource={query.data?.results ?? []} renderItem={(item) => (

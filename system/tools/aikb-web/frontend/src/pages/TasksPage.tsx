@@ -179,7 +179,9 @@ function applyTaskEvent(current: TaskSnapshot, event: TaskEvent): TaskSnapshot {
 }
 
 function TaskDetail({ taskId }: { taskId: string }) {
-  const taskQuery = useTask(taskId);
+  const navigate = useNavigate();
+  const [sseConnected, setSseConnected] = useState(false);
+  const taskQuery = useTask(taskId, sseConnected);
   const queriedTask = taskQuery.data?.data.task;
   // 查询切换期间可能短暂保留旧缓存；不让旧任务快照驱动新任务的 SSE。
   const baseTask = queriedTask?.task_id === taskId ? queriedTask : undefined;
@@ -188,10 +190,15 @@ function TaskDetail({ taskId }: { taskId: string }) {
   useEffect(() => {
     appliedEvents.current = new WeakSet<TaskEvent>();
     setLiveTask(undefined);
+    setSseConnected(false);
   }, [taskId]);
   useEffect(() => { if (baseTask) setLiveTask(baseTask); }, [baseTask]);
   const activeTask = liveTask ?? baseTask;
   const events = useTaskEvents(taskId, Boolean(activeTask && !isTerminal(activeTask.status)));
+  useEffect(() => {
+    // SSE 只在已知非终态任务上建立；连接状态下一次渲染再关闭详情轮询，断开则恢复兜底。
+    setSseConnected(events.connected);
+  }, [events.connected]);
   const cancelMutation = useCancelTask(taskId);
   useEffect(() => {
     // Hook 在溢出时会用新的 replay_reset 检查点替换队列，按对象去重可兼容该有界压缩。
@@ -203,7 +210,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
   }, [events.events, taskId]);
   const cancel = () => cancelMutation.mutate(undefined, { onSuccess: (response) => setLiveTask(response.data.task) });
   return <>
-    <PageHeader title="任务详情" description="展示任务状态、有限输出和安全结果；不展示命令、路径、进程句柄或原始异常。" extra={<Button href="/tasks">← 返回任务中心</Button>} />
+    <PageHeader title="任务详情" description="展示任务状态、有限输出和安全结果；不展示命令、路径、进程句柄或原始异常。" extra={<Button onClick={() => navigate('/tasks')}>← 返回任务中心</Button>} />
     <WarningBar meta={taskQuery.data?.meta} />
     <AsyncState loading={taskQuery.isLoading} error={taskQuery.error} onRetry={() => void taskQuery.refetch()} empty={!activeTask} emptyDescription="未找到该任务。">
       {activeTask && <>
