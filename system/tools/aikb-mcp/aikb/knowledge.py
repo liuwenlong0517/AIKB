@@ -336,10 +336,17 @@ class KnowledgeService:
         limit: int = 5,
         excerpt_chars: int = 700,
     ) -> dict[str, Any]:
-        """合并元数据 LIKE 与 FTS 结果，并按分数、标签和数量预算返回候选。"""
+        """以跨词 AND 语义合并元数据 LIKE 与 FTS 结果，并返回排序后的候选。
+
+        查询按空白拆为检索词；每个词可以命中 ID、标题、逻辑路径、当前正文块
+        或标签，但同一候选必须满足全部检索词。trigram 无法索引不足 3 个字符的
+        词，因此这类词在 FTS 分支继续使用 LIKE 约束，避免长词命中后把不含短词
+        的文档误并入结果。
+        """
         query = query.strip()
         if not query:
             raise ValueError("query 不能为空")
+        query_terms = query.split()
         limit = max(1, min(int(limit), 20))
         excerpt_chars = max(120, min(int(excerpt_chars), 1600))
         requested_tags = [tag.strip().lower() for tag in (tags or []) if tag.strip()]
@@ -355,20 +362,30 @@ class KnowledgeService:
                 params.append(entry_type)
             where = " AND ".join(filters)
 
-            like = f"%{query.lower()}%"
+            # 单个词在五类可检索字段之间取 OR，多个词之间取 AND。参数仍全部
+            # 通过 SQLite 占位符绑定，动态生成的只有固定 SQL 片段数量。
+            like_term_clause = """(
+                lower(d.id) LIKE ? OR lower(d.title) LIKE ? OR lower(d.path) LIKE ? OR lower(c.content) LIKE ?
+                OR EXISTS (SELECT 1 FROM tags t WHERE t.document_id = d.id AND lower(t.tag) LIKE ?)
+            )"""
+            metadata_term_where = " AND ".join(like_term_clause for _ in query_terms)
+            metadata_term_params = tuple(
+                value
+                for term in query_terms
+                for value in [f"%{term.lower()}%"] * 5
+            )
             rows = connection.execute(
                 f"""
                 SELECT d.*, c.section, c.content
                 FROM documents d
                 JOIN chunks c ON c.document_id = d.id
                 WHERE {where}
-                  AND (lower(d.id) LIKE ? OR lower(d.title) LIKE ? OR lower(d.path) LIKE ? OR lower(c.content) LIKE ?
-                       OR EXISTS (SELECT 1 FROM tags t WHERE t.document_id = d.id AND lower(t.tag) LIKE ?))
+                  AND {metadata_term_where}
                 ORDER BY CASE WHEN lower(d.id) = ? OR lower(d.title) = ? THEN 0 ELSE 1 END,
                          c.chunk_order
                 LIMIT 100
                 """,
-                (*params, like, like, like, like, like, query.lower(), query.lower()),
+                (*params, *metadata_term_params, query.lower(), query.lower()),
             )
             for row in rows:
                 if row["id"] in candidates:
@@ -376,8 +393,19 @@ class KnowledgeService:
                 candidates[row["id"]] = self._candidate(connection, row, 4.0, "metadata", excerpt_chars)
 
             tokenizer = index_status.get("tokenizer")
-            if tokenizer != "trigram" or len(query) >= 3:
-                fts_query = '"' + query.replace('"', '""') + '"'
+            fts_terms = query_terms if tokenizer != "trigram" else [term for term in query_terms if len(term) >= 3]
+            fallback_terms = [] if tokenizer != "trigram" else [term for term in query_terms if len(term) < 3]
+            if fts_terms:
+                # 各词分别引用后用显式 AND 连接，既保留词内连续匹配，也不再要求
+                # 用户输入的整串（包括空格）必须原样连续出现。
+                fts_query = " AND ".join('"' + term.replace('"', '""') + '"' for term in fts_terms)
+                fallback_where = " AND ".join(like_term_clause for _ in fallback_terms)
+                fallback_sql = f" AND {fallback_where}" if fallback_where else ""
+                fallback_params = tuple(
+                    value
+                    for term in fallback_terms
+                    for value in [f"%{term.lower()}%"] * 5
+                )
                 try:
                     fts_rows = connection.execute(
                         f"""
@@ -385,11 +413,11 @@ class KnowledgeService:
                         FROM chunks_fts
                         JOIN chunks c ON c.id = chunks_fts.rowid
                         JOIN documents d ON d.id = c.document_id
-                        WHERE chunks_fts MATCH ? AND {where}
+                        WHERE chunks_fts MATCH ? AND {where}{fallback_sql}
                         ORDER BY rank
                         LIMIT 100
                         """,
-                        (fts_query, *params),
+                        (fts_query, *params, *fallback_params),
                     )
                     for row in fts_rows:
                         score = 2.0 + (1.0 / (1.0 + abs(float(row["rank"]))))

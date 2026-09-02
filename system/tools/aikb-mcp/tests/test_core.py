@@ -156,6 +156,19 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("测试通过", read["content"])
         self.assertEqual(read["relations"][0]["target"], "aikb:knowledge:engineering:index")
 
+    def test_search_multi_term_uses_and_semantics_without_requiring_exact_phrase(self) -> None:
+        """确认多词可跨字段匹配、顺序无关，且短词不会把 AND 语义降级为 OR。"""
+        rebuild_knowledge_index(self.fixture.settings)
+        service = KnowledgeService(self.fixture.settings)
+
+        # “SQLite 中文”并非正文中的连续短语，且“中文”不足 3 个字符；该用例同时
+        # 覆盖 trigram 短词 LIKE 兜底和拆词后的 AND 约束。
+        mixed = service.search("SQLite 中文")
+        self.assertEqual([item["id"] for item in mixed["results"]], ["aikb:knowledge:engineering:cache"])
+        reversed_terms = service.search("缓存 SQLite")
+        self.assertEqual(reversed_terms["results"][0]["id"], "aikb:knowledge:engineering:cache")
+        self.assertEqual(service.search("SQLite 不存在")["count"], 0)
+
     def test_web_read_models_filter_verified_documents_and_tags(self) -> None:
         """验证 Web 目录、标签与总览只暴露 verified，并只返回 content 逻辑路径。"""
         service = KnowledgeService(self.fixture.settings)
