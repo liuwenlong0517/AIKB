@@ -144,7 +144,10 @@ class TaskStore:
         self._facts_guard = threading.RLock()
         self._facts: OrderedDict[str, _TaskFacts] = OrderedDict()
         self._conditions: dict[str, _ConditionEntry] = {}
+        # 列表页只读取有界字段的内存索引；完整事实回放仍留给详情、恢复与显式兼容入口。
+        self._snapshot_index: dict[str, dict[str, Any]] = {}
         self._refresh_task_dirs()
+        self._load_snapshot_index()
         if recover:
             self.recover_interrupted()
 
@@ -157,6 +160,30 @@ class TaskStore:
                 (task_path / "events.jsonl").is_file() or (task_path / "snapshot.json").is_file()
             ):
                 self._task_dirs[task_id] = task_path
+
+    @staticmethod
+    def _list_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        """提取列表所需的小型安全字段，避免把输出、结果和参数常驻列表索引。"""
+
+        allowed = (
+            "task_id", "action_id", "risk_level", "status", "created_at", "updated_at",
+            "timeout_seconds", "output_truncated", "last_event_id", "progress",
+        )
+        return {key: _safe_json(snapshot.get(key)) for key in allowed if key in snapshot}
+
+    def _load_snapshot_index(self) -> None:
+        """启动时读取一次派生快照；普通列表请求不再遍历任务目录或回放事实。"""
+
+        loaded: dict[str, dict[str, Any]] = {}
+        for task_id, task_dir in list(self._task_dirs.items()):
+            try:
+                snapshot = json.loads((task_dir / "snapshot.json").read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                continue
+            if isinstance(snapshot, dict) and snapshot.get("task_id") == task_id:
+                loaded[task_id] = self._list_projection(snapshot)
+        with self._facts_guard:
+            self._snapshot_index = loaded
 
     def _task_dir(self, task_id: str) -> Path:
         """按服务生成的 ID 定位任务目录；非法 ID 不参与路径拼接。"""
@@ -490,6 +517,7 @@ class TaskStore:
                 os.fsync(output.fileno())
             os.replace(temp_name, task_dir / "snapshot.json")
             temp_name = None
+            task_id = str(snapshot["task_id"])
             facts = self._cached_facts(str(snapshot["task_id"]))
             if facts is not None:
                 facts.snapshot = self._snapshot_fields(snapshot)
@@ -500,11 +528,12 @@ class TaskStore:
                 facts.modified_ns = getattr(stat, "st_mtime_ns", 0)
             # 条件等待者只在完整快照落盘后唤醒，避免观察到事件和投影的中间态。
             with self._facts_guard:
-                entry = self._conditions.get(str(snapshot["task_id"]))
+                self._snapshot_index[task_id] = self._list_projection(snapshot)
+                entry = self._conditions.get(task_id)
                 if notify and entry is not None:
                     entry.condition.notify_all()
                 if notify and str(snapshot.get("status")) in TERMINAL_STATES and entry is not None and entry.waiters == 0:
-                    self._conditions.pop(str(snapshot["task_id"]), None)
+                    self._conditions.pop(task_id, None)
         except (OSError, UnicodeError) as error:
             raise TaskError("任务快照写入失败") from error
         finally:
@@ -552,7 +581,7 @@ class TaskStore:
         return self._read_snapshot(task_id)
 
     def list_tasks(self) -> list[dict[str, Any]]:
-        """按更新时间倒序列出本地任务安全快照。"""
+        """完整校验并列出任务；仅供启动恢复和内部低频兼容路径。"""
         self._refresh_task_dirs()
         values = []
         for task_id in list(self._task_dirs):
@@ -561,6 +590,30 @@ class TaskStore:
             except (KeyError, TaskError):
                 continue
         return sorted(values, key=lambda item: (str(item.get("updated_at") or ""), str(item.get("task_id") or "")), reverse=True)
+
+    def list_tasks_page(self, *, page: int, page_size: int) -> tuple[list[dict[str, Any]], int]:
+        """从内存小型索引返回一页；普通 API 请求不触发目录扫描或 JSONL 回放。"""
+
+        if page < 1 or page_size < 1:
+            raise TaskError("分页参数无效")
+        with self._facts_guard:
+            values = [dict(item) for item in self._snapshot_index.values()]
+        values.sort(key=lambda item: (str(item.get("updated_at") or ""), str(item.get("task_id") or "")), reverse=True)
+        start = (page - 1) * page_size
+        return values[start:start + page_size], len(values)
+
+    def forget_deleted_task(self, task_id: str) -> None:
+        """在受控清理成功后移除终态任务缓存；不触碰任何磁盘内容。"""
+
+        if not TASK_ID_PATTERN.fullmatch(task_id):
+            return
+        with self._facts_guard:
+            self._snapshot_index.pop(task_id, None)
+            self._facts.pop(task_id, None)
+            entry = self._conditions.get(task_id)
+            if entry is not None and entry.waiters == 0:
+                self._conditions.pop(task_id, None)
+        self._task_dirs.pop(task_id, None)
 
     def transition(self, task_id: str, status: str, *, reason: str | None = None, _notify: bool = True) -> dict[str, Any]:
         """执行严格状态转换；终态不可逆，非法边界不会写入事实源。"""

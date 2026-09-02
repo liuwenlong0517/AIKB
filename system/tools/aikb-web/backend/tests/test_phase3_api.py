@@ -168,6 +168,20 @@ class Phase3ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("private", response.text)
 
+    def test_list_uses_snapshot_index_without_directory_or_fact_traversal(self) -> None:
+        task = self.orchestrator.store.create_task(
+            action_id="validate.structure", parameters={}, risk_level="read_only", effects=[], timeout_seconds=30,
+            concurrency_group="structure_validation", preview_digest="d" * 64,
+        )
+        with (
+            patch.object(self.orchestrator.store, "_refresh_task_dirs", side_effect=AssertionError("unexpected scan")),
+            patch.object(self.orchestrator.store, "_read_snapshot", side_effect=AssertionError("unexpected replay")),
+        ):
+            response = self.client.get("/api/v1/tasks?page=1&page_size=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["total"], 1)
+        self.assertEqual(response.json()["data"]["items"][0]["task_id"], task["task_id"])
+
     def test_non_windows_platform_cannot_preview_windows_action(self) -> None:
         with patch(
             "aikb_web.api.v1.actions.platform_state",

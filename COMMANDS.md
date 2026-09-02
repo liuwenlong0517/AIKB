@@ -512,7 +512,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
     pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180 -RuntimeRetentionDays 30
     pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/clear-workspace.ps1 -AuditRetentionDays 90 -CheckpointRetentionDays 180 -RuntimeRetentionDays 30 -Apply
 
-脚本会跳过 reparse point（符号链接或 junction）以及无法读取当前检查点 ID 的活动任务；这类情况通过 JSON 的 `Skipped` 返回，需人工核对。预览 JSON 的 `Preserved` 会列出受保护的 `audit.lock`。清理归档任务后，工作索引会在下次读取时因 Markdown 指纹变化自动重建。
+脚本会跳过 reparse point（符号链接或 junction）以及无法读取当前检查点 ID 的活动任务；这类情况通过 JSON 的 `Skipped` 返回，需人工核对。预览 JSON 的 `Preserved` 会列出受保护的 `audit.lock`。脚本清理归档任务后应显式运行 `python -m aikb rebuild`，再由 WebUI 读取更新后的派生索引；WebUI 自带的数据维护入口会在删除后直接同步对应派生行。
 
 ## 5. 自动校验与性能命令
 
@@ -669,7 +669,7 @@ MCP 服务必须以 `python -m aikb serve --agent codex` 或对应 Agent 标识�
 
 ## 7. AIKB WebUI 命令
 
-WebUI 当前在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读、总览中的项目/命令手册入口、活动与历史 Working State、检查点、脱敏审计查询、系统状态、安装修复状态与受控应用，以及规则读取和 USER_RULES.md 的受控预览/确认应用。AI_RULES.md 与 CONTRIBUTING.md 在 Web 中只读；服务不提供知识正文修改、Working State 写入、Shell 执行或原始诊断下载。规则和维护 apply 只接受短期确认凭据并由服务端校验基线，macOS 仅保留扩展位置，尚未实现或验证。
+WebUI 当前在 Windows 本机提供 verified 知识总览、目录、搜索、Markdown 阅读、总览中的项目/命令手册入口、活动与历史 Working State、检查点、脱敏审计查询、系统状态、安装修复状态与受控应用、数据维护，以及规则读取和 USER_RULES.md 的受控预览/确认应用。数据维护只盘点固定类别，必须经过短期预览、保护摘要、二次确认和锁内重新扫描，不接受路径。AI_RULES.md 与 CONTRIBUTING.md 在 Web 中只读；服务不提供知识正文修改、Working State 写入、Shell 执行或原始诊断下载。规则和维护 apply 只接受短期确认凭据并由服务端校验基线，macOS 仅保留扩展位置，尚未实现或验证。
 
 ### 7.1 构建：`build-aikb-web.ps1`
 

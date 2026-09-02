@@ -53,6 +53,8 @@ class KnowledgeGateway(Protocol):
 
     def web_archived_checkpoint(self, work_id: str, checkpoint_id: str) -> dict[str, Any]: ...
 
+    def data_maintenance_deleted(self, category: str, object_id: str) -> None: ...
+
     def web_repository_summary(self) -> dict[str, Any]: ...
 
     def web_audit_query(self, **kwargs: Any) -> dict[str, Any]: ...
@@ -400,6 +402,15 @@ class CoreKnowledgeGateway:
             raise
         except Exception as error:
             raise GatewayError("归档检查点读取失败") from error
+
+    def data_maintenance_deleted(self, category: str, object_id: str) -> None:
+        """受控清理完成后同步可重建投影；仅接受固定类别的逻辑标识。"""
+
+        if category != "archived_work":
+            return
+        method = getattr(self._workstate(), "remove_archived_from_index", None)
+        if callable(method):
+            method(object_id)
 
     def web_repository_summary(self) -> dict[str, Any]:
         """委托共享双仓语义摘要，避免 Web 层重新读取 Git 原始输出。"""

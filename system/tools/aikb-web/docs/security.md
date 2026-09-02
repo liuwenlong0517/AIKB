@@ -3,7 +3,7 @@
 ## 运行边界
 
 - 仅 Windows 本机支持，服务固定监听 127.0.0.1；启动器不接受任意监听地址、端口转发或局域网开关。
-- 知识、运行状态和审计 API 只开放 GET、OPTIONS；阶段 3 另有受保护的动作预览、任务创建和取消 POST，阶段 4A 另有规则候选预览与 `user` 应用 POST。动作只能来自三项静态注册的 Windows 本地只读检查；规则应用只执行专用 Python 原子事务，不启动 Shell/PowerShell，不修改 Working State、知识或 Git 元数据，不做 commit/push/reset/checkout。
+- 知识、运行状态和审计 API 只开放 GET、OPTIONS；受保护 POST 仅用于静态动作预览与任务、规则候选与 `user` 应用、安装修复以及固定类别数据维护。动作只能来自三项静态注册的 Windows 本地只读检查；规则应用和维护使用专用 Python 边界，不接受任意 Shell/PowerShell，不修改正式知识或执行 commit/push/reset/checkout。
 - 生产模式由 FastAPI 同源提供前端静态资源；开发 CORS 只允许约定的本机 Vite 端口，不允许通配符来源。
 - 未知 API 返回 JSON 404，不得回退到 HTML；页面深路由才允许 SPA 入口回退。
 
@@ -12,6 +12,8 @@
 阶段 4A 事务只写入 `workspace/runtime/web/rule-changes/`：`candidate.md` 和 `backup.md` 是短期本机材料，`transaction.json` 只含逻辑 ID、哈希、状态、时间和任务关联。完整 diff 只在预览响应内返回；令牌仅存进程内并返回当前页面内存，不写任务、审计或事务。成功后清理正文材料；恢复所需的唯一备份不得提前删除。
 
 阶段 4B 预览不写磁盘，只在进程内暂存安全 plan/status、服务端 change ID 和五分钟令牌。apply 重新检查现场后才创建 `workspace/runtime/web/maintenance-transactions/` 事务及私有材料；任务和审计只保存 change ID、目标、指纹和固定状态，配置正文、环境值、备份和 probe 输出不得离开私有材料边界。
+
+数据维护只允许三个服务端固定类别和有界保留期。预览不删除，apply 必须携带绑定类别、保留期和候选摘要的五分钟单次令牌，并在共享维护锁内重新扫描；候选变化即拒绝。活动 Working State、非终态 Web 任务、安装/规则恢复材料、锁、链接/重解析点、不可读及状态不确定对象不能进入删除集合。实际删除测试只能使用隔离临时 workspace。
 
 ## 输入和逻辑标识
 

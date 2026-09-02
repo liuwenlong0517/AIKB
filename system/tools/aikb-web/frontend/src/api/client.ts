@@ -32,6 +32,9 @@ import type {
   MaintenanceApplyData,
   MaintenanceChangeEnvelope,
   ManualData,
+  DataMaintenanceOverview,
+  DataMaintenancePreview,
+  DataMaintenanceApplyResult,
 } from '../types/api';
 
 /** 将后端错误统一转换为页面可展示的错误，并保留 request id 供问题定位。 */
@@ -212,6 +215,14 @@ export const api = {
     /** 查询维护事务和任务关联；服务端未提供该路由时由页面以错误态提示，不自动重试写入。 */
     change: (changeId: string) =>
       apiClient.getEnvelope<MaintenanceChangeEnvelope>(`/maintenance/changes/${encodeURIComponent(changeId)}`),
+  },
+  /** 数据维护只提交固定类别、保留天数和服务端一次性令牌，不接受路径。 */
+  dataMaintenance: {
+    overview: () => apiClient.getEnvelope<DataMaintenanceOverview>('/data-maintenance'),
+    preview: (body: { categories: string[]; retention_days: Record<string, number> }) =>
+      apiClient.postEnvelope<DataMaintenancePreview>('/data-maintenance/preview', body),
+    apply: (planId: string, body: { confirmation_token: string }) =>
+      apiClient.postEnvelope<DataMaintenanceApplyResult>(`/data-maintenance/plans/${encodeURIComponent(planId)}/apply`, body),
   },
 };
 

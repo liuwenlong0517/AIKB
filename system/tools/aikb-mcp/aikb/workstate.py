@@ -730,9 +730,14 @@ class WorkStateStore:
         connection = sqlite3.connect(self.settings.work_db)
         try:
             connection.row_factory = sqlite3.Row
+            where_clause = " AND ".join(filters)
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM work_items WHERE {where_clause}", params,
+            ).fetchone()[0])
+            start = (page - 1) * page_size
             rows = connection.execute(
-                f"SELECT * FROM work_items WHERE {' AND '.join(filters)}",
-                params,
+                f"SELECT * FROM work_items WHERE {where_clause} ORDER BY updated_at DESC, work_id ASC LIMIT ? OFFSET ?",
+                [*params, page_size, start],
             ).fetchall()
         except sqlite3.Error:
             return {"count": 0, "unique": False, "items": [], "pagination": self._web_pagination(page, page_size, 0, 0), "index": {**index, "status": "unavailable", "reason": "derived_index_query_failed"}}
@@ -741,15 +746,7 @@ class WorkStateStore:
         # 索引同时容纳归档记录；公共 v1 契约再次按事实路径确认 active，避免
         # 历史数据或旧索引把归档任务混入活动观察面。
         rows = [row for row in rows if self._is_active_record(dict(row))]
-        rows = sorted(rows, key=lambda row: (str(row["updated_at"] or ""), str(row["work_id"] or "")), reverse=True)
-        # updated_at 倒序后，work_id 也需按稳定方向排序；不能用单一 reverse 让
-        # 同时间的 ID 反向，故对相同时间段再做显式升序处理。
-        rows = sorted(rows, key=lambda row: str(row["work_id"] or ""))
-        rows = sorted(rows, key=lambda row: str(row["updated_at"] or ""), reverse=True)
-        total = len(rows)
-        start = (page - 1) * page_size
-        selected = rows[start:start + page_size]
-        items = [self._web_work_record(dict(row), detail=False) for row in selected]
+        items = [self._web_work_record(dict(row), detail=False) for row in rows]
         return {
             "count": len(items), "unique": len(items) == 1, "items": items,
             "pagination": self._web_pagination(page, page_size, total, len(items)), "index": index,
@@ -807,21 +804,21 @@ class WorkStateStore:
         connection = sqlite3.connect(self.settings.work_db)
         try:
             connection.row_factory = sqlite3.Row
+            where_clause = " AND ".join(filters)
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM work_items WHERE {where_clause}", params,
+            ).fetchone()[0])
+            start = (page - 1) * page_size
             rows = connection.execute(
-                f"SELECT * FROM work_items WHERE {' AND '.join(filters)}",
-                params,
+                f"SELECT * FROM work_items WHERE {where_clause} ORDER BY updated_at DESC, work_id ASC LIMIT ? OFFSET ?",
+                [*params, page_size, start],
             ).fetchall()
         except sqlite3.Error:
             return {"count": 0, "unique": False, "items": [], "pagination": self._web_pagination(page, page_size, 0, 0), "index": {**index, "status": "unavailable", "reason": "derived_index_query_failed"}}
         finally:
             connection.close()
         rows = [row for row in rows if self._is_archived_record(dict(row))]
-        rows = sorted(rows, key=lambda row: str(row["work_id"] or ""))
-        rows = sorted(rows, key=lambda row: str(row["updated_at"] or ""), reverse=True)
-        total = len(rows)
-        start = (page - 1) * page_size
-        selected = rows[start:start + page_size]
-        items = [{**self._web_work_record(dict(row), detail=False), "lifecycle": "archived"} for row in selected]
+        items = [{**self._web_work_record(dict(row), detail=False), "lifecycle": "archived"} for row in rows]
         return {
             "count": len(items), "unique": len(items) == 1, "items": items,
             "pagination": self._web_pagination(page, page_size, total, len(items)), "index": index,
@@ -1034,6 +1031,23 @@ class WorkStateStore:
             pass
         self.rebuild_index()
 
+    def remove_archived_from_index(self, work_id: str) -> None:
+        """事实归档被受控清理后移除对应派生行；不读取或删除任何 Markdown。"""
+
+        if not self._valid_web_identifier(work_id):
+            raise ValueError("work_id 格式无效")
+        if not self.settings.work_db.is_file():
+            return
+        connection = sqlite3.connect(self.settings.work_db)
+        try:
+            connection.execute(
+                "DELETE FROM work_items WHERE work_id = ? AND status IN ('completed','abandoned','superseded')",
+                (work_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
     def is_dirty_since_checkpoint(self, project_path: str, item: dict[str, Any]) -> bool:
         """比较检查点记录的单仓或多仓签名，判断工作区是否发生变化。"""
         repositories = item.get("repositories") or []
@@ -1047,7 +1061,7 @@ class WorkStateStore:
         return _git_signature(project_path)[3] != item.get("workspace_signature", "")
 
     def _web_index_status(self) -> dict[str, Any]:
-        """确保 Web 查询使用的派生索引可用，并返回不含路径的可解释状态。"""
+        """确认 Web 派生索引结构可用；普通读取不重新遍历全部 Markdown。"""
         status: dict[str, Any] = {
             "source": "working-state Markdown",
             "derived": "SQLite index",
@@ -1062,7 +1076,9 @@ class WorkStateStore:
                     metadata = dict(connection.execute("SELECT key, value FROM index_metadata"))
                 finally:
                     connection.close()
-                needs_rebuild = metadata.get("schema_version") != WORK_SCHEMA_VERSION or metadata.get("fingerprint") != self._work_fingerprint()
+                # 所有受控 Working State 写入都会原子重建索引；内容指纹校验保留在
+                # ensure_index/显式重建路径，避免每次 Web 列表读取扫描全部事实文件。
+                needs_rebuild = metadata.get("schema_version") != WORK_SCHEMA_VERSION or not metadata.get("fingerprint")
             if needs_rebuild:
                 self.rebuild_index()
                 status.update(status="rebuilt", rebuilt=True)
@@ -1261,19 +1277,20 @@ class WorkStateStore:
         raise KeyError("工作状态不存在")
 
     def _web_archived_work_dir(self, work_id: str) -> Path:
-        """按工作 ID 定位归档目录，并以 Front Matter 状态确认历史边界。"""
+        """通过派生索引定位归档目录，再以事实 Front Matter 确认历史边界。"""
         if not self._valid_web_identifier(work_id):
             raise ValueError("work_id 格式无效")
         root = self.settings.workspace_root / "archive"
-        for path in sorted(root.rglob("work.md")):
-            try:
-                resolved = path.parent.resolve()
-                resolved.relative_to(root.resolve())
-                data = self._load_work(path)
-                if data.get("work_id") == work_id and data.get("status") in {"completed", "abandoned", "superseded"}:
-                    return resolved
-            except (OSError, ValueError):
-                continue
+        row = self._web_archived_row_for_work(work_id)
+        path = Path(str(row.get("path") or ""))
+        try:
+            resolved = path.parent.resolve()
+            resolved.relative_to(root.resolve())
+            data = self._load_work(path)
+            if data.get("work_id") == work_id and data.get("status") in {"completed", "abandoned", "superseded"}:
+                return resolved
+        except (OSError, ValueError):
+            pass
         raise KeyError("归档工作状态不存在")
 
     def _web_checkpoint_record(self, path: Path, *, include_detail: bool) -> dict[str, Any]:

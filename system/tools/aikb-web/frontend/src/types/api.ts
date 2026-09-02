@@ -577,3 +577,48 @@ export interface MaintenanceApplyData {
   blocked?: boolean;
   warning?: string | null;
 }
+
+/** 数据维护类别只包含服务端固定统计，不包含任何物理或相对路径。 */
+export interface DataMaintenanceCategory {
+  id: 'audit' | 'archived_work' | 'web_tasks';
+  label: string;
+  retention_days: number;
+  candidate_count: number;
+  candidate_bytes: number;
+  protected_count: number;
+}
+
+export interface DataMaintenanceProtected {
+  count: number;
+  reasons: Array<{ code: string; count: number }>;
+}
+
+export interface DataMaintenanceOverview {
+  categories: DataMaintenanceCategory[];
+  protected: DataMaintenanceProtected;
+  defaults: Record<DataMaintenanceCategory['id'], number>;
+  apply_supported: boolean;
+  scan_scope: string;
+}
+
+/** 短期清理计划；令牌只在当前页面内存中使用，不持久化。 */
+export interface DataMaintenancePreview {
+  plan_id: string;
+  preview_digest: string;
+  confirmation_token: string;
+  expires_at: string;
+  risk_level: 'destructive_local_data';
+  categories: DataMaintenanceCategory[];
+  candidate_count: number;
+  candidate_bytes: number;
+  protected: DataMaintenanceProtected;
+  steps: string[];
+}
+
+export interface DataMaintenanceApplyResult {
+  plan_id: string;
+  status: 'succeeded';
+  deleted_count: number;
+  deleted_bytes: number;
+  categories: DataMaintenanceCategory['id'][];
+}

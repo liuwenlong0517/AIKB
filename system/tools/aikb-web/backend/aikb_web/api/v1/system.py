@@ -122,6 +122,11 @@ def capabilities(request: Request) -> dict[str, Any]:
                 {"id": "runtime.archive.read", "supported": True},
                 {"id": "runtime.checkpoint.read", "supported": True},
                 {"id": "audit.read", "supported": True},
+                {
+                    "id": "workspace.maintenance",
+                    "supported": bool(getattr(request.app.state, "data_maintenance_service", None)),
+                    **({} if getattr(request.app.state, "data_maintenance_service", None) else {"reason": "workspace_unavailable"}),
+                },
                 {"id": "knowledge.write", "supported": False, "reason": "read_only"},
                 {"id": "runtime.work_state.write", "supported": False, "reason": "read_only"},
                 {

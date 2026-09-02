@@ -54,10 +54,9 @@ def create_task(request: Request, body: TaskCreateRequest) -> dict[str, Any]:
 
 @router.get("")
 def list_tasks(request: Request, page: int = Query(default=1, ge=1), page_size: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
-    """列出任务安全投影；分页只在内存投影上进行，不扫描 Markdown/SQLite。"""
-    items = _orchestrator(request).list_tasks()
-    start = (page - 1) * page_size
-    return success({"items": items[start:start + page_size], "total": len(items)}, request, allow_safe_result=True)
+    """列出任务安全投影；普通请求不扫描任务目录或回放历史 JSONL。"""
+    items, total = _orchestrator(request).list_tasks_page(page=page, page_size=page_size)
+    return success({"items": items, "total": total}, request, allow_safe_result=True)
 
 
 @router.get("/{task_id}")

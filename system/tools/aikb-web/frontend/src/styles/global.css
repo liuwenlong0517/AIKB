@@ -99,6 +99,10 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .maintenance-diff-semantics .ant-descriptions-item-label { width: 88px; color: #667085; }
 .maintenance-diff-evidence { width: 100%; color: #667085; font-size: 12px; }
 .maintenance-diff-evidence summary { cursor: pointer; }
+.data-maintenance-category-card { height: 100%; }
+.data-maintenance-category-content { width: 100%; }
+.data-maintenance-preview { border-color: #ffccc7; }
+.data-maintenance-confirmation { display: grid; gap: 14px; margin-top: 18px; padding: 14px; border: 1px solid #ffccc7; border-radius: 8px; background: #fff7f6; }
 .markdown-body { color: #293448; line-height: 1.8; overflow-wrap: anywhere; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #14213d; line-height: 1.35; margin: 1.5em 0 0.7em; }
 .markdown-body h1:first-child { margin-top: 0; }

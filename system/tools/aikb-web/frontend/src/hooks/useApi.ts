@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TaskSnapshot, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData, MaintenanceApplyData, MaintenanceChangeEnvelope, ManualData } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TaskSnapshot, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData, MaintenanceApplyData, MaintenanceChangeEnvelope, ManualData, DataMaintenanceOverview, DataMaintenancePreview, DataMaintenanceApplyResult } from '../types/api';
 import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
@@ -31,6 +31,20 @@ function pollingInterval(query: PollingQuery, status: string | undefined, termin
 }
 
 export const useOverview = () => useQuery({ queryKey: ['knowledge-overview'], queryFn: api.overview });
+/** 数据维护盘点是显式低频扫描；页面不会自动轮询或在窗口聚焦时重复触发。 */
+export const useDataMaintenanceOverview = (): UseQueryResult<ApiResponse<DataMaintenanceOverview>> =>
+  useQuery({ queryKey: ['data-maintenance'], queryFn: api.dataMaintenance.overview, staleTime: 0, refetchOnWindowFocus: false });
+
+export const usePreviewDataMaintenance = () =>
+  useMutation<ApiResponse<DataMaintenancePreview>, Error, { categories: string[]; retention_days: Record<string, number> }>({ mutationFn: api.dataMaintenance.preview });
+
+export const useApplyDataMaintenance = () => {
+  const queryClient = useQueryClient();
+  return useMutation<ApiResponse<DataMaintenanceApplyResult>, Error, { planId: string; confirmation_token: string }>({
+    mutationFn: ({ planId, confirmation_token }) => api.dataMaintenance.apply(planId, { confirmation_token }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['data-maintenance'] }); },
+  });
+};
 /** 深层手册路由刷新后独立恢复正文；未知逻辑 ID 由后端安全拒绝。 */
 export const useManual = (manualId: string | undefined): UseQueryResult<ManualData> =>
   useQuery({ queryKey: ['manual', manualId], queryFn: () => api.manual(manualId as string), enabled: Boolean(manualId) });

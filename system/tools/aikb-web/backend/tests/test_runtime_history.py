@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from aikb.config import Settings
 from aikb.workstate import WorkStateStore
@@ -67,6 +68,17 @@ class RuntimeHistoryStoreTests(unittest.TestCase):
         checkpoint = self.store.web_archived_checkpoint(work_id, checkpoint_id)
         self.assertEqual(checkpoint["lifecycle"], "archived")
         self.assertNotIn(str(self.store.settings.workspace_root), json.dumps(checkpoint, ensure_ascii=False))
+
+    def test_web_history_uses_index_without_workspace_fingerprint_or_recursive_lookup(self) -> None:
+        work_id = self._create_archived()
+        with (
+            patch.object(self.store, "_work_fingerprint", side_effect=AssertionError("unexpected fingerprint")),
+            patch.object(Path, "rglob", side_effect=AssertionError("unexpected recursive scan")),
+        ):
+            history = self.store.web_archived_work_states(page=1, page_size=1)
+            checkpoints = self.store.web_archived_checkpoints(work_id, page=1, page_size=1)
+        self.assertEqual(history["items"][0]["work_id"], work_id)
+        self.assertEqual(checkpoints["work_id"], work_id)
 
     def test_archived_filter_rejects_open_states(self) -> None:
         with self.assertRaises(ValueError):

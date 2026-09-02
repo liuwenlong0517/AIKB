@@ -15,6 +15,7 @@ const TasksPage = lazy(() => import('../pages/TasksPage').then(({ TasksPage: pag
 const RulesPage = lazy(() => import('../pages/RulesPage').then(({ RulesPage: page }) => ({ default: page })));
 const MaintenancePage = lazy(() => import('../pages/MaintenancePage').then(({ MaintenancePage: page }) => ({ default: page })));
 const ManualPage = lazy(() => import('../pages/ManualPage').then(({ ManualPage: page }) => ({ default: page })));
+const DataMaintenancePage = lazy(() => import('../pages/DataMaintenancePage').then(({ DataMaintenancePage: page }) => ({ default: page })));
 
 /** 保留布局壳层常驻，仅替换当前页面内容，避免每次懒加载都闪烁整个应用框架。 */
 function LazyRoute({ page: Page }: { page: ComponentType }) {
@@ -39,6 +40,7 @@ export function App() {
             <Route path="/rules" element={<LazyRoute page={RulesPage} />} />
             <Route path="/rules/:ruleId" element={<LazyRoute page={RulesPage} />} />
             <Route path="/maintenance" element={<LazyRoute page={MaintenancePage} />} />
+            <Route path="/data-maintenance" element={<LazyRoute page={DataMaintenancePage} />} />
             <Route path="/search" element={<LazyRoute page={SearchPage} />} />
             <Route path="/system" element={<LazyRoute page={SystemPage} />} />
             <Route path="/runtime" element={<LazyRoute page={RuntimePage} />} />

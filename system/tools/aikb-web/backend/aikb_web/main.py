@@ -25,6 +25,7 @@ from aikb_web.api.v1.system import router as system_router
 from aikb_web.api.v1.rules import router as rules_router
 from aikb_web.api.v1.maintenance import router as maintenance_router
 from aikb_web.api.v1.manuals import router as manuals_router
+from aikb_web.api.v1.data_maintenance import router as data_maintenance_router
 from aikb_web.core.actions import ActionRegistry, ConfirmationTokenService
 from aikb_web.core.gateway import GatewayError, KnowledgeNotFound, KnowledgeGateway, CoreKnowledgeGateway
 from aikb_web.core.orchestrator import TaskOrchestrator
@@ -39,6 +40,7 @@ from aikb_web.core.maintenance_bootstrap import (
     build_default_maintenance_services,
 )
 from aikb_web.core.maintenance_task import MaintenanceTaskCoordinator
+from aikb_web.core.workspace_cleanup import WorkspaceCleanupService
 from aikb_web.core.manuals import ManualProvider
 from aikb_web.platform import platform_state
 from aikb_web.platform.windows.maintenance_readonly import build_windows_readonly_adapter
@@ -154,6 +156,7 @@ def create_app(
     maintenance_task_coordinator: MaintenanceTaskCoordinator | None = None,
     maintenance_material_provider: Any | None = None,
     manual_provider: Any | None = None,
+    data_maintenance_service: WorkspaceCleanupService | None = None,
 ) -> FastAPI:
     """创建可注入网关/任务/规则/维护适配器的 FastAPI 应用，便于契约测试和平台替换。"""
     gateway_was_default = gateway is None
@@ -390,6 +393,24 @@ def create_app(
                 app.state.maintenance_task_coordinator,
             ) = services
             app.state.maintenance_material_provider = getattr(app.state.maintenance_executor, "_adapter", None)
+    # 数据维护复用短期确认令牌和全局维护写锁，但只扫描固定 workspace 类别；
+    # 构造阶段不扫描或删除，测试可注入绑定隔离临时目录的真实服务。
+    app.state.data_maintenance_service = data_maintenance_service
+    if app.state.data_maintenance_service is None and app.state.task_settings is not None and app.state.maintenance_write_lock is not None:
+        try:
+            app.state.data_maintenance_service = WorkspaceCleanupService(
+                app.state.task_settings.workspace_root,
+                token_service=app.state.confirmation_tokens,
+                write_lock=app.state.maintenance_write_lock,
+                audit_sink=getattr(app.state.knowledge_gateway, "web_audit_write", None),
+                deleted_sink=lambda category, object_id: (
+                    app.state.task_orchestrator.forget_deleted_task(object_id)
+                    if category == "web_tasks" and app.state.task_orchestrator is not None
+                    else getattr(app.state.knowledge_gateway, "data_maintenance_deleted", lambda *_: None)(category, object_id)
+                ),
+            )
+        except Exception:
+            app.state.data_maintenance_service = None
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:
@@ -469,6 +490,7 @@ def create_app(
     app.include_router(rules_router, prefix="/api/v1")
     app.include_router(maintenance_router, prefix="/api/v1")
     app.include_router(manuals_router, prefix="/api/v1")
+    app.include_router(data_maintenance_router, prefix="/api/v1")
 
     @app.api_route("/api/{path:path}", methods=["GET"])
     def unknown_api(path: str) -> None:

@@ -289,6 +289,24 @@ class TaskOrchestrator:
         """读取任务安全投影列表。"""
         return self.store.list_tasks()
 
+    def list_tasks_page(self, *, page: int, page_size: int) -> tuple[list[dict[str, Any]], int]:
+        """读取一页轻量任务投影，避免普通页面请求全量遍历事实文件。"""
+
+        pager = getattr(self.store, "list_tasks_page", None)
+        if callable(pager):
+            return pager(page=page, page_size=page_size)
+        # 保留测试替身与外部注入 store 的兼容边界。
+        values = self.store.list_tasks()
+        start = (page - 1) * page_size
+        return values[start:start + page_size], len(values)
+
+    def forget_deleted_task(self, task_id: str) -> None:
+        """清理模块删除终态任务后同步本进程列表缓存。"""
+
+        forget = getattr(self.store, "forget_deleted_task", None)
+        if callable(forget):
+            forget(task_id)
+
     def events(self, task_id: str) -> list[dict[str, Any]]:
         """兼容旧调用方读取全部事件；事实校验由 TaskStore 公开接口完成。"""
         return self.store.read_all_events(task_id)
