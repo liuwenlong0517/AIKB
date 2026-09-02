@@ -47,7 +47,9 @@ class MaintenanceRecoveryGate:
                 raise MaintenanceRecoveryGateError("扫描事务结果无效")
             if not all(isinstance(item, MaintenanceScanIssue) for item in issue_list):
                 raise MaintenanceRecoveryGateError("扫描问题结果无效")
-            self._change_ids = {item.change_id for item in transaction_list if item.status in {"applying", "verifying", "rolling_back", "recovery_required"}}
+            # prepared 也要纳入启动恢复待处理集合：确认上下文只在原进程内，
+            # 扫描期间若证据不可读必须继续阻断，而不能让草稿绕过门禁。
+            self._change_ids = {item.change_id for item in transaction_list if item.status in {"prepared", "applying", "verifying", "rolling_back", "recovery_required"}}
             self._issues = issue_list
             self._scan_complete = True
             self._rescan_required = False

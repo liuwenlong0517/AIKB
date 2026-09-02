@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
@@ -247,6 +248,26 @@ class MaintenanceTaskCoordinator:
         except TaskError:
             pass
 
+    def _mark_prepared_recovery(self, transaction: MaintenanceChange, task_id: str) -> None:
+        """把认领前失败的 prepared 收敛到 recovery_required 并保留现场。
+
+        worker 已经创建了 task，或执行器已经写入开始审计；即使当前事务仍为
+        prepared，也不能把它当作普通过期草稿清理。事务摘要先落为恢复态，后续
+        启动恢复再依据平台和审计事实决定人工处置。
+        """
+
+        leaves = tuple(
+            replace(leaf, progress="recovery_required") if index == 0 else leaf
+            for index, leaf in enumerate(transaction.leaf_states)
+        )
+        recovery = transaction.transition(
+            "recovery_required",
+            task_id=task_id,
+            updated_at=_utc_now(),
+            leaf_states=leaves,
+        )
+        self.transactions.save(recovery)
+
     def _run(
         self,
         task_id: str,
@@ -303,7 +324,12 @@ class MaintenanceTaskCoordinator:
         except Exception:
             try:
                 current = self.transactions.load(change_id)
-                needs_recovery = needs_recovery or current.status in {"applying", "verifying", "rolling_back", "recovery_required"}
+                if current.status == "prepared":
+                    # 任务已存在但事务尚未 claim；这是异常现场，不得遗留 prepared。
+                    self._mark_prepared_recovery(current, task_id)
+                    needs_recovery = True
+                else:
+                    needs_recovery = needs_recovery or current.status in {"applying", "verifying", "rolling_back", "recovery_required"}
             except Exception:
                 needs_recovery = True
             if needs_recovery:

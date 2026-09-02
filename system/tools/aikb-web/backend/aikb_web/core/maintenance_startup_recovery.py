@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import re
 from typing import Any, Mapping, Protocol
 
@@ -28,6 +29,12 @@ from .maintenance_recovery_gate import MaintenanceRecoveryGate
 from .maintenance_targets import MAINTENANCE_TARGET_REGISTRY, validate_logical_id
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _utc_now() -> str:
+    """生成恢复状态的 UTC 时间；不携带路径或平台正文。"""
+
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 class MaintenanceStartupRecoveryError(RuntimeError):
@@ -104,6 +111,10 @@ class MaintenanceRecoveryEvidence(Protocol):
 
     def finish_recovery(self, transaction: MaintenanceChange, outcome: str) -> bool: ...
 
+    # 可选的 apply 开始证据查询。旧的注入式测试桩和平台实现无需立即实现，
+    # 缺少该方法时恢复器按“没有任务/写入证据”处理 prepared。
+    def task_evidence(self, change_id: str) -> str | None: ...
+
 
 class MaintenanceStartupRecovery:
     """在共享写锁内逐笔恢复非终态维护事务，并保持 fail-closed。"""
@@ -139,7 +150,13 @@ class MaintenanceStartupRecovery:
             with self._lock.held(timeout=timeout):
                 transactions, issues = self._scan_and_gate()
                 for transaction in sorted(transactions, key=lambda item: (item.created_at, item.change_id)):
-                    if transaction.status in {"prepared", "succeeded", "rolled_back"}:
+                    if transaction.status == "prepared":
+                        self._expire_prepared(transaction)
+                        continue
+                    if transaction.status == "expired":
+                        self._retry_expired_cleanup(transaction)
+                        continue
+                    if transaction.status in {"succeeded", "rolled_back"}:
                         continue
                     if transaction.status == "recovery_required":
                         continue
@@ -174,6 +191,52 @@ class MaintenanceStartupRecovery:
             except Exception:
                 pass
             raise MaintenanceStartupRecoveryError("维护扫描失败") from error
+
+    def _expire_prepared(self, transaction: MaintenanceChange) -> None:
+        """收敛重启遗留 prepared；有任务证据时转恢复态并保留材料。
+
+        prepared 只代表尚未发生平台写入。由于确认令牌仅存于原进程，启动后无法
+        再证明确认上下文有效；没有任务/写入证据时可安全持久化 expired，再清理
+        私有材料。任何 apply 开始证据都必须进入 recovery_required，禁止误删现场。
+        """
+
+        task_id = transaction.task_id
+        evidence_reader = getattr(self._audit, "task_evidence", None)
+        if task_id is None and callable(evidence_reader):
+            try:
+                task_id = evidence_reader(transaction.change_id)
+            except Exception as error:
+                raise _EvidenceUnavailable("任务证据暂不可用") from error
+        if task_id is not None:
+            self._mark_recovery(transaction, task_id=task_id)
+            return
+        try:
+            expired = transaction.transition("expired", updated_at=_utc_now())
+            # 先落盘安全终态；即使随后清理失败，事务也绝不会重新执行。
+            self._transactions.save(expired)
+            self._cleanup_expired_materials(transaction.change_id)
+        except Exception as error:
+            self._gate.block()
+            raise MaintenanceStartupRecoveryError("过期事务无法安全收敛") from error
+
+    def _retry_expired_cleanup(self, transaction: MaintenanceChange) -> None:
+        """重试已落盘 expired 的私有材料清理，绝不重新读取或执行事务。"""
+
+        try:
+            self._cleanup_expired_materials(transaction.change_id)
+        except Exception as error:
+            # expired 不再属于普通恢复事务；清理失败仍需显式保持门禁，避免
+            # 下一次请求误以为运行面已完全收敛。
+            self._gate.block()
+            raise MaintenanceStartupRecoveryError("过期事务材料清理失败") from error
+
+    def _cleanup_expired_materials(self, change_id: str) -> None:
+        """调用材料层幂等清理；缺少实现时 fail-closed。"""
+
+        cleanup = getattr(self._materials, "cleanup", None)
+        if not callable(cleanup):
+            raise MaintenanceStartupRecoveryError("过期事务材料清理接口不可用")
+        cleanup(change_id)
 
     def _recover_one(self, transaction: MaintenanceChange) -> None:
         """绑定材料、审计证据和当前观察后执行最小安全恢复。"""
@@ -356,7 +419,7 @@ class MaintenanceStartupRecovery:
         except Exception as error:
             raise _RecoveryFinalizeFailure("恢复终态无法持久化") from error
 
-    def _mark_recovery(self, transaction: MaintenanceChange) -> None:
+    def _mark_recovery(self, transaction: MaintenanceChange, *, task_id: str | None = None) -> None:
         """把一个固定叶子标为 recovery_required，并保留全局 gate 阻断。"""
         if transaction.status == "recovery_required":
             return
@@ -371,7 +434,12 @@ class MaintenanceStartupRecovery:
             if base.status in {"applying", "verifying"}:
                 base = base.transition("rolling_back", updated_at=base.updated_at)
                 self._transactions.save(base)
-            recovery = base.transition("recovery_required", leaf_states=leaves, updated_at=base.updated_at)
+            recovery = base.transition(
+                "recovery_required",
+                task_id=task_id,
+                leaf_states=leaves,
+                updated_at=base.updated_at,
+            )
             self._transactions.save(recovery)
         except Exception as error:
             raise MaintenanceStartupRecoveryError("恢复状态无法持久化") from error

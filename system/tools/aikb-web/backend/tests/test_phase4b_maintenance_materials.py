@@ -203,6 +203,27 @@ class MaintenanceMaterialStoreTests(unittest.TestCase):
             with self.assertRaises(MaintenanceMaterialError):
                 store.load("change-integrity")
 
+    def test_cleanup_removes_only_private_material_and_keeps_transaction_summary(self) -> None:
+        """安全终态清理私有正文时保留 transaction.json 事实摘要。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            change_id = "change-cleanup"
+            store = _store_for(root, change_id)
+            leaves = {
+                "user_environment.aikb_home": _leaf("user_environment.aikb_home"),
+                "user_environment.aikb_knowledge_home": _leaf("user_environment.aikb_knowledge_home", missing=True),
+            }
+            environments = {
+                "AIKB_HOME": MaintenanceEnvironmentMaterial("AIKB_HOME", "value", "old-root"),
+                "AIKB_KNOWLEDGE_HOME": MaintenanceEnvironmentMaterial("AIKB_KNOWLEDGE_HOME", "missing"),
+            }
+            store.prepare(change_id, "environment", leaves, environments)
+            store.cleanup(change_id)
+            transaction_dir = root / "runtime" / "web" / "maintenance-transactions" / change_id
+            self.assertTrue((transaction_dir / "transaction.json").is_file())
+            self.assertFalse((transaction_dir / "private").exists())
+            store.cleanup(change_id)
+
     def test_reparse_root_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

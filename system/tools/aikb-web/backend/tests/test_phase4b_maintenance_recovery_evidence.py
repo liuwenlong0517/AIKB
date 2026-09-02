@@ -11,7 +11,8 @@ class EvidenceTests(unittest.TestCase):
         self.transaction = SimpleNamespace(change_id="change-1", target_id="environment", before_fingerprint="a" * 64, after_fingerprint="b" * 64, task_id="task-1")
         class Audit:
             def read_events(inner):
-                return {"items": list(self.events), "damaged": list(self.damaged)}
+                # 与真实 AuditStore 保持一致：事件字段名为 events。
+                return {"events": list(self.events), "damaged": list(self.damaged)}
             def write(inner, record):
                 if not self.write_succeeds:
                     return {"written": False}
@@ -34,6 +35,27 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(MaintenanceRecoveryEvidenceError): self.adapter.terminal_evidence("change-1")
     def test_unknown_binding_rejected(self):
         with self.assertRaises(MaintenanceRecoveryEvidenceError): self.adapter.terminal_evidence("../x")
+
+    def test_task_evidence_accepts_single_started_apply(self):
+        self.events.append({
+            "record_type": "invocation_started", "operation": "maintenance.apply",
+            "change_id": "change-1", "task_id": "task-1",
+        })
+        self.assertEqual(self.adapter.task_evidence("change-1"), "task-1")
+
+    def test_task_evidence_rejects_conflicting_started_tasks(self):
+        for task_id in ("task-1", "task-2"):
+            self.events.append({
+                "record_type": "invocation_started", "operation": "maintenance.apply",
+                "change_id": "change-1", "task_id": task_id,
+            })
+        with self.assertRaises(MaintenanceRecoveryEvidenceError):
+            self.adapter.task_evidence("change-1")
+
+    def test_task_evidence_rejects_damaged_source(self):
+        self.damaged.append("damaged-event")
+        with self.assertRaises(MaintenanceRecoveryEvidenceError):
+            self.adapter.task_evidence("change-1")
 
     def test_damaged_or_unconfirmed_write_fails_closed(self):
         self.damaged.append("damaged-event")

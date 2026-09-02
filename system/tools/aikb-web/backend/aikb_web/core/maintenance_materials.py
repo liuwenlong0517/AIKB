@@ -344,6 +344,44 @@ class MaintenanceMaterialStore:
         except Exception as error:
             raise MaintenanceMaterialError("事务材料读取失败") from error
 
+    def cleanup(self, change_id: str) -> None:
+        """删除已安全终态事务的私有材料，保留 transaction.json 摘要。
+
+        调用方必须先原子持久化 ``expired`` 等终态，再调用本方法；本方法只处理
+        固定材料文件并拒绝重解析点，不删除事务目录或未知文件。清理失败会抛出
+        ``MaintenanceMaterialError``，以便调用方记录/重试而不会误报清理完成。
+        """
+
+        directory = self._directory(change_id)
+        private = self._private_directory(change_id)
+        if not private.exists():
+            # materialize 可能在创建 transaction.json 后、创建 private 前崩溃；
+            # 此时没有私有材料需要清理，保持幂等并保留事务摘要即可。
+            return
+        if not private.is_dir() or private.is_symlink() or self._has_reparse_component(private):
+            raise MaintenanceMaterialError("事务私有材料目录无效")
+        known_files = {
+            "manifest.json",
+            *(
+                file_name
+                for names in _LEAF_FILES.values()
+                for file_name in names
+            ),
+            *_ENV_FILES.values(),
+        }
+        try:
+            for entry in private.iterdir():
+                if entry.name not in known_files:
+                    raise MaintenanceMaterialError("事务私有材料含未声明文件")
+                if self._has_reparse_component(entry) or not entry.is_file():
+                    raise MaintenanceMaterialError("事务私有材料文件无效")
+                entry.unlink()
+            private.rmdir()
+        except MaintenanceMaterialError:
+            raise
+        except (OSError, ValueError) as error:
+            raise MaintenanceMaterialError("事务私有材料清理失败") from error
+
     def read_leaf(self, change_id: str, leaf_id: str) -> MaintenanceLeafMaterial:
         """读取并再次验证一个固定叶子的私有字节材料。"""
 

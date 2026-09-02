@@ -100,9 +100,12 @@ class MaintenanceChangeContractTests(unittest.TestCase):
         self.assertTrue(_change(created_at="2026-08-31T01:00:00+00:00").created_at.endswith("Z"))
 
     def test_declared_state_machine_only(self) -> None:
-        """只允许 prepared→applying→verifying→succeeded 或补偿回滚分支。"""
+        """只允许 prepared 执行、过期收敛或补偿回滚分支。"""
         self.assertEqual(set(MAINTENANCE_CHANGE_STATUSES), set(MAINTENANCE_CHANGE_TRANSITIONS))
         prepared = _change()
+        expired = _change(task_id=None).transition("expired")
+        self.assertEqual(expired.status, "expired")
+        self.assertIsNone(expired.task_id)
         applying = prepared.transition("applying")
         applied_leaves = tuple(replace(leaf, progress="applied") for leaf in applying.leaf_states)
         verifying = applying.transition("verifying", leaf_states=applied_leaves)
@@ -160,12 +163,13 @@ class MaintenanceChangeContractTests(unittest.TestCase):
         )
 
     def test_non_prepared_transaction_requires_task_id(self) -> None:
-        """只有 prepared 草稿可以暂不关联任务，写入中间态必须可追踪。"""
+        """prepared/expired 摘要可以暂不关联任务，写入中间态必须可追踪。"""
         with self.assertRaises(MaintenanceChangeError):
             _change(task_id=None).transition("applying")
         with self.assertRaises(MaintenanceChangeError):
             _change(status="applying", task_id=None)
         self.assertEqual(_change(task_id=None).transition("applying", task_id="task-claimed").task_id, "task-claimed")
+        self.assertEqual(_change(task_id=None).transition("expired").task_id, None)
 
     def test_leaf_contract_has_only_safe_metadata(self) -> None:
         """叶子保留存在语义、两个摘要和进度，不接受物理路径或环境值。"""

@@ -60,6 +60,8 @@ class _Materials:
     def __init__(self, transaction, fail=False):
         self.transaction = transaction
         self.fail = fail
+        self.cleanup_calls = []
+        self.cleanup_failures = 0
 
     def load(self, change_id):
         if self.fail:
@@ -77,6 +79,13 @@ class _Materials:
             MaintenanceEnvironmentMaterial("AIKB_KNOWLEDGE_HOME", "value", "old-knowledge"),
         ) if self.transaction.target_id == "environment" else ()
         return MaintenanceMaterialManifest(self.transaction.change_id, self.transaction.target_id, leaves, environments, "f" * 64)
+
+    def cleanup(self, change_id):
+        # 真实实现只会在 expired 已持久化后被调用；测试在此记录调用顺序。
+        self.cleanup_calls.append(change_id)
+        if self.cleanup_failures:
+            self.cleanup_failures -= 1
+            raise OSError("injected cleanup failure")
 
 
 class _Platform:
@@ -112,6 +121,11 @@ class _Audit:
         self.finish_ok = finish
         self.finished = []
         self.evidence_error = evidence_error
+        self.prepared_task_id = None
+
+    def task_evidence(self, change_id):
+        del change_id
+        return self.prepared_task_id
 
     def terminal_evidence(self, change_id):
         if self.evidence_error:
@@ -274,6 +288,70 @@ class MaintenanceStartupRecoveryTests(unittest.TestCase):
         self.assertEqual(store.transactions[transaction.change_id].status, "verifying")
         self.assertTrue(gate.blocked)
 
+    def test_restart_prepared_without_context_expires_and_cleans_after_save(self):
+        """重启后无任务/写入证据的 prepared 只能先落盘 expired 再清材料。"""
+        transaction = replace(_change("environment"), task_id=None)
+        store = _Store([transaction])
+        materials = _Materials(transaction)
+        audit = _Audit("none")
+        gate = MaintenanceRecoveryGate()
+        coordinator = MaintenanceStartupRecovery(
+            store, materials, _Platform(transaction), audit, gate,
+            MaintenanceWriteLock(str(self.workspace)),
+        )
+        coordinator.recover_all()
+        self.assertEqual(store.transactions[transaction.change_id].status, "expired")
+        self.assertEqual(materials.cleanup_calls, [transaction.change_id])
+        self.assertFalse(gate.blocked)
+
+    def test_prepared_with_task_evidence_enters_recovery_without_cleanup(self):
+        """发现 apply 开始证据时不得把现场误判为普通过期。"""
+        transaction = replace(_change("environment"), task_id=None)
+        store = _Store([transaction])
+        materials = _Materials(transaction)
+        audit = _Audit("none")
+        audit.prepared_task_id = "task-started"
+        gate = MaintenanceRecoveryGate()
+        coordinator = MaintenanceStartupRecovery(
+            store, materials, _Platform(transaction), audit, gate,
+            MaintenanceWriteLock(str(self.workspace)),
+        )
+        coordinator.recover_all()
+        recovered = store.transactions[transaction.change_id]
+        self.assertEqual(recovered.status, "recovery_required")
+        self.assertEqual(recovered.task_id, "task-started")
+        self.assertEqual(materials.cleanup_calls, [])
+        self.assertTrue(gate.blocked)
+
+    def test_expired_cleanup_failure_is_retried_without_replaying_transaction(self):
+        """expired 清理崩溃后下次启动只重试清理，不重新执行平台步骤。"""
+        transaction = replace(_change("environment"), task_id=None)
+        store = _Store([transaction])
+        materials = _Materials(transaction)
+        materials.cleanup_failures = 1
+        audit = _Audit("none")
+        platform = _Platform(transaction)
+        gate = MaintenanceRecoveryGate()
+        coordinator = MaintenanceStartupRecovery(
+            store, materials, platform, audit, gate,
+            MaintenanceWriteLock(str(self.workspace)),
+        )
+        with self.assertRaises(Exception):
+            coordinator.recover_all()
+        self.assertEqual(store.transactions[transaction.change_id].status, "expired")
+        self.assertEqual(platform.calls, [])
+        self.assertTrue(gate.blocked)
+
+        coordinator = MaintenanceStartupRecovery(
+            store, materials, platform, audit, gate,
+            MaintenanceWriteLock(str(self.workspace)),
+        )
+        coordinator.recover_all()
+        self.assertEqual(store.transactions[transaction.change_id].status, "expired")
+        self.assertEqual(materials.cleanup_calls, [transaction.change_id, transaction.change_id])
+        self.assertEqual(platform.calls, [])
+        self.assertFalse(gate.blocked)
+
     def test_invalid_dependency_is_rejected_at_construction(self):
         """恢复依赖缺少公开方法时构造即拒绝，gate 保持默认阻断。"""
         transaction = _verifying()
@@ -352,6 +430,70 @@ class MaintenanceStartupRecoveryTests(unittest.TestCase):
         self.assertEqual(transaction_store.load(transaction.change_id).status, "succeeded")
         self.assertTrue((runtime / transaction.change_id / "transaction.json").is_file())
         self.assertTrue((runtime / transaction.change_id / "private" / "manifest.json").is_file())
+        self.assertFalse(gate.blocked)
+
+    def test_real_prepared_transaction_expires_and_cleans_materials_idempotently(self):
+        """真实重启恢复先落盘 expired，再删除 private，重复恢复不重放平台步骤。"""
+        import hashlib
+
+        transaction = _change("environment")
+        before_hash = hashlib.sha256(b"before").hexdigest()
+        expected_hash = hashlib.sha256(b"expected").hexdigest()
+        transaction = replace(
+            transaction,
+            task_id=None,
+            leaf_states=tuple(
+                replace(leaf, before_hash=before_hash, expected_hash=expected_hash)
+                for leaf in transaction.leaf_states
+            ),
+        )
+        transaction_store = MaintenanceTransactionStore(self.workspace)
+        transaction_store.create(transaction)
+        runtime = self.workspace / "runtime" / "web" / "maintenance-transactions"
+        material_store = MaintenanceMaterialStore(runtime)
+        leaves = {
+            leaf.leaf_id: MaintenanceLeafMaterial(
+                leaf.leaf_id,
+                leaf.existence,
+                before_hash,
+                expected_hash,
+                0o600,
+                b"before",
+                b"expected",
+            )
+            for leaf in transaction.leaf_states
+        }
+        material_store.prepare(
+            transaction.change_id,
+            transaction.target_id,
+            leaves,
+            {
+                "AIKB_HOME": MaintenanceEnvironmentMaterial("AIKB_HOME", "value", "old-root"),
+                "AIKB_KNOWLEDGE_HOME": MaintenanceEnvironmentMaterial("AIKB_KNOWLEDGE_HOME", "value", "old-knowledge"),
+            },
+        )
+        platform = _Platform(transaction)
+        gate = MaintenanceRecoveryGate()
+        coordinator = MaintenanceStartupRecovery(
+            transaction_store,
+            MaintenanceMaterialStore(runtime),
+            platform,
+            _Audit("none"),
+            gate,
+            MaintenanceWriteLock(str(self.workspace)),
+        )
+
+        coordinator.recover_all()
+        transaction_dir = runtime / transaction.change_id
+        self.assertEqual(transaction_store.load(transaction.change_id).status, "expired")
+        self.assertTrue((transaction_dir / "transaction.json").is_file())
+        self.assertFalse((transaction_dir / "private").exists())
+        self.assertEqual(platform.calls, [])
+        self.assertFalse(gate.blocked)
+
+        coordinator.recover_all()
+        self.assertEqual(transaction_store.load(transaction.change_id).status, "expired")
+        self.assertEqual(platform.calls, [])
         self.assertFalse(gate.blocked)
 
 

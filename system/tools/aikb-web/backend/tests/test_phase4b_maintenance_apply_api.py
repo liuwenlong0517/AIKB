@@ -225,6 +225,36 @@ class MaintenanceApplyApiTests(unittest.TestCase):
             finally:
                 coordinator.shutdown()
 
+    def test_worker_failure_before_claim_persists_recovery_required(self):
+        """worker 已创建任务但认领前失败时不得遗留可重试的 prepared。"""
+        class FailingExecutor:
+            def execute(self, change_id, task_id):
+                del change_id, task_id
+                raise RuntimeError("injected scheduling failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            change = _change("environment")
+            transactions = _Transactions(change)
+            tokens = ConfirmationTokenService()
+            token = tokens.issue(
+                action_id=change.action_id,
+                parameters={"change_id": change.change_id},
+                risk_level=change.risk_level,
+                preview_digest=change.preview_digest,
+            )
+            coordinator = MaintenanceTaskCoordinator(
+                FailingExecutor(),
+                transactions=transactions,
+                token_service=tokens,
+                workspace_root=Path(directory),
+            )
+            try:
+                coordinator.apply(change_id=change.change_id, confirmation_token=token)
+            finally:
+                coordinator.shutdown()
+            self.assertEqual(transactions.value.status, "recovery_required")
+            self.assertTrue(transactions.value.task_id)
+
     def test_apply_extra_field_and_missing_service_fail_closed(self):
         app = create_app(_Gateway())
         headers = {

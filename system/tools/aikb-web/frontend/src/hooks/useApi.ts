@@ -117,7 +117,7 @@ export const useMaintenanceChange = (changeId: string | undefined, enabled = tru
     enabled: Boolean(changeId) && enabled,
     refetchInterval: (query) => {
       const status = query.state.data?.data.change.status;
-      return pollingInterval(query, status, ['succeeded', 'rolled_back', 'recovery_required']);
+      return pollingInterval(query, status, ['expired', 'succeeded', 'rolled_back', 'recovery_required']);
     },
   });
 

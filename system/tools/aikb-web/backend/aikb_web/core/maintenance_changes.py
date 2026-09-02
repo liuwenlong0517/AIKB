@@ -31,6 +31,7 @@ class MaintenanceChangeError(ValueError):
 
 MAINTENANCE_CHANGE_STATUSES = (
     "prepared",
+    "expired",
     "applying",
     "verifying",
     "succeeded",
@@ -39,7 +40,7 @@ MAINTENANCE_CHANGE_STATUSES = (
     "recovery_required",
 )
 TERMINAL_MAINTENANCE_CHANGE_STATUSES = frozenset(
-    {"succeeded", "rolled_back", "recovery_required"}
+    {"expired", "succeeded", "rolled_back", "recovery_required"}
 )
 MAINTENANCE_ROLLBACK_STATUSES = (
     "not_started",
@@ -52,7 +53,10 @@ MAINTENANCE_ROLLBACK_STATUSES = (
 # 状态转换图是声明式常量，执行器不得通过异常或用户输入增加隐式跳转。
 MAINTENANCE_CHANGE_TRANSITIONS = MappingProxyType(
     {
-        "prepared": frozenset({"applying"}),
+        # prepared 表示尚未发生平台写入；确认上下文丢失时只能安全收敛为
+        # expired，发现任务/写入证据时则由恢复器转入 recovery_required。
+        "prepared": frozenset({"applying", "expired", "recovery_required"}),
+        "expired": frozenset(),
         "applying": frozenset({"verifying", "rolling_back"}),
         "verifying": frozenset({"succeeded", "rolling_back"}),
         "succeeded": frozenset({"recovery_required"}),
@@ -279,6 +283,7 @@ class MaintenanceChange:
             raise MaintenanceChangeError("leaf_states 必须精确匹配目标叶子及顺序")
         progress_by_status = {
             "prepared": frozenset({"pending"}),
+            "expired": frozenset({"pending"}),
             "applying": frozenset({"pending", "applying", "applied"}),
             "verifying": frozenset({"applied", "verifying", "verified"}),
             "succeeded": frozenset({"verified"}),
@@ -306,6 +311,7 @@ class MaintenanceChange:
             raise MaintenanceChangeError("rollback_status 无效")
         expected_rollback_status = {
             "prepared": "not_started",
+            "expired": "not_started",
             "applying": "not_started",
             "verifying": "not_started",
             "succeeded": "not_applicable",
@@ -315,7 +321,7 @@ class MaintenanceChange:
         }[self.status]
         if self.rollback_status != expected_rollback_status:
             raise MaintenanceChangeError("rollback_status 与事务状态不匹配")
-        if self.status != "prepared" and self.task_id is None:
+        if self.status not in {"prepared", "expired"} and self.task_id is None:
             raise MaintenanceChangeError("非 prepared 事务必须关联 task_id")
         if self.task_id is not None:
             _safe_id(self.task_id, "task_id")
@@ -427,7 +433,7 @@ class MaintenanceChange:
         elif next_status == "recovery_required":
             rollback_status = "recovery_required"
         next_task_id = self.task_id if task_id is None else task_id
-        if next_status != "prepared" and next_task_id is None:
+        if next_status not in {"prepared", "expired"} and next_task_id is None:
             raise MaintenanceChangeError("非 prepared 事务必须关联 task_id")
         next_leaf_states = self.leaf_states if leaf_states is None else leaf_states
         return replace(

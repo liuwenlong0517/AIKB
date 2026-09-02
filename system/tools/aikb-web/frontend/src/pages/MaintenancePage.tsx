@@ -17,7 +17,7 @@ const STATUS_VIEW: Record<string, { label: string; color: string; description: s
   restart_required: { label: '需要重启', color: 'blue', description: '配置已写入但需要人工重启对应 Agent。' },
 };
 const DIFF_LABELS: Record<string, string> = { unchanged: '无变化', missing: '目标缺失', drifted: '受管内容将更新', conflict: '存在受管冲突', invalid: '受管内容无效' };
-const TERMINAL_CHANGE_STATUSES = ['succeeded', 'rolled_back', 'recovery_required'];
+const TERMINAL_CHANGE_STATUSES = ['expired', 'succeeded', 'rolled_back', 'recovery_required'];
 
 /**
  * 预览只对确实需要安装或修复的目标开放；ready 已与期望版本一致，
@@ -231,7 +231,7 @@ function usePreviewExpired(preview?: MaintenancePreviewData, createdAt?: number)
   return useMemo(() => { if (!preview) return false; const expiresAt = getPreviewExpiry(preview); if (expiresAt) return Date.parse(expiresAt) <= clock; if (preview.expires_in_seconds !== undefined && createdAt !== undefined) return createdAt + preview.expires_in_seconds * 1_000 <= clock; return false; }, [clock, createdAt, preview]);
 }
 function maintenanceChangeStatusView(status?: MaintenanceChangeStatus): { type: 'success' | 'info' | 'warning' | 'error'; title: string; description: string } {
-  switch (status) { case 'succeeded': return { type: 'success', title: '维护已成功应用', description: '当前目标的受控写入和复核已完成。若页面提示需要重启，请手动重启对应 Agent。' }; case 'rolled_back': return { type: 'warning', title: '应用失败，已成功回滚', description: '目标已恢复到应用前状态，请检查任务中心和审计安全摘要。' }; case 'recovery_required': return { type: 'error', title: '需要人工恢复', description: '系统检测到无法自动完成恢复，请根据系统状态和审计安全摘要人工处理。' }; case 'applying': return { type: 'info', title: '正在应用维护变更', description: '受控任务正在执行固定维护步骤，页面不会重复提交。' }; case 'verifying': return { type: 'info', title: '正在复核维护变更', description: '正在复核目标状态和安全摘要。' }; case 'rolling_back': return { type: 'warning', title: '正在回滚维护变更', description: '应用复核未完成，系统正在恢复应用前状态。' }; default: return { type: 'info', title: '维护任务已提交', description: '任务和变更事务已关联，正在等待服务端状态。' }; }
+  switch (status) { case 'expired': return { type: 'warning', title: '维护确认已失效', description: '确认上下文已失效，私有材料不会执行写入；请重新读取目标并生成预览。' }; case 'succeeded': return { type: 'success', title: '维护已成功应用', description: '当前目标的受控写入和复核已完成。若页面提示需要重启，请手动重启对应 Agent。' }; case 'rolled_back': return { type: 'warning', title: '应用失败，已成功回滚', description: '目标已恢复到应用前状态，请检查任务中心和审计安全摘要。' }; case 'recovery_required': return { type: 'error', title: '需要人工恢复', description: '系统检测到无法自动完成恢复，请根据系统状态和审计安全摘要人工处理。' }; case 'applying': return { type: 'info', title: '正在应用维护变更', description: '受控任务正在执行固定维护步骤，页面不会重复提交。' }; case 'verifying': return { type: 'info', title: '正在复核维护变更', description: '正在复核目标状态和安全摘要。' }; case 'rolling_back': return { type: 'warning', title: '正在回滚维护变更', description: '应用复核未完成，系统正在恢复应用前状态。' }; default: return { type: 'info', title: '维护任务已提交', description: '任务和变更事务已关联，正在等待服务端状态。' }; }
 }
 function getPreviewErrorTitle(error: Error): string { const code = 'code' in error ? String((error as Error & { code?: unknown }).code ?? '') : ''; if (code === 'MAINTENANCE_CONFLICT') return '目标存在冲突'; if (code === 'MAINTENANCE_TARGET_UNSUPPORTED') return '当前平台不支持'; return '结构化预览暂时不可用'; }
 function getPreviewErrorDescription(error: Error): string { const code = 'code' in error ? String((error as Error & { code?: unknown }).code ?? '') : ''; if (code === 'MAINTENANCE_CONFLICT') return '检测到非受管内容或基线已变化；页面不会覆盖现场，请重新读取状态。'; if (code === 'MAINTENANCE_TARGET_UNSUPPORTED') return '当前平台没有已验证的维护适配器。'; return '服务端未能生成只读结构化预览，请稍后重试。'; }

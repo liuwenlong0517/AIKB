@@ -52,6 +52,52 @@ class MaintenanceRecoveryEvidenceAdapter:
         binding = self._binding_from_transaction(transaction)
         return self._terminal_evidence_for(binding)
 
+    def task_evidence(self, change_id: str) -> str | None:
+        """查找 apply 已开始但尚未产生终态的任务证据。
+
+        ``MaintenanceTaskCoordinator`` 会先写 invocation_started，再消费令牌/认领
+        事务；启动恢复据此区分“只有 prepared 摘要”与可能已经进入执行流程的现场。
+        返回的 task_id 仅用于 recovery_required 的逻辑绑定，不返回任何材料正文。
+        """
+
+        if not isinstance(change_id, str) or _ID_RE.fullmatch(change_id) is None:
+            raise MaintenanceRecoveryEvidenceError("恢复证据 change_id 无效")
+        lines, damaged = self._read_events()
+        if damaged:
+            raise MaintenanceRecoveryEvidenceError("审计事实源损坏")
+        task_ids: set[str] = set()
+        for raw in lines:
+            try:
+                if isinstance(raw, Mapping):
+                    item = dict(raw)
+                elif isinstance(raw, bytes):
+                    if len(raw) > _MAX_LINE or not raw.strip():
+                        raise MaintenanceRecoveryEvidenceError("审计事实行无效")
+                    item = json.loads(raw.decode("utf-8"), object_pairs_hook=self._no_duplicates)
+                elif isinstance(raw, str):
+                    if len(raw.encode("utf-8")) > _MAX_LINE or not raw.strip():
+                        raise MaintenanceRecoveryEvidenceError("审计事实行无效")
+                    item = json.loads(raw, object_pairs_hook=self._no_duplicates)
+                else:
+                    raise MaintenanceRecoveryEvidenceError("审计事实行无效")
+            except (UnicodeError, json.JSONDecodeError, TypeError) as error:
+                raise MaintenanceRecoveryEvidenceError("审计事实行无效") from error
+            if not isinstance(item, dict):
+                raise MaintenanceRecoveryEvidenceError("审计事实行无效")
+            if (
+                item.get("record_type") != "invocation_started"
+                or item.get("operation") != "maintenance.apply"
+                or item.get("change_id") != change_id
+            ):
+                continue
+            candidate = item.get("task_id") or item.get("target_task_id")
+            if not isinstance(candidate, str) or _ID_RE.fullmatch(candidate) is None:
+                raise MaintenanceRecoveryEvidenceError("任务证据绑定无效")
+            task_ids.add(candidate)
+        if len(task_ids) > 1:
+            raise MaintenanceRecoveryEvidenceError("任务证据存在冲突")
+        return next(iter(task_ids), None)
+
     def finish_recovery(self, transaction: MaintenanceChange, outcome: str) -> bool:
         """追加可唯一识别的安全终态事件；已有终态或写入异常均拒绝。"""
         if outcome not in _OUTCOMES:
@@ -92,11 +138,11 @@ class MaintenanceRecoveryEvidenceAdapter:
         try:
             result = self._audit.read_events()
             if isinstance(result, Mapping):
-                # 真实 AuditStore 使用 items；events 仅保留给轻量测试桩兼容。
-                if "items" in result:
-                    events = result["items"]
-                elif "events" in result:
+                # 真实 AuditStore 使用 events；items 仅保留给轻量测试桩兼容。
+                if "events" in result:
                     events = result["events"]
+                elif "items" in result:
+                    events = result["items"]
                 else:
                     raise MaintenanceRecoveryEvidenceError("审计读取结果无效")
                 return list(events), list(result.get("damaged", ()))

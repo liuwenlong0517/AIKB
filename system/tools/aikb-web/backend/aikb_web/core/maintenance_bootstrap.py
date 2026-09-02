@@ -56,6 +56,10 @@ class _LazyMaintenanceMaterials:
     def read_environment(self, change_id: str, name: str) -> Any:
         return self._store().read_environment(change_id, name)
 
+    def cleanup(self, change_id: str) -> None:
+        """在事务已持久化安全终态后清理其私有材料，保留逻辑摘要。"""
+        self._store().cleanup(change_id)
+
 
 class _WindowsMaintenanceDispatchAdapter:
     """按固定 target_id 把事务步骤分派到环境或 Agent 专属适配器。"""

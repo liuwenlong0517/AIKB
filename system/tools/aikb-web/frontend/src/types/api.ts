@@ -524,7 +524,7 @@ export interface MaintenancePreviewData {
 }
 
 /** 维护事务的公开状态；未知未来值保留为字符串并按安全未知态展示。 */
-export type MaintenanceChangeStatus = 'prepared' | 'applying' | 'verifying' | 'succeeded' | 'rolling_back' | 'rolled_back' | 'recovery_required' | string;
+export type MaintenanceChangeStatus = 'prepared' | 'expired' | 'applying' | 'verifying' | 'succeeded' | 'rolling_back' | 'rolled_back' | 'recovery_required' | string;
 
 /** GET maintenance change 的安全投影，不含备份、路径、命令、正文或环境值。 */
 export interface MaintenanceChangeData {
