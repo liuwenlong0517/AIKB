@@ -89,33 +89,36 @@ function RuntimeList({ view }: { view: 'active' | 'history' }) {
   const pageSize = 20;
   const [searchParams, setSearchParams] = useSearchParams();
   const urlString = searchParams.toString();
+  const urlKeyword = searchParams.get('q') ?? '';
   const urlProject = searchParams.get('project') ?? '';
   const urlAgent = searchParams.get('agent') ?? '';
   const urlStatus = searchParams.get('status') || undefined;
   const urlPage = pageNumber(searchParams.get('page'));
+  const [keyword, setKeyword] = useState(urlKeyword);
   const [project, setProject] = useState(urlProject);
   const [agent, setAgent] = useState(urlAgent);
   const [status, setStatus] = useState<string | undefined>(urlStatus);
   const [page, setPage] = useState(urlPage);
   const urlSyncRef = useRef(false);
-  const draftRef = useRef({ project: urlProject, agent: urlAgent });
+  const draftRef = useRef({ q: urlKeyword, project: urlProject, agent: urlAgent });
   const searchParamsRef = useRef(searchParams);
   searchParamsRef.current = searchParams;
-  const textDraft = useMemo(() => ({ project, agent }), [project, agent]);
+  const textDraft = useMemo(() => ({ q: keyword, project, agent }), [keyword, project, agent]);
   const debouncedText = useDebouncedValue(textDraft);
   useEffect(() => {
-    const textChanged = urlProject !== project || urlAgent !== agent;
+    const textChanged = urlKeyword !== keyword || urlProject !== project || urlAgent !== agent;
     if (textChanged) urlSyncRef.current = true;
-    draftRef.current = { project: urlProject, agent: urlAgent };
-    setProject(urlProject); setAgent(urlAgent); setStatus(urlStatus); setPage(urlPage);
+    draftRef.current = { q: urlKeyword, project: urlProject, agent: urlAgent };
+    setKeyword(urlKeyword); setProject(urlProject); setAgent(urlAgent); setStatus(urlStatus); setPage(urlPage);
   // URL 字符串是筛选/分页的恢复边界，浏览器后退和前进均从这里重建页面状态。
   // 仅监听 URL，文本草稿由下方防抖 effect 负责写回，避免输入时触发同步回写。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlString]);
   useEffect(() => {
     if (urlSyncRef.current) { urlSyncRef.current = false; return; }
-    if (debouncedText.project === urlProject && debouncedText.agent === urlAgent) return;
+    if (debouncedText.q === urlKeyword && debouncedText.project === urlProject && debouncedText.agent === urlAgent) return;
     const next = new URLSearchParams(searchParamsRef.current);
+    if (debouncedText.q) next.set('q', debouncedText.q); else next.delete('q');
     if (debouncedText.project) next.set('project', debouncedText.project); else next.delete('project');
     if (debouncedText.agent) next.set('agent', debouncedText.agent); else next.delete('agent');
     next.delete('page');
@@ -139,8 +142,8 @@ function RuntimeList({ view }: { view: 'active' | 'history' }) {
   };
   // 两类列表严格按当前路由二选一启用，避免历史筛选被误发给活动接口，
   // 也避免普通活动页无意义读取归档数据。
-  const activeQuery = useRuntimeWorkingStates({ project_id: urlProject || undefined, agent: urlAgent || undefined, status: urlStatus, page: urlPage, page_size: pageSize }, view === 'active');
-  const archivedQuery = useRuntimeArchivedWorkingStates({ project_id: urlProject || undefined, agent: urlAgent || undefined, status: urlStatus, page: urlPage, page_size: pageSize }, view === 'history');
+  const activeQuery = useRuntimeWorkingStates({ q: urlKeyword || undefined, project_id: urlProject || undefined, agent: urlAgent || undefined, status: urlStatus, page: urlPage, page_size: pageSize }, view === 'active');
+  const archivedQuery = useRuntimeArchivedWorkingStates({ q: urlKeyword || undefined, project_id: urlProject || undefined, agent: urlAgent || undefined, status: urlStatus, page: urlPage, page_size: pageSize }, view === 'history');
   const query = view === 'history' ? archivedQuery : activeQuery;
   const data = query.data?.data;
   return <>
@@ -153,7 +156,8 @@ function RuntimeList({ view }: { view: 'active' | 'history' }) {
     </Card>
     <Card className="search-controls">
       <Space wrap>
-        <Input aria-label="按项目筛选" placeholder="项目逻辑 ID" value={project} onChange={(event) => { const value = event.target.value; draftRef.current = { ...draftRef.current, project: value }; setProject(value); }} />
+        <Input aria-label="按关键字搜索任务" placeholder="任务 ID、目标、当前状态或下一步" value={keyword} onChange={(event) => { const value = event.target.value; draftRef.current = { ...draftRef.current, q: value }; setKeyword(value); }} />
+        <Input aria-label="按项目筛选" placeholder="项目逻辑 ID（精确）" value={project} onChange={(event) => { const value = event.target.value; draftRef.current = { ...draftRef.current, project: value }; setProject(value); }} />
         <Input aria-label="按最新作者筛选" placeholder="最新检查点作者 Agent" value={agent} onChange={(event) => { const value = event.target.value; draftRef.current = { ...draftRef.current, agent: value }; setAgent(value); }} />
         <Select aria-label="按任务状态筛选" allowClear placeholder={view === 'history' ? '全部历史状态' : '全部活动状态'} style={{ width: 170 }} value={status} onChange={(value) => writeImmediate({ status: value, page: undefined })} options={Object.entries(view === 'history' ? { completed: STATUS_LABELS.completed, abandoned: STATUS_LABELS.abandoned, superseded: STATUS_LABELS.superseded } : { planned: STATUS_LABELS.planned, active: STATUS_LABELS.active, blocked: STATUS_LABELS.blocked }).map(([value, label]) => ({ value, label }))} />
         <Button onClick={() => setSearchParams(new URLSearchParams())}>清除筛选</Button>

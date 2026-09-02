@@ -19,6 +19,8 @@ class FakeGateway:
     def __init__(self) -> None:
         """允许测试注入共享核心返回的索引状态，覆盖详情降级传播。"""
         self.detail_index: dict[str, Any] | None = None
+        self.active_kwargs: dict[str, Any] = {}
+        self.archived_kwargs: dict[str, Any] = {}
 
     def overview(self) -> dict[str, Any]:
         return {"document_count": 0, "index": {"available": True}}
@@ -36,6 +38,7 @@ class FakeGateway:
         return {"id": identifier, "status": "verified", "content": "ok"}
 
     def web_active_work_states(self, **kwargs: Any) -> dict[str, Any]:
+        self.active_kwargs = kwargs
         return {
             "count": 1,
             "items": [{"work_id": "task-1", "status": "active", "project_id": "safe-project"}],
@@ -44,6 +47,7 @@ class FakeGateway:
         }
 
     def web_archived_work_states(self, **kwargs: Any) -> dict[str, Any]:
+        self.archived_kwargs = kwargs
         return {
             "count": 1,
             "items": [{"work_id": "history-1", "status": "completed", "project_id": "safe-project", "lifecycle": "archived"}],
@@ -99,7 +103,8 @@ class RuntimeAuditApiTests(unittest.TestCase):
     """验证新路由的状态码、参数边界、错误包络和安全投影。"""
 
     def setUp(self) -> None:
-        self.client = TestClient(create_app(FakeGateway()))
+        self.gateway = FakeGateway()
+        self.client = TestClient(create_app(self.gateway))
 
     def test_working_state_empty_shape_and_details(self) -> None:
         response = self.client.get("/api/v1/runtime/working-states")
@@ -108,6 +113,15 @@ class RuntimeAuditApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/runtime/working-states/task-1").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/runtime/working-states/task-1/checkpoints").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/runtime/working-states/task-1/checkpoints/checkpoint-1").status_code, 200)
+
+    def test_runtime_keyword_is_normalized_and_forwarded_to_both_lifecycles(self) -> None:
+        active = self.client.get("/api/v1/runtime/working-states", params={"q": "  搜索体验  "})
+        self.assertEqual(active.status_code, 200)
+        self.assertEqual(self.gateway.active_kwargs["keyword"], "搜索体验")
+        archived = self.client.get("/api/v1/runtime/archived-working-states", params={"q": "历史任务"})
+        self.assertEqual(archived.status_code, 200)
+        self.assertEqual(self.gateway.archived_kwargs["keyword"], "历史任务")
+        self.assertEqual(self.client.get("/api/v1/runtime/working-states?q=%0A").status_code, 400)
 
     def test_archived_working_state_routes_are_read_only_and_separate(self) -> None:
         response = self.client.get("/api/v1/runtime/archived-working-states", params={"status": "completed"})

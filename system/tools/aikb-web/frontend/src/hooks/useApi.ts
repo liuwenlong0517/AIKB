@@ -136,11 +136,11 @@ export const useMaintenanceChange = (changeId: string | undefined, enabled = tru
   });
 
 /** 活动 Working State 列表查询；筛选参数进入 query key，保证分页和筛选切换不会复用错误页面。 */
-export const useRuntimeWorkingStates = (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<RuntimeListData>> =>
+export const useRuntimeWorkingStates = (params: { q?: string; project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<RuntimeListData>> =>
   useQuery({ queryKey: ['runtime-working-states', params], queryFn: () => api.runtime.list(params), enabled });
 
 /** 历史 Working State 列表只在历史页签启用，避免普通活动页无谓读取归档数据。 */
-export const useRuntimeArchivedWorkingStates = (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<RuntimeListData>> =>
+export const useRuntimeArchivedWorkingStates = (params: { q?: string; project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}, enabled = true): UseQueryResult<ApiResponse<RuntimeListData>> =>
   useQuery({ queryKey: ['runtime-archived-working-states', params], queryFn: () => api.runtime.archivedList(params), enabled });
 
 /** 单个活动任务详情，禁用无 workId 的空路由请求。 */

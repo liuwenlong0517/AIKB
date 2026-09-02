@@ -84,6 +84,29 @@ class RuntimeHistoryStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.web_archived_work_states(status="active")
 
+    def test_keyword_fuzzy_matches_human_readable_fields_and_escapes_like_tokens(self) -> None:
+        active = self.store.checkpoint({
+            "project_path": str(self.project), "work_id": "searchable-active", "goal": "优化 Web 搜索体验",
+            "current_state": "等待页面联调", "next_steps": "补充模糊匹配回归",
+            "agent": "codex", "session_id": "search-session-123",
+        })
+        archived_id = self._create_archived()
+
+        self.assertEqual(
+            [item["work_id"] for item in self.store.web_active_work_states(keyword="WEB 搜索")["items"]],
+            [active["work_id"]],
+        )
+        self.assertEqual(
+            [item["work_id"] for item in self.store.web_active_work_states(keyword="页面联调")["items"]],
+            [active["work_id"]],
+        )
+        self.assertEqual(
+            [item["work_id"] for item in self.store.web_archived_work_states(keyword="历史任务目标")["items"]],
+            [archived_id],
+        )
+        self.assertEqual(self.store.web_active_work_states(keyword="%")["items"], [])
+        self.assertEqual(self.store.web_active_work_states(keyword="_")["items"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

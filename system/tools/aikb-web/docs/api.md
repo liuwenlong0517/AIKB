@@ -127,7 +127,7 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
 
 ### GET /runtime/working-states
 
-查询参数：project_id（逻辑 ID，最长 120）、status（可重复或逗号分隔，枚举见上）、agent（最长 120）、page（1..100000，默认 1）、page_size（1..50，默认 20）。`agent` 为兼容筛选，匹配最新检查点作者（等价于旧 `agent` 字段），不是 owner；服务端不得静默改成 owner 筛选。列表默认按 updated_at 最新时间倒序，排序相同的记录按 work_id 稳定打散。
+查询参数：q（人类可读关键字，最长 120）、project_id（逻辑 ID，最长 120）、status（可重复或逗号分隔，枚举见上）、agent（最长 120）、page（1..100000，默认 1）、page_size（1..50，默认 20）。`q` 在 SQLite Working State 投影中对 work_id、project_id、goal、current_state、next_steps、blockers、author_agent 和 owner_agent 做不区分 ASCII 大小写的包含匹配；`%`、`_` 和反斜杠按普通文本处理，不具有 SQL 通配符语义。`project_id` 继续执行精确匹配，可与关键字组合使用；`agent` 为兼容筛选，匹配最新检查点作者（等价于旧 `agent` 字段），不是 owner，服务端不得静默改成 owner 筛选。列表默认按 updated_at 最新时间倒序，排序相同的记录按 work_id 稳定打散。
 
 返回 WorkingStateSummary 分页：
 
@@ -178,7 +178,7 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
 
 ### GET /runtime/archived-working-states
 
-历史任务查询参数与活动列表相同；`status` 仅允许 completed、abandoned、superseded，`agent` 继续匹配最新检查点作者。返回相同的安全摘要字段并增加 `lifecycle: "archived"`。共享核心会按归档事实路径再次确认记录，响应不含 archive 物理路径。
+历史任务查询参数与活动列表相同，包含相同的 `q` 关键字匹配语义；`status` 仅允许 completed、abandoned、superseded，`agent` 继续匹配最新检查点作者。返回相同的安全摘要字段并增加 `lifecycle: "archived"`。共享核心会按归档事实路径再次确认记录，响应不含 archive 物理路径。
 
 ### GET /runtime/archived-working-states/{work_id}
 

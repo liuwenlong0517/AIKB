@@ -18,6 +18,19 @@ from .common import split_csv, success, validate_project_id, validate_runtime_id
 router = APIRouter(prefix="/runtime", tags=["runtime"])
 
 
+def _keyword(value: str | None) -> str | None:
+    """校验人类可读关键字；空白视为未筛选，控制字符不进入共享核心。"""
+
+    if value is None:
+        return None
+    if any(ord(character) < 32 for character in value):
+        raise ValueError("关键字格式无效")
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized
+
+
 def _gateway(request: Request, capability: str = "web_active_work_states") -> Any:
     """取得应用级共享网关；缺失观察能力时由统一异常边界返回 503。"""
     gateway = getattr(request.app.state, "knowledge_gateway", None)
@@ -41,6 +54,7 @@ def _runtime_meta(data: dict[str, Any]) -> tuple[bool, list[str]]:
 @router.get("/working-states")
 def working_states(
     request: Request,
+    q: str | None = Query(default=None, max_length=120),
     project_id: str | None = Query(default=None, max_length=120),
     status: list[str] | None = Query(default=None),
     agent: str | None = Query(default=None, max_length=120),
@@ -50,6 +64,7 @@ def working_states(
     """列出 planned、active、blocked 活动任务；不开放归档搜索和任何写入。"""
     gateway = _gateway(request)
     data = gateway.web_active_work_states(
+        keyword=_keyword(q),
         project_id=validate_project_id(project_id),
         status=split_csv(status),
         agent=agent.strip() if agent else None,
@@ -63,6 +78,7 @@ def working_states(
 @router.get("/archived-working-states")
 def archived_working_states(
     request: Request,
+    q: str | None = Query(default=None, max_length=120),
     project_id: str | None = Query(default=None, max_length=120),
     status: list[str] | None = Query(default=None),
     agent: str | None = Query(default=None, max_length=120),
@@ -72,6 +88,7 @@ def archived_working_states(
     """列出 completed、abandoned、superseded 历史任务；与活动接口完全分离。"""
     gateway = _gateway(request, "web_archived_work_states")
     data = gateway.web_archived_work_states(
+        keyword=_keyword(q),
         project_id=validate_project_id(project_id),
         status=split_csv(status),
         agent=agent.strip() if agent else None,

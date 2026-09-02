@@ -86,7 +86,13 @@ describe('RuntimePage', () => {
     expect(screen.getByText('本页 1 项')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '下一页' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '下一页' }));
-    await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith({ project_id: 'demo', agent: undefined, status: undefined, page: 2, page_size: 20 }, true));
+    await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith({ q: undefined, project_id: 'demo', agent: undefined, status: undefined, page: 2, page_size: 20 }, true));
     expect(await screen.findByText('active-2')).toBeInTheDocument();
+  });
+
+  it('从 URL 恢复关键字并传给活动任务模糊搜索', () => {
+    render(<MemoryRouter initialEntries={['/runtime?q=%E6%95%B0%E6%8D%AE%E7%BB%B4%E6%8A%A4']}><Routes><Route path="/runtime" element={<RuntimePage />} /></Routes></MemoryRouter>);
+    expect(screen.getByRole('textbox', { name: '按关键字搜索任务' })).toHaveValue('数据维护');
+    expect(mocks.list).toHaveBeenLastCalledWith({ q: '数据维护', project_id: undefined, agent: undefined, status: undefined, page: 1, page_size: 20 }, true);
   });
 });

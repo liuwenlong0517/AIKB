@@ -8,7 +8,7 @@ AIKB WebUI 是 AIKB 的本地管理终端。除正式知识、运行状态、审
 - Web 后端复用 `../aikb-mcp/aikb/`，不复制知识扫描和查询逻辑；
 - 前端只调用 `/api/v1`；
 - 所有知识接口固定过滤 `status=verified`；
-- 运行状态分别查询活动 Working State（`planned`、`active`、`blocked`）与历史归档（`completed`、`abandoned`、`superseded`），两类接口保持独立且均为只读；审计只提供脱敏摘要、筛选、分页和调用详情；
+- 运行状态分别查询活动 Working State（`planned`、`active`、`blocked`）与历史归档（`completed`、`abandoned`、`superseded`），两类接口保持独立且均为只读；任务列表支持基于 SQLite 投影的人类可读关键字包含匹配，并保留项目逻辑 ID 等精确筛选；审计只提供脱敏摘要、筛选、分页和调用详情；
 - 阶段 3 当前只注册 `validate.structure`、`repository.status.control`、`repository.status.knowledge` 三项 Windows 本地只读动作；通过服务端预览、严格空参数 Schema、单次确认令牌、JSONL 任务事实源、SSE 和受控 Job Object 执行；
 - 任务输出、结果和审计均为安全投影，任务事实源位于 `workspace/runtime/web/tasks/`，知识、规则和 Git 事实源不被动作修改；
 - 规则中心使用四个固定逻辑 ID 读取规则，只有 `user` 可以生成候选预览；预览要求控制仓全仓洁净，只写 `workspace/runtime/web/rule-changes/` 下的短期候选和无正文事务摘要，不修改正式规则、Git、任务或审计；

@@ -690,6 +690,7 @@ class WorkStateStore:
     def web_active_work_states(
         self, *, work_id: str | None = None, project_id: str | None = None,
         status: str | list[str] | tuple[str, ...] | None = None, agent: str | None = None,
+        keyword: str | None = None,
         page: int = 1, page_size: int = 20, limit: int | None = None,
     ) -> dict[str, Any]:
         """返回 Web 使用的活动任务安全视图。
@@ -705,6 +706,7 @@ class WorkStateStore:
             raise ValueError("project_id 格式无效")
         if agent is not None and len(agent) > 120:
             raise ValueError("agent 长度超限")
+        keyword = self._web_keyword_filter(keyword)
         if limit is not None:
             # 旧的内部调用使用 limit；Web 契约统一使用 page/page_size。
             page_size = limit if page_size == 20 else page_size
@@ -727,6 +729,15 @@ class WorkStateStore:
         if agent:
             filters.append("agent = ?")
             params.append(agent)
+        if keyword:
+            filters.append(
+                "lower(COALESCE(work_id,'') || char(10) || COALESCE(project_id,'') || char(10) || "
+                "COALESCE(goal,'') || char(10) || COALESCE(current_state,'') || char(10) || "
+                "COALESCE(next_steps,'') || char(10) || COALESCE(blockers,'') || char(10) || "
+                "COALESCE(author_agent,'') || char(10) || COALESCE(owner_agent,'')) "
+                "LIKE lower(?) ESCAPE '\\'"
+            )
+            params.append(self._web_like_pattern(keyword))
         connection = sqlite3.connect(self.settings.work_db)
         try:
             connection.row_factory = sqlite3.Row
@@ -765,6 +776,7 @@ class WorkStateStore:
     def web_archived_work_states(
         self, *, work_id: str | None = None, project_id: str | None = None,
         status: str | list[str] | tuple[str, ...] | None = None, agent: str | None = None,
+        keyword: str | None = None,
         page: int = 1, page_size: int = 20, limit: int | None = None,
     ) -> dict[str, Any]:
         """返回已关闭 Working State 的独立 Web 只读视图。
@@ -780,6 +792,7 @@ class WorkStateStore:
             raise ValueError("project_id 格式无效")
         if agent is not None and len(agent) > 120:
             raise ValueError("agent 长度超限")
+        keyword = self._web_keyword_filter(keyword)
         if limit is not None:
             page_size = limit if page_size == 20 else page_size
         page, page_size = self._web_validate_paging(page, page_size)
@@ -801,6 +814,15 @@ class WorkStateStore:
         if agent:
             filters.append("author_agent = ?")
             params.append(agent)
+        if keyword:
+            filters.append(
+                "lower(COALESCE(work_id,'') || char(10) || COALESCE(project_id,'') || char(10) || "
+                "COALESCE(goal,'') || char(10) || COALESCE(current_state,'') || char(10) || "
+                "COALESCE(next_steps,'') || char(10) || COALESCE(blockers,'') || char(10) || "
+                "COALESCE(author_agent,'') || char(10) || COALESCE(owner_agent,'')) "
+                "LIKE lower(?) ESCAPE '\\'"
+            )
+            params.append(self._web_like_pattern(keyword))
         connection = sqlite3.connect(self.settings.work_db)
         try:
             connection.row_factory = sqlite3.Row
@@ -1178,6 +1200,29 @@ class WorkStateStore:
         if any(value not in {"completed", "abandoned", "superseded"} for value in normalized):
             raise ValueError("历史 status 只能是 completed、abandoned 或 superseded")
         return list(dict.fromkeys(normalized))
+
+    @staticmethod
+    def _web_keyword_filter(keyword: str | None) -> str | None:
+        """规范化人类可读关键字；控制字符和超长输入不进入 SQLite 查询。"""
+
+        if keyword is None:
+            return None
+        raw = str(keyword)
+        if any(ord(character) < 32 for character in raw):
+            raise ValueError("keyword 格式无效")
+        normalized = raw.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 120:
+            raise ValueError("keyword 格式无效")
+        return normalized
+
+    @staticmethod
+    def _web_like_pattern(keyword: str) -> str:
+        """把 LIKE 元字符视为普通文本，仅提供服务端定义的包含匹配。"""
+
+        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
 
     @staticmethod
     def _web_pagination(page: int, page_size: int, total: int, selected: int) -> dict[str, Any]:

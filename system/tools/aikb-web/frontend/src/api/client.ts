@@ -147,10 +147,10 @@ export const api = {
   },
   /** 阶段 2 Working State 只读资源。ID 使用路径编码，浏览器永不接触物理路径。 */
   runtime: {
-    list: (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}) =>
+    list: (params: { q?: string; project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}) =>
       apiClient.getEnvelope<RuntimeListData>('/runtime/working-states', params),
     /** 历史接口只读取归档 Working State，不能通过活动接口 status 绕过边界。 */
-    archivedList: (params: { project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}) =>
+    archivedList: (params: { q?: string; project_id?: string; status?: string; agent?: string; page?: number; page_size?: number } = {}) =>
       apiClient.getEnvelope<ArchivedRuntimeListData>('/runtime/archived-working-states', params),
     detail: async (workId: string) => {
       const response = await apiClient.getEnvelope<WorkingStateDetail | { item: WorkingStateDetail }>(`/runtime/working-states/${encodeURIComponent(workId)}`);
