@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useState } from 'react';
 import { AsyncState } from '../components/AsyncState';
 import { PageHeader } from '../components/PageHeader';
-import { useAuditEvent, useAuditEvents, useAuditSummary } from '../hooks/useApi';
+import { useAuditEvent, useAuditEvents } from '../hooks/useApi';
 import type { ApiMeta, AuditEvent, AuditStatus } from '../types/api';
 
 const STATUS_LABELS: Record<AuditStatus, string> = { started: '已开始', succeeded: '成功', failed: '失败', noop: '无操作', blocked: '已阻止', incomplete: '未完成', cancelled: '已取消', timed_out: '已超时', interrupted: '已中断' };
@@ -19,17 +19,6 @@ function WarningBar({ meta }: { meta?: ApiMeta }) {
   const warnings = (meta?.warnings ?? []).map((warning) => labels[warning] ?? '部分审计数据处于降级状态。');
   if (!warnings.length && !meta?.degraded) return null;
   return <Alert className="section-gap" type="warning" showIcon message="审计数据部分降级" description={[...new Set(warnings)].join(' ') || '部分数据不可用，但当前安全子集仍可查看。'} />;
-}
-
-/** 合并独立摘要与列表响应的可信度元数据，任一接口降级都必须在页面保留提示。 */
-function mergeMeta(...metas: Array<ApiMeta | undefined>): ApiMeta | undefined {
-  const available = metas.filter((meta): meta is ApiMeta => Boolean(meta));
-  if (!available.length) return undefined;
-  return {
-    ...available[0],
-    degraded: available.some((meta) => meta.degraded === true),
-    warnings: [...new Set(available.flatMap((meta) => meta.warnings ?? []))],
-  };
 }
 
 function statusTag(status?: string | null) { const typed = status as AuditStatus; return <Tag color={STATUS_COLORS[typed] ?? 'default'}>{STATUS_LABELS[typed] ?? status ?? '未知状态'}</Tag>; }
@@ -57,25 +46,23 @@ function AuditList() {
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const common = { since: since || undefined, date: dateFilter || undefined, agent: agent || undefined, source, status, operation, page, page_size: pageSize };
-  // summary 与 events 使用同一组公共筛选，顶部数字始终对应当前列表语义，而不是全量审计数据。
-  const summaryQuery = useAuditSummary({ since: since || undefined, date: dateFilter || undefined, agent: agent || undefined, source, status, operation: operation || undefined });
   const eventsQuery = useAuditEvents(common);
-  const summary = summaryQuery.data?.data;
   const events = eventsQuery.data?.data;
+  // 列表响应已经包含同一筛选条件的精确 summary；直接复用避免历史 JSONL 被
+  // 摘要请求和列表请求各读一遍，同时保证顶部数字与当前列表完全同源。
+  const summary = events?.summary;
   const clear = () => { setSince(''); setDateFilter(''); setAgent(''); setSource(undefined); setStatus(undefined); setOperation(''); setPage(1); };
   return <>
     <PageHeader title="审计日志" description="查看本机 MCP、hook 与 Web 受控动作的安全摘要和有限详情。" />
-    <WarningBar meta={mergeMeta(summaryQuery.data?.meta, eventsQuery.data?.meta)} />
-    <AsyncState loading={summaryQuery.isLoading} error={summaryQuery.error} onRetry={() => void summaryQuery.refetch()} empty={!summary}>
-      {summary && <Row gutter={[16, 16]}>
+    <WarningBar meta={eventsQuery.data?.meta} />
+    {summary && <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}><Card><Statistic title="调用总数" value={summary.count} /></Card></Col>
         <Col xs={12} sm={6}><Card><Statistic title="成功" value={summary.statuses.succeeded ?? 0} /></Card></Col>
         <Col xs={12} sm={6}><Card><Statistic title="失败 / 未完成" value={(summary.statuses.failed ?? 0) + (summary.statuses.incomplete ?? 0)} /></Card></Col>
         <Col xs={12} sm={6}><Card><Statistic title="平均耗时" value={summary.average_duration_ms ?? 0} suffix="ms" /></Card></Col>
         <Col xs={24} lg={12}><Card title="状态分布"><Space wrap>{Object.entries(summary.statuses).map(([key, count]) => <Tag key={key}>{STATUS_LABELS[key as AuditStatus] ?? key}：{count}</Tag>)}</Space></Card></Col>
         <Col xs={24} lg={12}><Card title="来源与降级"><Space wrap><Tag>mcp：{summary.sources.mcp ?? 0}</Tag><Tag>hook：{summary.sources.hook ?? 0}</Tag><Tag>web：{summary.sources.web ?? 0}</Tag><Tag color={summary.fallback_records ? 'orange' : undefined}>fallback：{summary.fallback_records ?? 0}</Tag><Tag color={summary.damaged_count ? 'red' : undefined}>损坏：{summary.damaged_count ?? 0}</Tag></Space><Typography.Paragraph type="secondary">最近活动：{date(summary.last_activity)}</Typography.Paragraph></Card></Col>
-      </Row>}
-    </AsyncState>
+    </Row>}
     <Card className="section-gap search-controls">
       <Space wrap>
         <Input aria-label="审计时间范围" placeholder="since，例如 24h 或 7d" value={since} onChange={(event) => { setSince(event.target.value); setDateFilter(''); setPage(1); }} />

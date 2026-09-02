@@ -741,35 +741,135 @@ class AuditStore:
             "capture_level": self.settings.audit_capture_level,
         })
 
-    def _iter_source_files(self) -> Iterator[tuple[Path, bool]]:
-        if self.events_root.exists():
-            for path in sorted(self.events_root.rglob("*.jsonl")):
-                yield path, False
-        if self.fallback_root.exists():
-            for path in sorted(self.fallback_root.rglob("*.json")):
-                yield path, True
+    def _iter_source_files(
+        self, *, start_date: date | None = None, end_date: date | None = None,
+    ) -> Iterator[tuple[Path, bool]]:
+        """按日期分片枚举审计事实源，时间筛选时不触碰范围外的旧文件。
 
-    def read_events(self) -> dict[str, Any]:
+        事件和 fallback 均按本机日期落盘；查询只需读取 ``since`` 所在日到
+        当前日的有限分片即可。无时间筛选时保持历史全量读取，确保既有 CLI
+        报告和精确 Web total 语义不变。
+        """
+        if start_date is None and end_date is None:
+            if self.events_root.exists():
+                for path in sorted(self.events_root.rglob("*.jsonl")):
+                    yield path, False
+            if self.fallback_root.exists():
+                for path in sorted(self.fallback_root.rglob("*.json")):
+                    yield path, True
+            return
+        if start_date is None or end_date is None or start_date > end_date:
+            return
+        current = start_date
+        while current <= end_date:
+            event_path = self._event_path(datetime(current.year, current.month, current.day))
+            if event_path.is_file():
+                yield event_path, False
+            fallback_dir = self.fallback_root / f"{current:%Y}" / f"{current:%m}" / f"{current:%Y-%m-%d}"
+            if fallback_dir.is_dir():
+                for path in sorted(fallback_dir.glob("*.json")):
+                    yield path, True
+            current += timedelta(days=1)
+
+    @staticmethod
+    def _source_file_date(path: Path, fallback: bool) -> date | None:
+        """解析事实文件所属日期，仅用于回补跨分片 invocation 的起始事件。"""
+        candidate = path.parent.name if fallback else path.stem
+        try:
+            return date.fromisoformat(candidate)
+        except ValueError:
+            return None
+
+    def _iter_source_files_before(self, before_date: date) -> Iterator[tuple[Path, bool]]:
+        """按日期倒序枚举范围前的文件；调用方会在所需起始事件齐全时停止。"""
+        candidates: list[tuple[date, Path, bool]] = []
+        for path, fallback in self._iter_source_files():
+            partition_date = self._source_file_date(path, fallback)
+            if partition_date is not None and partition_date < before_date:
+                candidates.append((partition_date, path, fallback))
+        for _, path, fallback in sorted(candidates, key=lambda item: (item[0], str(item[1])), reverse=True):
+            yield path, fallback
+
+    def read_events(
+        self, *, since: str | None = None, on_date: str | None = None, now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """读取审计事件；Web 时间筛选下按日期分片读取，返回格式保持兼容。"""
         events: list[dict[str, Any]] = []
         damaged: list[str] = []
         fallback_count = 0
-        for path, fallback in self._iter_source_files():
+        current_now = (now or self.clock()).astimezone()
+        start_date: date | None = None
+        end_date: date | None = None
+        if since and on_date:
+            raise ValueError("since 与 date 不能同时使用")
+        if on_date:
+            # invocation 的 started/finished 可能跨日；从目标日读到当前日，
+            # 才能保留目标日 started、次日 finished 的完整合并状态，同时裁掉
+            # 不可能命中的更早分片。未来日期自然得到空结果，保持原有语义。
+            selected_date = date.fromisoformat(on_date)
+            start_date = selected_date
+            end_date = current_now.date()
+        elif since:
+            start_date = parse_since(since, current_now).date()  # type: ignore[union-attr]
+            end_date = current_now.date()
+
+        def consume_file(path: Path, fallback: bool, wanted: set[str] | None = None) -> set[str]:
+            """读取单个分片；回补阶段只保留指定 invocation 的 started 事件。
+
+            范围外的旧记录不是当前查询结果，回补时不累计其损坏/无关事件，
+            避免为了恢复一次跨日配对重新扩大审计响应的内存和降级计数。
+            """
+            nonlocal fallback_count
+            found: set[str] = set()
             try:
                 lines = path.read_text(encoding="utf-8").splitlines() if not fallback else [path.read_text(encoding="utf-8")]
-                for number, line in enumerate(lines, 1):
-                    if not line.strip():
-                        continue
-                    try:
-                        value = json.loads(line)
-                        if not isinstance(value, dict):
-                            raise ValueError("audit event is not an object")
-                        value["_fallback"] = fallback
-                        events.append(value)
-                        fallback_count += int(fallback)
-                    except (json.JSONDecodeError, ValueError, TypeError):
-                        damaged.append(f"{path}:{number}")
             except (OSError, UnicodeError):
-                damaged.append(str(path))
+                if wanted is None:
+                    damaged.append(str(path))
+                return found
+            for number, line in enumerate(lines, 1):
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError("audit event is not an object")
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    if wanted is None:
+                        damaged.append(f"{path}:{number}")
+                    continue
+                invocation_id = value.get("invocation_id")
+                if wanted is not None:
+                    if value.get("record_type") != "invocation_started" or not isinstance(invocation_id, str) or invocation_id not in wanted:
+                        continue
+                    found.add(invocation_id)
+                value["_fallback"] = fallback
+                events.append(value)
+                fallback_count += int(fallback)
+            return found
+
+        for path, fallback in self._iter_source_files(start_date=start_date, end_date=end_date):
+            consume_file(path, fallback)
+
+        if start_date is not None:
+            # 裁剪范围可能留下“只有 finished 没有 started”的调用。旧实现会
+            # 先跨日合并再按 started_at 过滤；按待配对 ID 倒序补读旧分片可保留
+            # 该语义，且找到全部起始事件后立即停止，不读无关历史。
+            started_ids = {
+                str(event.get("invocation_id"))
+                for event in events
+                if event.get("record_type") == "invocation_started" and event.get("invocation_id")
+            }
+            finished_ids = {
+                str(event.get("invocation_id"))
+                for event in events
+                if event.get("record_type") == "invocation_finished" and event.get("invocation_id")
+            }
+            wanted = finished_ids - started_ids
+            for path, fallback in self._iter_source_files_before(start_date):
+                wanted -= consume_file(path, fallback, wanted)
+                if not wanted:
+                    break
         events.sort(key=lambda item: str(item.get("timestamp") or ""))
         return {"events": events, "damaged": damaged, "fallback_count": fallback_count}
 
@@ -800,9 +900,9 @@ def filter_events(
     events: list[dict[str, Any]], *, since: str | None = None, on_date: str | None = None,
     agent: str | None = None, source: str | None = None, status: str | list[str] | tuple[str, ...] | None = None,
     operation: str | None = None, change_id: str | None = None, resource_type: str | None = None,
-    resource_id: str | None = None,
+    resource_id: str | None = None, now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    threshold = parse_since(since)
+    threshold = parse_since(since, now)
     selected_date = date.fromisoformat(on_date) if on_date else None
     statuses = {str(item) for item in status} if isinstance(status, (list, tuple)) else ({status} if status else set())
     result: list[dict[str, Any]] = []
@@ -1113,13 +1213,20 @@ def web_audit_query(
     的损坏信息只有数量/布尔标志，fallback 只以计数和单项布尔状态表达，绝不返回路径。
     """
     page, page_size = _validate_web_paging(page, page_size)
-    loaded = store.read_events()
+    # 真实 AuditStore 可按时间筛选读取分片；注入的旧版替身仍只实现无参
+    # read_events，保持网关/测试替身的最小兼容接口。
+    query_now = store.clock().astimezone() if isinstance(store, AuditStore) else None
+    loaded = (
+        store.read_events(since=since, on_date=on_date, now=query_now)
+        if isinstance(store, AuditStore)
+        else store.read_events()
+    )
     events = loaded.get("events", []) if isinstance(loaded, dict) else []
     damaged = loaded.get("damaged", []) if isinstance(loaded, dict) else []
     combined = combine_invocations(events if isinstance(events, list) else [])
     selected = filter_events(
         combined, since=since, on_date=on_date, agent=agent, source=source, status=status, operation=operation,
-        change_id=change_id, resource_type=resource_type, resource_id=resource_id,
+        change_id=change_id, resource_type=resource_type, resource_id=resource_id, now=query_now,
     )
     selected = _web_filters(selected, session_label=session_label, project_id=project_id)
     # 审计页面默认展示最新活动；排序发生在分页前，避免第一页落在最旧历史。

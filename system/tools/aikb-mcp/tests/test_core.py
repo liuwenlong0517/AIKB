@@ -20,7 +20,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 if str(TOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(TOOL_ROOT))
 
-from aikb.audit import AUDIT_FIELDS, AuditStore, _redact_text, audit_summary, combine_invocations, render_markdown, summarize_tool_action
+from aikb.audit import AUDIT_FIELDS, AuditStore, _redact_text, audit_summary, combine_invocations, render_markdown, summarize_tool_action, web_audit_query
 from aikb.config import Settings
 from aikb.frontmatter import parse_markdown, render_frontmatter
 from aikb.hooks import handle_hook
@@ -532,6 +532,94 @@ class AuditTests(unittest.TestCase):
         self.assertTrue(any(item.get("status") == "incomplete" for item in items))
         self.assertTrue(any(item.get("record_type") == "wrapper_failure" for item in items))
         self.assertEqual(len(loaded["damaged"]), 1)
+
+    def test_web_audit_query_reads_only_intersecting_date_shards(self) -> None:
+        """时间筛选裁掉旧分片；无时间范围仍保留完整历史读取语义。"""
+        current = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
+        store = AuditStore(self.fixture.settings, clock=lambda: current)
+        events_root = self.fixture.settings.workspace_root / "audit" / "events"
+        old_path = events_root / "2026" / "08" / "2026-08-01.jsonl"
+        selected_path = events_root / "2026" / "08" / "2026-08-27.jsonl"
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        selected_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_text("{broken old history\n", encoding="utf-8")
+        selected_path.write_text(json.dumps({
+            "record_type": "invocation_finished", "event_id": "selected-event",
+            "timestamp": "2026-08-27T10:00:00+00:00", "status": "succeeded",
+            "operation": "ping",
+        }) + "\n", encoding="utf-8")
+
+        selected = web_audit_query(store, on_date="2026-08-27", page_size=10)
+        self.assertEqual(selected["pagination"]["total"], 1)
+        self.assertEqual(selected["summary"]["damaged_count"], 0)
+        complete = web_audit_query(store, page_size=10)
+        self.assertEqual(complete["summary"]["damaged_count"], 1)
+
+    def test_web_audit_date_filter_keeps_cross_day_invocation_complete(self) -> None:
+        """目标日 started、次日 finished 的调用仍按原语义合并为成功。"""
+        current = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
+        store = AuditStore(self.fixture.settings, clock=lambda: current)
+        events_root = self.fixture.settings.workspace_root / "audit" / "events"
+        start_path = events_root / "2026" / "08" / "2026-08-27.jsonl"
+        finish_path = events_root / "2026" / "08" / "2026-08-28.jsonl"
+        start_path.parent.mkdir(parents=True, exist_ok=True)
+        finish_path.parent.mkdir(parents=True, exist_ok=True)
+        start_path.write_text(json.dumps({
+            "record_type": "invocation_started", "event_id": "start-cross-day",
+            "invocation_id": "invoke-cross-day", "timestamp": "2026-08-27T15:59:00+00:00",
+            "source": "web", "agent": "codex", "operation": "ping", "status": "started",
+        }) + "\n", encoding="utf-8")
+        finish_path.write_text(json.dumps({
+            "record_type": "invocation_finished", "event_id": "finish-cross-day",
+            "invocation_id": "invoke-cross-day", "timestamp": "2026-08-28T16:01:00+00:00",
+            "source": "web", "agent": "codex", "operation": "ping", "status": "succeeded",
+            "outcome_code": "ok",
+        }) + "\n", encoding="utf-8")
+
+        payload = web_audit_query(store, on_date="2026-08-27", page_size=10)
+        self.assertEqual(payload["pagination"]["total"], 1)
+        self.assertEqual(payload["items"][0]["status"], "succeeded")
+
+    def test_time_bounded_query_does_not_promote_old_started_to_standalone_finish(self) -> None:
+        """范围前 started、范围内 finished 仍按 started_at 优先语义被排除。"""
+        current = datetime(2026, 8, 29, 10, tzinfo=timezone.utc)
+        store = AuditStore(self.fixture.settings, clock=lambda: current)
+        events_root = self.fixture.settings.workspace_root / "audit" / "events"
+        old_path = events_root / "2026" / "08" / "2026-08-26.jsonl"
+        date_finish_path = events_root / "2026" / "08" / "2026-08-27.jsonl"
+        since_finish_path = events_root / "2026" / "08" / "2026-08-28.jsonl"
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        date_finish_path.parent.mkdir(parents=True, exist_ok=True)
+        since_finish_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_text(
+            json.dumps({
+                "record_type": "invocation_started", "event_id": "start-old",
+                "invocation_id": "invoke-old-date", "timestamp": "2026-08-26T15:00:00+00:00",
+                "source": "web", "agent": "codex", "operation": "ping", "status": "started",
+            }) + "\n" + json.dumps({
+                "record_type": "invocation_started", "event_id": "start-old-since",
+                "invocation_id": "invoke-old-since", "timestamp": "2026-08-26T15:01:00+00:00",
+                "source": "web", "agent": "codex", "operation": "ping", "status": "started",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        date_finish_path.write_text(json.dumps({
+            "record_type": "invocation_finished", "event_id": "finish-old-date",
+            "invocation_id": "invoke-old-date", "timestamp": "2026-08-27T15:30:00+00:00",
+            "source": "web", "agent": "codex", "operation": "ping", "status": "succeeded",
+            "outcome_code": "ok",
+        }) + "\n", encoding="utf-8")
+        since_finish_path.write_text(json.dumps({
+            "record_type": "invocation_finished", "event_id": "finish-old-since",
+            "invocation_id": "invoke-old-since", "timestamp": "2026-08-28T15:30:00+00:00",
+            "source": "web", "agent": "codex", "operation": "ping", "status": "succeeded",
+            "outcome_code": "ok",
+        }) + "\n", encoding="utf-8")
+
+        for query in ({"on_date": "2026-08-27"}, {"since": "2d"}):
+            payload = web_audit_query(store, page_size=10, **query)
+            self.assertEqual(payload["pagination"]["total"], 0)
+            self.assertEqual(payload["items"], [])
 
     def test_concurrent_processes_produce_parseable_lines(self) -> None:
         code = (

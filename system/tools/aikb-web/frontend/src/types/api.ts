@@ -250,7 +250,8 @@ export interface AuditEvent {
 export interface AuditListData {
   items: AuditEvent[];
   pagination: Pagination;
-  summary?: { has_damaged?: boolean; damaged_count?: number };
+  /** 列表与顶部统计使用同一筛选快照，避免重复请求历史审计分片。 */
+  summary?: AuditSummaryData;
 }
 
 /** 阶段 3 首批受控动作风险级别；前端不据此推断未公开能力。 */
