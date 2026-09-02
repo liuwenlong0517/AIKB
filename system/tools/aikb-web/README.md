@@ -1,6 +1,6 @@
 # AIKB WebUI
 
-AIKB WebUI 是 AIKB 的本地管理终端。除正式知识、运行状态、审计、受控任务、规则治理和安装修复外，当前还提供独立的数据维护页：用户可按固定类别和保留期盘点审计数据、终态归档任务、终态 Web 任务及终态事务摘要，查看保护计数后通过短期预览和二次确认执行清理。服务不开放局域网监听。
+AIKB WebUI 是 AIKB 1.0 的 Windows 本地管理终端。它统一承载正式知识阅读、运行状态、审计、受控任务、规则治理、安装修复和数据维护；数据维护可按固定类别和保留期盘点审计数据、终态归档任务、终态 Web 任务及终态事务摘要，查看保护计数后通过短期预览和二次确认执行清理。服务不开放局域网监听。
 
 ## 开发边界
 
@@ -29,4 +29,4 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File system/tools/aikb-web/scripts/vali
 
 开发前端时，先启动后端，再在 `frontend/` 运行 `npm run dev`。Vite 只把 `/api` 转发到 `http://127.0.0.1:8000`。
 
-完整接口、读模型架构、页面空状态和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计、受控动作、规则写入、安装修复和数据维护是否可用，仍以启动时共享核心、恢复门禁、平台执行器和各资源接口响应为准。历史阶段契约继续见 `docs/phase-3-preconditions.md`、`docs/phase-4-preconditions.md` 与 `docs/phase-4b-install-repair-preconditions.md`；当前仍未开放其他规则/知识写入、索引重建、Git 写入或 macOS 实现。
+完整接口、当前架构、页面契约和安全边界见 `docs/api.md`、`docs/architecture.md`、`docs/ui-design.md` 和 `docs/security.md`。运行状态、审计、受控动作、规则写入、安装修复和数据维护是否可用，仍以启动时共享核心、恢复门禁、平台执行器和各资源接口响应为准。`docs/phase-3-preconditions.md`、`docs/phase-4-preconditions.md` 与 `docs/phase-4b-install-repair-preconditions.md` 是历史准入与验收记录，不作为当前能力总览；当前仍未开放其他规则/知识写入、索引重建、Git 写入、卸载或 macOS 实现。

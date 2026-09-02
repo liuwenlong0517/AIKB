@@ -3,8 +3,8 @@
 本工具只依赖 Python 3.11 标准库，在 Windows 本机提供：
 
 - Markdown Front Matter 验证与 SQLite FTS5/trigram 知识索引；
-- `search_knowledge`、`read_knowledge` 两个只读知识工具；
-- `get_work_state`、`checkpoint_work_state`、`close_work_state`、`claim_work_state`、`authorize_work_participant` 五个本机任务状态工具（连同三个知识工具共 8 个 MCP 工具）；
+- `search_knowledge`、`review_knowledge`、`read_knowledge` 三个只读知识工具；
+- `get_work_state`、`checkpoint_work_state`、`close_work_state`、`claim_work_state`、`authorize_work_participant` 五个本机任务状态工具（共 8 个 MCP 工具）；
 - Codex、Claude Code 和未来 Agent 共用的 stdio MCP 协议入口。
 - 按日 JSONL 的 MCP/hook 本机审计，以及按需 Excel 汇总报告。
 
@@ -54,7 +54,7 @@ participant 时才可升级。有 participant 时必须先撤销并重新授权�
 legacy candidate 仍可见但不因缺少治理字段硬失败。它不会自动晋升、删除、关闭或
 判断自然语言 `review_when` 是否满足。
 
-审计默认级别为 `safe`：只保存工具/事件白名单字段的脱敏摘要、可读会话标签及中文动作/结果说明。把 `AIKB_AUDIT_CAPTURE_LEVEL` 设为 `diagnostic` 或 `full-local` 后，MCP/hook 的输入输出会以同一调用 ID 保存至独立 `workspace/audit/diagnostic/`；两个级别都会脱敏常见密钥、移除 NUL 并限制大小，`full-local` 仅提高预算，不记录隐藏推理或二进制附件。`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，提供概览、可筛选调用明细和损坏记录；`audit report-md` 暂时弃用，但会继续生成兼容的 Markdown 报告。审计历史不会自动清理。
+审计默认级别为 `safe`：只保存工具/事件白名单字段的脱敏摘要、可读会话标签及中文动作/结果说明。把 `AIKB_AUDIT_CAPTURE_LEVEL` 设为 `diagnostic` 或 `full-local` 后，MCP/hook 的输入输出会以同一调用 ID 保存至独立 `workspace/audit/diagnostic/`；两个级别都会脱敏常见密钥、移除 NUL 并限制大小，`full-local` 仅提高预算，不记录隐藏推理或二进制附件。`audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，提供概览、可筛选调用明细和损坏记录；`audit report-md` 暂时弃用，但会继续生成兼容的 Markdown 报告。MCP 与 hook 本身不会自动清理审计；WebUI 启动恢复完成后可按固定默认保留期低频维护，并沿用活动、不确定、链接及恢复材料保护规则。
 
 `system/schemas/audit-event.schema.json` 定义兼容 v1/v2 的 JSONL schema。v2 新增 `session_label`、`action_text`、`result_text` 和 `capture_level`，但保留原始 `session_id` 作为技术关联字段。一次调用以同一 `invocation_id` 的 `invocation_started` / `invocation_finished` 配对；缺少结束事件时报告为 `incomplete`。平台没有提供的真实 Session ID 保持 `null`，AIKB 会显示明确的降级会话标签而不会伪造 ID。
 

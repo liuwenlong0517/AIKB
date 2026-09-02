@@ -4,6 +4,8 @@ AIKB（AI Knowledge Base）是一套面向个人工程工作的长期知识与�
 
 当前实现面向 Windows，正式支持 OpenAI Codex 和 Claude Code。系统的目标不是保存全部聊天内容，而是让不同 Agent 在需要时找到经过验证的工程知识，并让尚未完成的任务能够在后续 Session 中以紧凑、可核对的状态继续。
 
+当前项目已进入 **AIKB 1.0**：这是 Windows 本地单用户场景的首个完整可用基线，覆盖双仓知识治理、跨会话 Working State、审计、Agent 安装诊断与本地 WebUI 管理终端。`1.0` 表示项目能力基线，不要求 MCP `serverInfo`、Web 前端包或内部 Schema 使用相同版本号；这些兼容版本继续独立演进。
+
 > 本文件是面向人类维护者的完整项目手册。它不属于 Agent 的默认接入、知识检索或会话恢复上下文。Agent 只有在用户明确要求阅读，或者任务本身是在维护 AIKB 控制面、安装流程或文档时才应读取本文件。Agent 的稳定入口是 `ENTRY_RULES.md`，不是本 README。
 
 ## 1. 项目解决什么问题
@@ -25,8 +27,9 @@ AIKB 当前提供：
 - 面向 Codex、Claude Code 的 stdio MCP 服务；
 - 本机 Working State、检查点和任务归档；
 - SessionStart、PreCompact、Stop、SessionEnd 生命周期挂接；
-- MCP/hook 文本审计、故障兜底和按需 Markdown 报告；
+- MCP/hook/Web 安全审计、故障兜底、Excel 主报告和 Markdown 兼容报告；
 - 可插拔 Agent 适配器，以及幂等安装、诊断和精确卸载；
+- 仅监听本机回环地址的 WebUI 管理终端，统一提供知识阅读、运行状态、审计、任务、规则治理、安装修复和数据维护；
 - 结构、元数据、适配器和 MCP 行为自动测试；
 - MCP 失效时沿根 `INDEX.md` 和各级知识 `INDEX.md` 逐级读取的降级路径。
 
@@ -50,9 +53,13 @@ MCP、知识模型和工作状态模型不依赖 Codex 或 Claude Code。平台�
 
 ### 2.5 审计不是知识或 Working State
 
-`workspace/audit/events/*.jsonl` 是本机操作审计事实源，Excel 日报是主可重建视图，Markdown 仅保留兼容入口。默认 `safe` 审计只保存白名单字段的脱敏摘要；用户显式开启 `diagnostic` 或 `full-local` 后，受预算和脱敏保护的 MCP/hook 输入输出会写入独立诊断目录。任何级别都不保存聊天全文、隐藏推理、transcript、二进制附件、未脱敏密钥或完整 traceback；写入失败必须 fail-open，历史不会自动清理。需要维护时由 `system/tools/clear-workspace.ps1` 明确预览并确认执行，绝不在 Agent 生命周期中自动触发。
+`workspace/audit/events/*.jsonl` 是本机操作审计事实源，Excel 日报是主可重建视图，Markdown 仅保留兼容入口。默认 `safe` 审计只保存白名单字段的脱敏摘要；用户显式开启 `diagnostic` 或 `full-local` 后，受预算和脱敏保护的 MCP/hook 输入输出会写入独立诊断目录。任何级别都不保存聊天全文、隐藏推理、transcript、二进制附件、未脱敏密钥或完整 traceback；MCP/hook 审计写入失败必须 fail-open，也不会在 Agent 生命周期中触发清理。过期数据只能由 `clear-workspace.ps1` 的显式预览/确认流程，或 WebUI 在启动恢复完成后的固定策略低频维护；两者都必须保护活动、不确定和恢复所需材料。
 
-### 2.6 根 README 不参与默认 Agent 上下文
+### 2.6 WebUI 是受控管理面，不是新的事实源
+
+WebUI 通过 `127.0.0.1` 上的 HTTP/SSE 调用后端，再复用 MCP 共享核心。浏览器不直接访问文件系统、SQLite、Git、PowerShell 或 `workspace/`，也不能提交任意路径、命令或配置正文。知识、Working State、审计和任务仍分别以 Markdown、JSONL 或既有本机事实源为准；WebUI 只提供安全投影及经过预览、确认、现场重检和恢复保护的少量白名单写操作。
+
+### 2.7 根 README 不参与默认 Agent 上下文
 
 本 README 可以随项目增长而保持详实，不承担低 token 接入职责。Agent 正常工作时采用以下最小路径：
 
@@ -100,6 +107,10 @@ Codex / Claude Code
   │                 └─ workspace/audit/events/*.jsonl -> 本机操作审计
   └─ hooks -> system/adapters/shared/aikb-hook.ps1
                   -> SessionStart 恢复提示 / Stop 检查点提醒
+
+浏览器 -> 127.0.0.1 HTTP/SSE -> aikb-web 后端
+                                  -> aikb-mcp/aikb 共享核心
+                                  -> Markdown / JSONL / SQLite 派生索引 / 受控本机事务
 ```
 
 ## 4. 根目录文件
@@ -255,7 +266,9 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 
 `clear-workspace.ps1` 用于按最后写入时间维护过期审计文件、运行检查点和 `runtime/` 临时子项。它默认仅返回 JSON 预览，默认保留审计 90 天、检查点 180 天、runtime 30 天；只有带 `-Apply` 且通过 PowerShell 确认后才删除。它不会删除任何活动任务的 `work.md` 或当前检查点，并始终保留 `runtime/audit.lock`，也不会猜测性处理没有时间戳的审计会话标签注册表。
 
-WebUI 的“数据维护”提供更窄的交互式入口，只处理审计数据、终态归档任务和终态 Web 任务。页面先显示候选与保护摘要，再签发五分钟预览并要求不可撤销确认；应用时会重新扫描并拒绝陈旧预览。浏览器不能提供路径，活动/不确定对象、恢复材料、锁及链接不会进入候选。该入口不直接包装 `clear-workspace.ps1`，也不清理活动任务检查点或任意 runtime 子项。
+WebUI 的“数据维护”提供更窄的交互式入口，只处理审计数据、终态归档任务、终态 Web 任务、终态规则事务摘要和终态安装修复事务摘要。页面先显示候选与保护摘要，再签发五分钟预览并要求不可撤销确认；应用时会重新扫描并拒绝陈旧预览。浏览器不能提供路径，活动/不确定对象、私有恢复材料、锁及链接不会进入候选。该入口不直接包装 `clear-workspace.ps1`，也不清理活动任务检查点或任意 runtime 子项；服务完成启动恢复后还会按固定默认保留期低频执行同一保护扫描，失败项留待后续重试。
+
+`aikb-web/` 是 AIKB 1.0 的本地管理终端。它集中呈现 verified 知识、项目与命令手册、活动/历史 Working State、脱敏审计、三项受控只读任务、四项规则阅读和 `USER_RULES.md` 受控应用、Windows 环境及 Codex/Claude Code 安装修复、系统状态和固定类别数据维护。Web 写入能力严格限定在已注册目标；正式知识、其他规则、Git、任意 Shell、卸载和 macOS 仍不开放。
 
 `aikb-mcp/` 是轻量 MCP 与索引核心。
 
@@ -263,7 +276,7 @@ WebUI 的“数据维护”提供更窄的交互式入口，只处理审计数�
 
 #### Python 模块职责
 
-- `aikb/__main__.py`：命令行入口，提供 `serve`、`validate`、`rebuild`、`search`、`read`、`work-get`、`hook` 和 `audit` 子命令。
+- `aikb/__main__.py`：命令行入口，提供 `serve`、`validate`、`validate-rules`、`review`、`rebuild`、`search`、`read`、`work-get`、`hook` 和 `audit` 子命令。
 - `aikb/audit.py`：实现按日 JSONL、跨进程追加、fallback、事件聚合、过滤和 Markdown 报告。
 - `aikb/config.py`：分别解析控制仓、知识仓和本机 `workspace/`，验证知识仓契约并创建运行目录。
 - `aikb/frontmatter.py`：读取和渲染受控 YAML 风格 Front Matter；不依赖 PyYAML。
@@ -299,6 +312,7 @@ WebUI 的“数据维护”提供更窄的交互式入口，只处理审计数�
 | 工具 | 类型 | 用途 |
 |---|---|---|
 | `search_knowledge` | 只读 | 按关键词、类型、状态和标签发现少量候选知识，返回受字符预算限制的片段。 |
+| `review_knowledge` | 只读 | 查看 candidate 数量、逾期、无 owner、疑似重复和已结案仍留 Inbox 的审查摘要。 |
 | `read_knowledge` | 只读 | 按稳定 ID 或准确路径读取当前 Markdown，可限定章节、字符数和是否返回关系。 |
 | `get_work_state` | 只读 | 按项目或 `work_id` 查找活动任务，返回最多 1500 字符的恢复胶囊。 |
 | `checkpoint_work_state` | 本机写入 | 在 `workspace/` 追加结构化检查点，不修改正式知识。 |
@@ -664,7 +678,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 audit diagnostic <�
 
 `audit report` 默认写入 `workspace/audit/reports/<YYYY-MM-DD>.xlsx`，并输出 JSON 格式的文件路径与记录数；工作簿包含“概览”“调用明细”“损坏记录”三个工作表，其中调用明细默认显示可读会话名称、中文动作说明和中文结果说明，原始会话 ID 与技术摘要置于靠后列。Markdown 方案暂时保留为 `audit report-md`，该命令会给出弃用提示。
 
-审计捕获级别由当前进程环境变量 `AIKB_AUDIT_CAPTURE_LEVEL` 控制：默认 `safe` 只写安全摘要；`diagnostic` 额外写入经脱敏、限长的 MCP/hook 输入输出；`full-local` 提高诊断记录预算，仍会脱敏常见密钥、忽略隐藏推理和二进制附件。诊断数据位于 `workspace/audit/diagnostic/`，通过调用 ID 与主审计记录关联，可用 `audit diagnostic <调用ID>` 查询。示例：`$env:AIKB_AUDIT_CAPTURE_LEVEL = 'diagnostic'`。所有审计数据均不进 Git，且没有自动保留期或清理行为。
+审计捕获级别由当前进程环境变量 `AIKB_AUDIT_CAPTURE_LEVEL` 控制：默认 `safe` 只写安全摘要；`diagnostic` 额外写入经脱敏、限长的 MCP/hook 输入输出；`full-local` 提高诊断记录预算，仍会脱敏常见密钥、忽略隐藏推理和二进制附件。诊断数据位于 `workspace/audit/diagnostic/`，通过调用 ID 与主审计记录关联，可用 `audit diagnostic <调用ID>` 查询。示例：`$env:AIKB_AUDIT_CAPTURE_LEVEL = 'diagnostic'`。所有审计数据均不进 Git；CLI 清理必须显式预览和确认，WebUI 只按固定默认保留期在恢复门禁后低频维护，并保护活动、不确定、链接和恢复所需对象。
 
 ### 预览或清理过期本机运行数据
 
@@ -744,7 +758,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 
 可以。两个数据库都是派生索引。删除后运行 `rebuild`，或者等待服务在首次调用时重建。删除 `workspace/active` 或 `archive` 则会删除真正的本机任务记录，应谨慎处理。
 
-## 12. 当前限制与后续扩展点
+## 12. AIKB 1.0 支持边界与后续扩展点
 
 - 当前只考虑 Windows。
 - 当前正式适配 Codex 和 Claude Code。

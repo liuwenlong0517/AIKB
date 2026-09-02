@@ -19,11 +19,11 @@
 
 ## 2. 候选与确认边界
 
-有潜在价值但证据、范围或归类不足的来源材料进入知识仓根 `inbox/`（逻辑路径 `content/inbox/`），使用控制仓 `system/templates/inbox-entry.md`，记录来源、当前假设、待验证项、预期范围和下一步动作。Inbox 是全局统一的未验证数据来源，不预先假定正式分类；其中的条目使用 `type: candidate` 和 `status: candidate`，不得伪造验证日期。经 LLM 整理并由人工完成查重、证据、适用范围和分类验证后分发到正式目录；确认重复、错误或无价值后删除。
+有潜在价值但证据、范围或归类不足的来源材料进入知识仓根 `inbox/`（逻辑路径 `content/inbox/`），使用控制仓 `system/templates/inbox-entry.md`，记录来源、当前假设、待验证项、预期范围和下一步动作。Inbox 是全局统一的未验证数据来源，不预先假定正式分类；其中的条目使用 `type: candidate` 和 `status: candidate`，不得伪造验证日期。经 LLM 整理并由人工完成查重、证据、适用范围和分类验证后，取得 candidate 晋升授权再分发到正式目录；确认重复、错误或无价值后，先记录审查结论，再按删除授权执行移除。
 
 已经明确目标分类、仅用于保留稳定入口和待完善内容的占位文档不是 Inbox 来源卡片，可以保留在目标目录，使用该目录对应的 `type` 与 `status: candidate`。这类占位仍属于审查队列，但不得伪装成已经验证的正式知识；补全并验证后再改为 `verified`。不得把“已归类占位”例外用于绕过 Inbox 的来源、查重和分类流程。
 
-低风险且证据完整的 `factual-update` 或 `operational-solution` 符合条件时无需逐次确认，可按项目授权自动处理；涉及敏感信息、decision、supersession、分类或迁移、或需要替用户作出新的长期决策时，先使用 Inbox 保存非敏感候选并请求用户决定。分类边界不能由 Agent 以“常规”或“无争议”自行放宽，具体枚举和审批状态见第 7 节。
+低风险且证据完整的 `factual-update` 或 `operational-solution`，在当前任务或项目约定已授权维护正式知识、且不涉及 candidate 晋升时，无需逐次确认；涉及敏感信息、candidate 晋升、decision、supersession、分类或迁移、或需要替用户作出新的长期决策时，先使用 Inbox 保存非敏感候选并请求用户决定。分类边界不能由 Agent 以“常规”或“无争议”自行放宽，具体枚举和审批状态见第 7 节。
 
 ## 3. 归档位置
 

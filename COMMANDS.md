@@ -588,7 +588,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 结果与 CLI `search` 类似，包含索引状态和候选摘要。空 query、知识验证或索引失败会以 MCP `isError=true` 文本错误返回；无匹配是正常空结果。
 
-### 6.2.1 `review_knowledge`
+### 6.2 `review_knowledge`
 
 场景：查看候选晋升队列和正式知识的人工复核条件；只读，不改变知识状态。
 
@@ -596,7 +596,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
     {"name":"review_knowledge","arguments":{}}
 
-### 6.2 `read_knowledge`
+### 6.3 `read_knowledge`
 
 场景：已有稳定 ID 或准确逻辑路径后读取当前 Markdown。
 
@@ -606,7 +606,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 结果包含正文、元数据、截断标记和可选关系。找不到条目、章节不存在或文档缺少 Front Matter 时返回 MCP 错误。
 
-### 6.3 `get_work_state`
+### 6.4 `get_work_state`
 
 场景：恢复本机未完成任务；只返回紧凑胶囊，不读取聊天记录。
 
@@ -616,7 +616,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 结果含 `count`、`unique` 和工作项；无匹配是正常空结果。索引缺失/过期会自动重建。
 
-### 6.4 `checkpoint_work_state`
+### 6.5 `checkpoint_work_state`
 
 场景：保存有实际进度、决定、验证、阻塞或交接价值的结构化检查点；只写 `workspace/`，不写正式知识。
 
@@ -637,7 +637,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 结果含 `work_id`、`project_id`、`checkpoint_id`、状态、work.md 路径和是否应用脱敏。异常包括缺少项目路径/新任务 goal、非法 status、仓库列表超过 8 项、单检查点超过 64 KiB、路径越过 workspace 边界或显式 `work_id` 已存在于归档。
 
-### 6.5 `close_work_state`
+### 6.6 `close_work_state`
 
 场景：结束活动任务并安全移动到本机归档。
 
@@ -647,7 +647,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
 结果含工作 ID、最终状态、最后检查点和归档路径。work ID 格式无效、匹配不到唯一活动任务、归档目标已存在或归档路径越界时返回错误；该操作不是幂等删除，重复关闭同一工作项不会当作成功。
 
-### 6.6 `claim_work_state`
+### 6.7 `claim_work_state`
 
 场景：旧格式活动任务缺少可靠 owner 时，当前会话显式认领后才允许恢复、检查点和 Stop 门禁。
 
@@ -659,7 +659,7 @@ stdin 必须是一个 JSON 对象；空 stdin 按 `{}` 处理。结果与 `aikb-
 
     {"name":"claim_work_state","arguments":{"work_id":"legacy-task-a1b2c3d4","agent":"codex","session_id":"<完整 Hook session_id>","upgrade_legacy_session":true}}
 
-### 6.7 `authorize_work_participant`
+### 6.8 `authorize_work_participant`
 
 场景：任务 owner 显式管理跨 Agent 续写。`mode=shared` 保留 owner 并增加 participant；`mode=handed-off` 将任务交接给 participant；`mode=revoke` 撤销精确 participant。owner、participant 的 Agent 和会话均必须显式填写。
 

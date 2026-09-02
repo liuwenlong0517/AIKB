@@ -11,6 +11,7 @@
 - [schemas/work-checkpoint.schema.json](schemas/work-checkpoint.schema.json)：本机任务检查点契约。
 - [schemas/adapter.schema.json](schemas/adapter.schema.json)：可插拔 Agent 适配器清单契约。
 - [tools/aikb-mcp/README.md](tools/aikb-mcp/README.md)：SQLite FTS、MCP 和工作状态服务。
+- [tools/aikb-web/README.md](tools/aikb-web/README.md)：Windows 本地 WebUI 管理终端、受控写入和数据维护边界。
 - [tools/set-aikb-home.ps1](tools/set-aikb-home.ps1)：将控制仓和可自选位置的知识仓幂等登记到 `AIKB_HOME`、`AIKB_KNOWLEDGE_HOME`。
 - [tools/setup-aikb.ps1](tools/setup-aikb.ps1)：一键编排环境设置、测试、根指令、适配器、索引和诊断；各独立脚本仍保留。
 - [adapters/README.md](adapters/README.md)：Codex、Claude Code 及未来 Agent 的 Windows 适配入口。
