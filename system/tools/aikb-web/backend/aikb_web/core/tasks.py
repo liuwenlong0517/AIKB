@@ -12,7 +12,10 @@ import os
 import re
 import tempfile
 import threading
+import time
 import uuid
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,6 +23,36 @@ from typing import Any, Mapping
 
 class TaskError(ValueError):
     """任务不存在、状态转换非法或持久化数据不符合安全边界。"""
+
+
+@dataclass
+class _TaskFacts:
+    """同进程任务事实缓存；仅缓存安全投影和最近事件，事实仍由 JSONL 保存。"""
+
+    snapshot: dict[str, Any]
+    events_tail: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=512))
+    last_event_id: int = 0
+    file_offset: int = 0
+    file_identity: tuple[int, int] = (0, 0)
+    modified_ns: int = 0
+
+
+@dataclass
+class _ConditionEntry:
+    """任务等待条件及活跃引用数；无 waiter 时可安全从注册表移除。"""
+
+    condition: threading.Condition
+    waiters: int = 0
+
+
+@dataclass(frozen=True)
+class TaskEventsResult:
+    """事件增量读取结果；replay_reset 时客户端必须以 snapshot 重新建立投影。"""
+
+    events: list[dict[str, Any]]
+    latest_event_id: int
+    snapshot: dict[str, Any]
+    replay_reset: bool = False
 
 
 TASK_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
@@ -35,6 +68,8 @@ MAX_OUTPUT_LINE_BYTES = 4 * 1024
 # 4 KiB，正文块留出固定头部预算。正文仍远低于 8 KiB 的事件块上限。
 MAX_OUTPUT_EVENT_TEXT_BYTES = MAX_OUTPUT_LINE_BYTES - 256
 MAX_OUTPUT_TOTAL_BYTES = 2 * 1024 * 1024
+# 单个输出最多 2 MiB；仅保留少量最近投影，避免历史任务全部常驻内存。
+MAX_TASK_FACTS = 64
 SECRET_PATTERN = re.compile(
     r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|passwd|secret|private[_-]?key)\s*[:=]\s*([^\s,;]+)"
 )
@@ -106,6 +141,9 @@ class TaskStore:
         self._task_dirs: dict[str, Path] = {}
         self._locks_guard = threading.Lock()
         self._locks: dict[str, threading.RLock] = {}
+        self._facts_guard = threading.RLock()
+        self._facts: OrderedDict[str, _TaskFacts] = OrderedDict()
+        self._conditions: dict[str, _ConditionEntry] = {}
         self._refresh_task_dirs()
         if recover:
             self.recover_interrupted()
@@ -137,33 +175,188 @@ class TaskStore:
         with self._locks_guard:
             return self._locks.setdefault(task_id, threading.RLock())
 
+    def _acquire_condition(self, task_id: str) -> _ConditionEntry:
+        """返回任务变更通知器；通知与任务锁绑定，避免错过追加事件。"""
+        with self._facts_guard:
+            entry = self._conditions.get(task_id)
+            if entry is None:
+                with self._locks_guard:
+                    task_lock = self._locks.setdefault(task_id, threading.RLock())
+                entry = _ConditionEntry(threading.Condition(task_lock))
+                self._conditions[task_id] = entry
+            entry.waiters += 1
+            return entry
+
+    def _cached_facts(self, task_id: str) -> _TaskFacts | None:
+        """在独立缓存锁下取得并提升 LRU 项；调用方仍须持有任务锁。"""
+        with self._facts_guard:
+            facts = self._facts.get(task_id)
+            if facts is not None:
+                self._facts.move_to_end(task_id)
+            return facts
+
+    def _remember_facts(self, task_id: str, facts: _TaskFacts) -> None:
+        """插入事实缓存并有界淘汰；字典操作不依赖其他任务锁。"""
+        with self._facts_guard:
+            self._facts[task_id] = facts
+            self._facts.move_to_end(task_id)
+            while len(self._facts) > MAX_TASK_FACTS:
+                self._facts.popitem(last=False)
+
     @staticmethod
     def _snapshot_fields(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         """复制可由事件重建的安全快照字段，排除仅用于内部校验的临时数据。"""
         return json.loads(_canonical(dict(snapshot)))
 
-    def _read_events(self, task_id: str) -> list[dict[str, Any]]:
-        """读取并校验 JSONL 严格递增事件；事实损坏不会静默伪造状态。"""
+    def _read_events_file(self, task_id: str) -> tuple[list[dict[str, Any]], int, os.stat_result]:
+        """首次读取并严格校验事实文件，同时返回可继续读取的字节游标。"""
         path = self._task_dir(task_id) / "events.jsonl"
         if not path.is_file():
             raise TaskError("任务事实源不可用")
         events: list[dict[str, Any]] = []
         previous_id = 0
         try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                value = json.loads(line)
-                event_id = value.get("event_id") if isinstance(value, dict) else None
-                if not isinstance(value, dict) or not isinstance(event_id, int) or event_id != previous_id + 1:
-                    raise TaskError("任务事实源不可用")
-                previous_id = event_id
-                events.append(value)
+            with path.open("rb") as handle:
+                opened_stat = os.fstat(handle.fileno())
+                while True:
+                    raw_line = handle.readline()
+                    if not raw_line:
+                        break
+                    if not raw_line.endswith(b"\n"):
+                        raise TaskError("任务事实源不可用")
+                    line = raw_line.decode("utf-8")
+                    if not line.strip():
+                        continue
+                    value = json.loads(line)
+                    event_id = value.get("event_id") if isinstance(value, dict) else None
+                    if not isinstance(value, dict) or not isinstance(event_id, int) or event_id != previous_id + 1:
+                        raise TaskError("任务事实源不可用")
+                    previous_id = event_id
+                    events.append(value)
+                offset = handle.tell()
+            stat = path.stat()
+            # 事实源在读取期间被替换或追加时，宁可下次重读，也不返回可能缺失的事件。
+            opened_identity = (getattr(opened_stat, "st_dev", 0), getattr(opened_stat, "st_ino", 0))
+            path_identity = (getattr(stat, "st_dev", 0), getattr(stat, "st_ino", 0))
+            if stat.st_size != offset or stat.st_size != opened_stat.st_size or path_identity != opened_identity:
+                raise TaskError("任务事实源发生并发变更")
+        except TaskError:
+            raise
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise TaskError("任务事实源不可用") from error
         if not events or events[0].get("type") != "snapshot" or not isinstance(events[0].get("snapshot"), dict):
             raise TaskError("任务事实源缺少 snapshot 基线")
+        return events, offset, stat
+
+    def _read_events(self, task_id: str) -> list[dict[str, Any]]:
+        """兼容内部恢复代码的完整读取入口；公开读取统一使用 events_after。"""
+        events, _, _ = self._read_events_file(task_id)
         return events
+
+    def read_all_events(self, task_id: str) -> list[dict[str, Any]]:
+        """显式读取完整事件历史；仅供低频兼容/验收调用，不得用于 SSE 热路径。"""
+        with self._lock_for(task_id):
+            return [dict(event) for event in self._read_events(task_id)]
+
+    def _apply_event(self, state: dict[str, Any], event: Mapping[str, Any]) -> None:
+        """把单个已校验事件折叠到安全投影，供全量和增量路径共享。"""
+        event_type = event.get("type")
+        if event_type == "status":
+            state["status"] = _safe_text(event.get("status"), 40)
+            if event.get("reason"):
+                state["last_reason"] = _safe_text(event.get("reason"), 300)
+        elif event_type == "output":
+            segment = _safe_text(event.get("text"), MAX_OUTPUT_CHUNK_BYTES)
+            state["output"] = self._bounded_output(str(state.get("output") or ""), segment)
+            state["output_bytes"] = min(MAX_OUTPUT_TOTAL_BYTES, int(state.get("output_bytes") or 0) + len(segment.encode("utf-8")))
+        elif event_type == "output_truncated":
+            state["output_truncated"] = True
+        elif event_type == "result":
+            state["result"] = _safe_json(event.get("result"))
+        else:
+            raise TaskError("任务事实源包含未知事件")
+        state["updated_at"] = event.get("timestamp")
+        state["last_event_id"] = event["event_id"]
+
+    def _new_facts(self, task_id: str) -> tuple[_TaskFacts, list[dict[str, Any]]]:
+        """从事实源建立一次严格缓存；完整事件只由当前调用栈直接消费。"""
+        events, offset, stat = self._read_events_file(task_id)
+        rebuilt = self._replay_events(task_id, events)
+        facts = _TaskFacts(
+            snapshot=rebuilt,
+            events_tail=deque(events[-512:], maxlen=512),
+            last_event_id=events[-1]["event_id"],
+            file_offset=offset,
+            file_identity=(getattr(stat, "st_dev", 0), getattr(stat, "st_ino", 0)),
+            modified_ns=getattr(stat, "st_mtime_ns", 0),
+        )
+        self._remember_facts(task_id, facts)
+        return facts, events
+
+    def _read_incremental(self, task_id: str, facts: _TaskFacts, stat: os.stat_result) -> list[dict[str, Any]]:
+        """从已校验字节游标读取追加事件；任何断裂都 fail-closed。"""
+        path = self._task_dir(task_id) / "events.jsonl"
+        pending: list[dict[str, Any]] = []
+        previous_id = facts.last_event_id
+        try:
+            with path.open("rb") as handle:
+                handle.seek(facts.file_offset)
+                while True:
+                    raw_line = handle.readline()
+                    if not raw_line:
+                        break
+                    if not raw_line.endswith(b"\n"):
+                        raise TaskError("任务事实源不可用")
+                    line = raw_line.decode("utf-8")
+                    if not line.strip():
+                        continue
+                    value = json.loads(line)
+                    event_id = value.get("event_id") if isinstance(value, dict) else None
+                    if not isinstance(value, dict) or not isinstance(event_id, int) or event_id != previous_id + 1:
+                        raise TaskError("任务事实源不可用")
+                    # 先校验整个追加批次，再改变缓存，避免半批次污染后续读取。
+                    pending.append(value)
+                    previous_id = event_id
+                offset = handle.tell()
+            current_stat = path.stat()
+            current_identity = (getattr(current_stat, "st_dev", 0), getattr(current_stat, "st_ino", 0))
+            if current_stat.st_size != offset or current_identity != facts.file_identity:
+                raise TaskError("任务事实源发生并发变更")
+        except TaskError:
+            raise
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise TaskError("任务事实源不可用") from error
+        probe = dict(facts.snapshot)
+        for event in pending:
+            self._apply_event(probe, event)
+        for event in pending:
+            facts.events_tail.append(event)
+        facts.snapshot = probe
+        facts.last_event_id = previous_id
+        facts.file_offset = offset
+        facts.modified_ns = getattr(current_stat, "st_mtime_ns", getattr(stat, "st_mtime_ns", 0))
+        return pending
+
+    def _ensure_facts(self, task_id: str) -> tuple[_TaskFacts, bool, list[dict[str, Any]] | None]:
+        """返回缓存并检测文件代际/截断；reset 标记要求 SSE 发送 replay_reset。"""
+        path = self._task_dir(task_id) / "events.jsonl"
+        try:
+            stat = path.stat()
+        except OSError as error:
+            raise TaskError("任务事实源不可用") from error
+        facts = self._cached_facts(task_id)
+        if facts is None:
+            facts, initial = self._new_facts(task_id)
+            return facts, False, initial
+        identity = (getattr(stat, "st_dev", 0), getattr(stat, "st_ino", 0))
+        generation_changed = identity != facts.file_identity or stat.st_size < facts.file_offset
+        same_size_rewritten = stat.st_size == facts.file_offset and getattr(stat, "st_mtime_ns", 0) != facts.modified_ns
+        if generation_changed or same_size_rewritten:
+            facts, initial = self._new_facts(task_id)
+            return facts, True, initial
+        if stat.st_size > facts.file_offset:
+            self._read_incremental(task_id, facts, stat)
+        return facts, False, None
 
     def _replay_events(self, task_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         """严格按事件顺序重建当前安全投影，不信任旧 snapshot 的状态字段。"""
@@ -172,25 +365,7 @@ class TaskStore:
             raise TaskError("任务事实源不可用")
         state["last_event_id"] = 1
         for event in events[1:]:
-            event_type = event.get("type")
-            if event_type == "status":
-                state["status"] = _safe_text(event.get("status"), 40)
-                if event.get("reason"):
-                    state["last_reason"] = _safe_text(event.get("reason"), 300)
-            elif event_type == "output":
-                # 事件正文的真实上限由 JSONL 物理行检查保证；回放不能使用更小的
-                # 固定字符上限，否则重启后会悄悄丢掉合法的 4 KiB 行尾内容。
-                segment = _safe_text(event.get("text"), MAX_OUTPUT_CHUNK_BYTES)
-                state["output"] = self._bounded_output(str(state.get("output") or ""), segment)
-                state["output_bytes"] = min(MAX_OUTPUT_TOTAL_BYTES, int(state.get("output_bytes") or 0) + len(segment.encode("utf-8")))
-            elif event_type == "output_truncated":
-                state["output_truncated"] = True
-            elif event_type == "result":
-                state["result"] = _safe_json(event.get("result"))
-            else:
-                raise TaskError("任务事实源包含未知事件")
-            state["updated_at"] = event.get("timestamp")
-            state["last_event_id"] = event["event_id"]
+            self._apply_event(state, event)
         return state
 
     @staticmethod
@@ -202,22 +377,76 @@ class TaskStore:
         return data[-MAX_OUTPUT_TOTAL_BYTES:].decode("utf-8", errors="ignore")
 
     def _read_snapshot(self, task_id: str) -> dict[str, Any]:
-        """以 events 回放为权威读取安全 snapshot，并修复缺失、损坏或落后的投影。"""
-        # 读也与写共用 RLock，避免观察到“事件已追加、snapshot 尚未替换”的中间态。
+        """返回同进程缓存投影；首次或事实游标异常时才严格回放 JSONL。"""
         with self._lock_for(task_id):
-            events = self._read_events(task_id)
-            rebuilt = self._replay_events(task_id, events)
-            path = self._task_dir(task_id) / "snapshot.json"
-            existing: dict[str, Any] | None = None
+            facts, _, _ = self._ensure_facts(task_id)
+            # snapshot 是派生物；仅校验/修复它，不以它替代事实源，也不触发 JSONL 重放。
+            snapshot_path = self._task_dir(task_id) / "snapshot.json"
             try:
-                value = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(value, dict) and value.get("task_id") == task_id:
-                    existing = value
+                persisted = json.loads(snapshot_path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError):
-                existing = None
-            if existing != rebuilt:
-                self._write_snapshot(rebuilt)
-            return rebuilt
+                persisted = None
+            if persisted != facts.snapshot:
+                self._write_snapshot(facts.snapshot)
+            return self._snapshot_fields(facts.snapshot)
+
+    def events_after(self, task_id: str, last_event_id: int = 0) -> TaskEventsResult:
+        """读取游标后的事件；仅首次/游标落出缓存窗口时读取历史 JSONL。"""
+        if not isinstance(last_event_id, int) or last_event_id < 0:
+            raise TaskError("Last-Event-ID 无效")
+        with self._lock_for(task_id):
+            facts, reset, initial = self._ensure_facts(task_id)
+            if reset:
+                # 代际变化后旧游标不可解释，调用方必须以当前完整投影重置。
+                return TaskEventsResult([], facts.last_event_id, self._snapshot_fields(facts.snapshot), True)
+            if last_event_id > facts.last_event_id:
+                return TaskEventsResult([], facts.last_event_id, self._snapshot_fields(facts.snapshot), True)
+            if initial is not None:
+                # 新建缓存也只保留 512 条尾部；大历史的旧游标必须以完整快照重置。
+                earliest = initial[-512]["event_id"] if len(initial) > 512 else initial[0]["event_id"]
+                if last_event_id < earliest - 1:
+                    return TaskEventsResult(
+                        [], facts.last_event_id, self._snapshot_fields(facts.snapshot), True,
+                    )
+                return TaskEventsResult(
+                    [dict(event) for event in initial if event["event_id"] > last_event_id],
+                    facts.last_event_id,
+                    self._snapshot_fields(facts.snapshot),
+                )
+            earliest = facts.events_tail[0]["event_id"] if facts.events_tail else facts.last_event_id + 1
+            if last_event_id < earliest - 1:
+                # 已有缓存时不再次扫描历史；快照已经包含完整安全投影。
+                return TaskEventsResult(
+                    [],
+                    facts.last_event_id,
+                    self._snapshot_fields(facts.snapshot),
+                    True,
+                )
+            return TaskEventsResult(
+                [dict(event) for event in facts.events_tail if event["event_id"] > last_event_id],
+                facts.last_event_id,
+                self._snapshot_fields(facts.snapshot),
+            )
+
+    def wait_for_events(self, task_id: str, last_event_id: int, timeout: float = 15.0) -> bool:
+        """等待事实追加或超时；通知由写入路径发出，不进行固定间隔忙轮询。"""
+        entry = self._acquire_condition(task_id)
+        deadline = time.monotonic() + max(0.0, timeout)
+        try:
+            with entry.condition:
+                while True:
+                    facts, _, _ = self._ensure_facts(task_id)
+                    if facts.last_event_id > last_event_id:
+                        return True
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    entry.condition.wait(remaining)
+        finally:
+            with self._facts_guard:
+                entry.waiters -= 1
+                if entry.waiters <= 0 and self._conditions.get(task_id) is entry:
+                    self._conditions.pop(task_id, None)
 
     def _append_event(self, task_id: str, state: dict[str, Any], event_type: str, **fields: Any) -> dict[str, Any]:
         """在调用方持有任务锁时追加严格递增事实事件。"""
@@ -239,9 +468,16 @@ class TaskStore:
             raise TaskError("任务事件写入失败") from error
         state["last_event_id"] = seq
         state["updated_at"] = event["timestamp"]
+        facts = self._cached_facts(task_id)
+        if facts is not None:
+            # 写入已 fsync；先在内存中折叠，随后 _write_snapshot 会更新文件游标并广播。
+            self._apply_event(facts.snapshot, event)
+            facts.events_tail.append(event)
+            facts.last_event_id = seq
+            facts.file_offset = (task_dir / "events.jsonl").stat().st_size
         return event
 
-    def _write_snapshot(self, snapshot: Mapping[str, Any]) -> None:
+    def _write_snapshot(self, snapshot: Mapping[str, Any], *, notify: bool = True) -> None:
         """原子替换当前投影，避免浏览器读取半写 JSON。"""
         task_dir = self._task_dir(str(snapshot["task_id"]))
         content = _canonical(dict(snapshot)) + "\n"
@@ -254,6 +490,21 @@ class TaskStore:
                 os.fsync(output.fileno())
             os.replace(temp_name, task_dir / "snapshot.json")
             temp_name = None
+            facts = self._cached_facts(str(snapshot["task_id"]))
+            if facts is not None:
+                facts.snapshot = self._snapshot_fields(snapshot)
+                events_path = task_dir / "events.jsonl"
+                stat = events_path.stat()
+                facts.file_offset = stat.st_size
+                facts.file_identity = (getattr(stat, "st_dev", 0), getattr(stat, "st_ino", 0))
+                facts.modified_ns = getattr(stat, "st_mtime_ns", 0)
+            # 条件等待者只在完整快照落盘后唤醒，避免观察到事件和投影的中间态。
+            with self._facts_guard:
+                entry = self._conditions.get(str(snapshot["task_id"]))
+                if notify and entry is not None:
+                    entry.condition.notify_all()
+                if notify and str(snapshot.get("status")) in TERMINAL_STATES and entry is not None and entry.waiters == 0:
+                    self._conditions.pop(str(snapshot["task_id"]), None)
         except (OSError, UnicodeError) as error:
             raise TaskError("任务快照写入失败") from error
         finally:
@@ -311,7 +562,7 @@ class TaskStore:
                 continue
         return sorted(values, key=lambda item: (str(item.get("updated_at") or ""), str(item.get("task_id") or "")), reverse=True)
 
-    def transition(self, task_id: str, status: str, *, reason: str | None = None) -> dict[str, Any]:
+    def transition(self, task_id: str, status: str, *, reason: str | None = None, _notify: bool = True) -> dict[str, Any]:
         """执行严格状态转换；终态不可逆，非法边界不会写入事实源。"""
         with self._lock_for(task_id):
             snapshot = self._read_snapshot(task_id)
@@ -324,7 +575,7 @@ class TaskStore:
                 raise TaskError("任务状态转换无效")
             self._append_event(task_id, snapshot, "status", status=status, reason=_safe_text(reason, 300) if reason else None)
             snapshot["status"] = status
-            self._write_snapshot(snapshot)
+            self._write_snapshot(snapshot, notify=_notify)
             return snapshot
 
     def cancel(self, task_id: str) -> dict[str, Any]:
@@ -434,7 +685,8 @@ class TaskStore:
                 raise TaskError("取消中的任务只能进入 cancelled")
             if current == "running" and status == "cancelled":
                 raise TaskError("运行中任务必须先进入 cancelling")
-            snapshot = self.transition(task_id, status)
+            # 成功/失败终态还要追加 result；两者一起通知 SSE，避免客户端收到终态后提前关闭而漏结果。
+            snapshot = self.transition(task_id, status, _notify=False)
             safe_result = _safe_json(result)
             self._append_event(task_id, snapshot, "result", result=safe_result)
             snapshot["result"] = safe_result

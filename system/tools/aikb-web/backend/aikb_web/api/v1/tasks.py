@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from aikb_web.core.gateway import GatewayError
 from aikb_web.core.orchestrator import TaskOrchestrator
-from aikb_web.core.tasks import TERMINAL_STATES, TaskError
+from aikb_web.core.tasks import TERMINAL_STATES, TaskError, TaskEventsResult
 
 from .common import _sanitize_public, require_mutation_request, success, validate_task_identifier
 
@@ -93,36 +93,36 @@ def _public_sse_event(event: Mapping[str, Any]) -> dict[str, Any] | None:
     return dict(event)
 
 
-async def _event_stream(service: TaskOrchestrator, task_id: str, cursor: int, initial: list[dict[str, Any]]) -> AsyncIterator[str]:
-    """增量推送事件；游标失效时发送带 replay_reset 的安全 snapshot。"""
+async def _event_stream(service: TaskOrchestrator, task_id: str, cursor: int, initial: TaskEventsResult) -> AsyncIterator[str]:
+    """按事实追加唤醒推送事件；游标失效时发送带 replay_reset 的安全 snapshot。"""
     last_heartbeat = time.monotonic()
-    events = initial
+    batch = initial
     while True:
-        public_events = [item for item in (_public_sse_event(raw) for raw in events) if item is not None and isinstance(item.get("event_id"), int)]
-        events = public_events
-        latest = events[-1]["event_id"] if events else 0
-        if cursor > latest:
-            snapshot = service.get_task(task_id)
+        if batch.replay_reset:
+            snapshot = batch.snapshot
             # replay_reset 使用当前事实游标，不伪造 cursor+1，客户端据此重置后续游标。
-            reset = {"event_id": latest, "type": "snapshot", "replay_reset": True, "snapshot": snapshot}
+            reset = {"event_id": batch.latest_event_id, "type": "snapshot", "replay_reset": True, "snapshot": snapshot}
             yield _sse_line(reset)
-            cursor = latest
+            cursor = batch.latest_event_id
             if snapshot.get("status") in TERMINAL_STATES:
                 return
-        for event in events:
+        for raw_event in batch.events:
+            event = _public_sse_event(raw_event)
+            if event is None or not isinstance(event.get("event_id"), int):
+                continue
             event_id = event["event_id"]
             if event_id <= cursor:
                 continue
             yield _sse_line(event)
             cursor = event_id
-        current = service.get_task(task_id)
-        if current.get("status") in TERMINAL_STATES:
+        if batch.snapshot.get("status") in TERMINAL_STATES:
             return
-        await asyncio.sleep(0.25)
-        if time.monotonic() - last_heartbeat >= 15:
+        timeout = max(0.0, 15.0 - (time.monotonic() - last_heartbeat))
+        changed = await asyncio.to_thread(service.wait_for_events, task_id, cursor, timeout)
+        if not changed:
             yield _sse_line({"type": "heartbeat", "heartbeat": True})
             last_heartbeat = time.monotonic()
-        events = service.events(task_id)
+        batch = service.events_after(task_id, cursor)
 
 
 @router.get("/{task_id}/events")
@@ -139,7 +139,7 @@ async def task_events(request: Request, task_id: str, last_event_id: str | None 
     if cursor < 0:
         raise ValueError("Last-Event-ID 无效")
     try:
-        initial = service.events(identifier)
+        initial = service.events_after(identifier, cursor)
     except (TaskError, KeyError) as error:
         raise KeyError("任务不存在") from error
     return StreamingResponse(

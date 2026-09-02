@@ -39,11 +39,11 @@ export class TaskEventStream {
     const controller = new AbortController();
     let closed = false;
     let lastEventId: number | undefined;
-    const seen = new Set<number>();
 
     const run = async () => {
       while (!closed) {
         try {
+          let terminalStatusSeen = false;
           const headers: Record<string, string> = {
             Accept: 'text/event-stream',
             'X-AIKB-Request': '1',
@@ -57,21 +57,25 @@ export class TaskEventStream {
           await this.read(response.body, (event) => {
             // replay_reset 代表服务端给出新的事实游标；旧流的去重历史和过大的游标都必须丢弃。
             if (event.replay_reset) {
-              seen.clear();
               lastEventId = event.event_id;
-            } else if (seen.has(event.event_id)) return;
-            seen.add(event.event_id);
+            } else if (lastEventId !== undefined && event.event_id <= lastEventId) return;
             // reset 后允许小于旧游标的新事实事件，因此不能使用 Math.max。
             lastEventId = event.event_id;
             handlers.onEvent(event);
-            if (event.type === 'result' || ['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(String(event.status))) {
+            if (event.type === 'result') {
               closed = true;
               handlers.onTerminal?.();
               // 终态已经收到后主动中止 reader，避免服务器继续保持一个无意义的长连接。
               controller.abort();
+            } else if (['succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'].includes(String(event.status))) {
+              // 状态帧可能先于 result 到达；等当前响应 EOF，避免分块响应漏掉后续结果。
+              terminalStatusSeen = true;
             }
           });
-          if (!closed) await this.sleep(this.retryDelayMs);
+          if (!closed && terminalStatusSeen) {
+            closed = true;
+            handlers.onTerminal?.();
+          } else if (!closed) await this.sleep(this.retryDelayMs);
         } catch (error) {
           if (closed || (error instanceof Error && error.name === 'AbortError')) break;
           handlers.onError?.(error instanceof Error ? error : new Error('任务事件连接中断'));

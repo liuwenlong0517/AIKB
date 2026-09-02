@@ -290,8 +290,16 @@ class TaskOrchestrator:
         return self.store.list_tasks()
 
     def events(self, task_id: str) -> list[dict[str, Any]]:
-        """读取 TaskStore 校验过的事件，不在 API 层扫描事实源。"""
-        return self.store._read_events(task_id)
+        """兼容旧调用方读取全部事件；事实校验由 TaskStore 公开接口完成。"""
+        return self.store.read_all_events(task_id)
+
+    def events_after(self, task_id: str, last_event_id: int = 0):
+        """读取任务游标后的增量事件，并保留 replay_reset 元数据。"""
+        return self.store.events_after(task_id, last_event_id)
+
+    def wait_for_events(self, task_id: str, last_event_id: int, timeout: float = 15.0) -> bool:
+        """等待任务事实追加；供 SSE 在无事件期间阻塞而非忙轮询。"""
+        return self.store.wait_for_events(task_id, last_event_id, timeout)
 
     def shutdown(self) -> None:
         """广播取消、关闭注入式执行器并等待调度线程，避免服务退出遗留任务。"""

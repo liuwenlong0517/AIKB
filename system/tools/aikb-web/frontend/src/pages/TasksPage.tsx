@@ -184,9 +184,9 @@ function TaskDetail({ taskId }: { taskId: string }) {
   // 查询切换期间可能短暂保留旧缓存；不让旧任务快照驱动新任务的 SSE。
   const baseTask = queriedTask?.task_id === taskId ? queriedTask : undefined;
   const [liveTask, setLiveTask] = useState<TaskSnapshot>();
-  const appliedEventCount = useRef(0);
+  const appliedEvents = useRef(new WeakSet<TaskEvent>());
   useEffect(() => {
-    appliedEventCount.current = 0;
+    appliedEvents.current = new WeakSet<TaskEvent>();
     setLiveTask(undefined);
   }, [taskId]);
   useEffect(() => { if (baseTask) setLiveTask(baseTask); }, [baseTask]);
@@ -194,9 +194,10 @@ function TaskDetail({ taskId }: { taskId: string }) {
   const events = useTaskEvents(taskId, Boolean(activeTask && !isTerminal(activeTask.status)));
   const cancelMutation = useCancelTask(taskId);
   useEffect(() => {
-    const pending = events.events.slice(appliedEventCount.current);
+    // Hook 在溢出时会用新的 replay_reset 检查点替换队列，按对象去重可兼容该有界压缩。
+    const pending = events.events.filter((event) => !appliedEvents.current.has(event));
     if (!pending.length) return;
-    appliedEventCount.current = events.events.length;
+    pending.forEach((event) => appliedEvents.current.add(event));
     // 一个响应块可能包含 snapshot、多个 output 和 result，必须按服务器顺序一次性折叠全部事件。
     setLiveTask((current) => current ? pending.reduce(applyTaskEvent, current) : current);
   }, [events.events, taskId]);

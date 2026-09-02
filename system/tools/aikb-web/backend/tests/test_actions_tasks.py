@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
 from aikb_web.core.actions import ActionError, ActionRegistry, ConfirmationTokenService
-from aikb_web.core.tasks import MAX_OUTPUT_LINE_BYTES, MAX_OUTPUT_TOTAL_BYTES, TaskError, TaskStore
+from aikb_web.core.tasks import MAX_OUTPUT_LINE_BYTES, MAX_OUTPUT_TOTAL_BYTES, MAX_TASK_FACTS, TaskError, TaskStore
 
 
 class ActionCoreTests(unittest.TestCase):
@@ -209,6 +211,116 @@ class TaskCoreTests(unittest.TestCase):
         ids = [event["event_id"] for event in events]
         self.assertEqual(ids, list(range(1, len(ids) + 1)))
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_incremental_events_cache_and_cursor_reset(self) -> None:
+        """重复快照读取不重放 JSONL，新增事件按游标读取且越界返回 reset。"""
+        task_id = self.task["task_id"]
+        with patch.object(self.store, "_read_events_file", wraps=self.store._read_events_file) as read_file:
+            self.assertEqual(self.store.get_task(task_id)["last_event_id"], 1)
+            self.assertEqual(self.store.get_task(task_id)["last_event_id"], 1)
+            self.store.transition(task_id, "running")
+            batch = self.store.events_after(task_id, 1)
+            self.assertEqual([event["event_id"] for event in batch.events], [2])
+            self.assertEqual(read_file.call_count, 1)
+            self.assertTrue(self.store.events_after(task_id, 2).events == [])
+            reset = self.store.events_after(task_id, 99)
+            self.assertTrue(reset.replay_reset)
+            self.assertEqual(reset.latest_event_id, 2)
+
+    def test_event_wait_is_notified_by_append_and_shared_by_subscribers(self) -> None:
+        """等待者由写入通知唤醒，两个订阅者共享同一事实缓存。"""
+        task_id = self.task["task_id"]
+        self.store.get_task(task_id)
+        result: list[bool] = []
+        waiter = threading.Thread(target=lambda: result.append(self.store.wait_for_events(task_id, 1, 2.0)))
+        waiter.start()
+        time.sleep(0.03)
+        self.store.transition(task_id, "running")
+        waiter.join(1.0)
+        self.assertEqual(result, [True])
+        with patch.object(self.store, "_read_events_file", wraps=self.store._read_events_file) as read_file:
+            self.assertEqual(self.store.events_after(task_id, 0).latest_event_id, 2)
+            self.assertEqual(self.store.events_after(task_id, 2).events, [])
+            self.assertEqual(read_file.call_count, 0)
+
+    def test_multiple_waiters_share_condition_without_eviction(self) -> None:
+        """多个并发订阅者共享条件且都能被一次追加唤醒，等待后注册表回收。"""
+        task_id = self.task["task_id"]
+        self.store.get_task(task_id)
+        results: list[bool] = []
+        ready = threading.Barrier(3)
+
+        def wait_once() -> None:
+            ready.wait()
+            results.append(self.store.wait_for_events(task_id, 1, 2.0))
+
+        threads = [threading.Thread(target=wait_once) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        ready.wait()
+        time.sleep(0.03)
+        self.store.transition(task_id, "running")
+        for thread in threads:
+            thread.join(1.0)
+        self.assertEqual(sorted(results), [True, True])
+        self.assertNotIn(task_id, self.store._conditions)
+
+    def test_restart_with_damaged_fact_source_fails_closed(self) -> None:
+        """新进程不能信任损坏的事实文件或旧 snapshot。"""
+        task_id = self.task["task_id"]
+        task_dir = next((self.root / "runtime" / "web" / "tasks").rglob("events.jsonl")).parent
+        with (task_dir / "events.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write('{"event_id":99,"type":"status"}\n')
+        with self.assertRaises(TaskError):
+            TaskStore(self.root, recover=False).get_task(task_id)
+
+    def test_cached_long_history_resets_without_rescanning_and_keeps_projection(self) -> None:
+        """get_task 先建立缓存后，落出尾窗的两个订阅者都只收 reset 快照。"""
+        task_id = self.task["task_id"]
+        self.store.transition(task_id, "running")
+        self.store.append_output(task_id, "x\n" * 600)
+        self.store.finish(task_id, status="succeeded", result={"summary": "final"})
+        self.store.get_task(task_id)
+        with patch.object(self.store, "_read_events_file", wraps=self.store._read_events_file) as read_file:
+            first = self.store.events_after(task_id, 0)
+            second = self.store.events_after(task_id, 0)
+        self.assertTrue(first.replay_reset)
+        self.assertTrue(second.replay_reset)
+        self.assertEqual(read_file.call_count, 0)
+        self.assertEqual(first.snapshot["status"], "succeeded")
+        self.assertEqual(first.snapshot["result"]["summary"], "final")
+        self.assertTrue(first.snapshot["output"])
+
+    def test_new_store_large_history_cursor_zero_resets_with_complete_snapshot(self) -> None:
+        """新进程首次遇到大历史时也不把完整事件列表交给 SSE，直接 reset 快照。"""
+        task_id = self.task["task_id"]
+        self.store.transition(task_id, "running")
+        self.store.append_output(task_id, "y\n" * 600)
+        self.store.finish(task_id, status="succeeded", result={"summary": "new-store"})
+        restarted = TaskStore(self.root, recover=False)
+        result = restarted.events_after(task_id, 0)
+        self.assertTrue(result.replay_reset)
+        self.assertEqual(result.snapshot["status"], "succeeded")
+        self.assertEqual(result.snapshot["result"]["summary"], "new-store")
+        self.assertTrue(result.snapshot["output"])
+        # 低频兼容入口仍保留完整历史，不受 SSE 的 512 条尾部窗口影响。
+        complete = restarted.read_all_events(task_id)
+        self.assertGreater(len(complete), 512)
+        self.assertEqual([event["event_id"] for event in complete], list(range(1, len(complete) + 1)))
+
+    def test_fact_cache_is_bounded_and_evicted_tasks_rebuild_correctly(self) -> None:
+        """历史任务投影采用有界 LRU，淘汰后仍从事实源严格重建。"""
+        tasks = [self.task]
+        for index in range(MAX_TASK_FACTS + 8):
+            tasks.append(self.store.create_task(
+                action_id="validate.structure", parameters={}, risk_level="read_only", effects=[], timeout_seconds=120,
+                concurrency_group="structure_validation", preview_digest=f"{index:064x}",
+            ))
+        for task in tasks:
+            self.store.get_task(task["task_id"])
+        self.assertLessEqual(len(self.store._facts), MAX_TASK_FACTS)
+        self.assertEqual(self.store.get_task(self.task["task_id"])["task_id"], self.task["task_id"])
+        self.assertLessEqual(len(self.store._facts), MAX_TASK_FACTS)
 
 
 if __name__ == "__main__":

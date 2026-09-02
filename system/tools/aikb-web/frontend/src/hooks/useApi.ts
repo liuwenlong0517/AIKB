@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { SearchFilters } from '../types/api';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData, MaintenanceApplyData, MaintenanceChangeEnvelope, ManualData } from '../types/api';
+import type { ApiResponse, AuditEvent, AuditListData, AuditSummaryData, CheckpointDetail, CheckpointListData, RuntimeListData, WorkingStateDetail, ActionsData, TaskData, TaskEvent, TaskSnapshot, TasksData, RuleDetail, RulePreviewData, RulesData, RuleApplyData, RuleChangeEnvelope, MaintenanceTargetsData, MaintenanceTargetDetail, MaintenancePreviewData, MaintenanceApplyData, MaintenanceChangeEnvelope, ManualData } from '../types/api';
 import { TaskEventStream } from '../api/taskEvents';
 import { useEffect, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
@@ -216,6 +216,27 @@ export const useCancelTask = (taskId: string | undefined) => {
   });
 };
 
+const MAX_PENDING_TASK_EVENTS = 256;
+const MAX_TASK_OUTPUT_CHARS = 2 * 1024 * 1024;
+
+/** 在前端维护有界任务投影；事件队列溢出时以本地 replay_reset 检查点替代历史。 */
+function foldTaskEvent(current: TaskSnapshot | undefined, event: TaskEvent): TaskSnapshot | undefined {
+  const incoming = event.task ?? event.snapshot;
+  if (!current && !incoming) return undefined;
+  const next: TaskSnapshot = incoming
+    ? event.replay_reset ? { ...incoming } : { ...(current ?? incoming), ...incoming }
+    : { ...(current as TaskSnapshot) };
+  if (event.status) next.status = event.status;
+  if (event.progress !== undefined) next.progress = event.progress;
+  if (event.type === 'output') {
+    if (event.truncated === true) next.output_truncated = true;
+    else next.output = `${next.output ?? ''}${String(event.text ?? event.output ?? '')}`.slice(-MAX_TASK_OUTPUT_CHARS);
+  }
+  if (event.type === 'result' && event.result !== undefined) next.result = event.result;
+  next.last_event_id = event.event_id;
+  return next;
+}
+
 /**
  * 订阅任务 SSE 并自动恢复；事件只上送给页面，具体状态合并由页面控制，便于审查安全字段。
  * enabled 为 false（例如终态任务）时不会创建连接。
@@ -225,18 +246,28 @@ export const useTaskEvents = (taskId: string | undefined, enabled: boolean) => {
   const [error, setError] = useState<Error | null>(null);
   const [connected, setConnected] = useState(false);
   const streamGeneration = useRef(0);
+  const projection = useRef<TaskSnapshot>();
   useEffect(() => {
     const currentGeneration = ++streamGeneration.current;
     // 路由复用时清掉上一任务的事件和错误，避免新任务继承旧任务的实时状态。
     setEventQueue([]);
+    projection.current = undefined;
     setError(null);
     setConnected(false);
     if (!taskId || !enabled) return undefined;
     const stream = new TaskEventStream();
     const subscription = stream.subscribe(taskId, {
       onOpen: () => { if (currentGeneration === streamGeneration.current) { setConnected(true); setError(null); } },
-      // 使用函数式更新，React 在同一批次收到多个 SSE 帧时仍会逐个追加，不丢 output/status。
-      onEvent: (nextEvent) => { if (currentGeneration === streamGeneration.current) setEventQueue((current) => [...current, nextEvent]); },
+      // 同一批次的 output/status/result 仍按顺序入队；队列超限时保留完整投影检查点，避免无界增长。
+      onEvent: (nextEvent) => {
+        if (currentGeneration !== streamGeneration.current) return;
+        projection.current = foldTaskEvent(projection.current, nextEvent);
+        setEventQueue((current) => {
+          const next = [...current, nextEvent];
+          if (next.length <= MAX_PENDING_TASK_EVENTS || !projection.current) return next;
+          return [{ event_id: nextEvent.event_id, type: 'snapshot', replay_reset: true, snapshot: projection.current }];
+        });
+      },
       onError: (nextError) => { if (currentGeneration === streamGeneration.current) { setConnected(false); setError(nextError); } },
       onTerminal: () => { if (currentGeneration === streamGeneration.current) setConnected(false); },
     });

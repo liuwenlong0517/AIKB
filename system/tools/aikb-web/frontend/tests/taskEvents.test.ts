@@ -8,6 +8,17 @@ function responseFor(payload: string): Response {
   return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
+function responseForChunks(chunks: string[]): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
 describe('TaskEventStream', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -67,5 +78,26 @@ describe('TaskEventStream', () => {
     const stream = new TaskEventStream({ fetchImpl: fetchMock, retryDelayMs: 0, sleep: () => Promise.resolve() });
     stream.subscribe('task-1', { onEvent: (event) => events.push(event.event_id) });
     await vi.waitFor(() => expect(events).toEqual([1, 2]));
+  });
+
+  it('terminal status 与 result 分属不同流 chunk 时仍按顺序交付 result', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(responseForChunks([
+      'id: 2\nevent: status\ndata: {"event_id":2,"status":"succeeded"}\n\n',
+      'id: 3\nevent: result\ndata: {"event_id":3,"status":"succeeded","result":{"ok":true}}\n\n',
+    ]));
+    const events: string[] = [];
+    const stream = new TaskEventStream({ fetchImpl: fetchMock, retryDelayMs: 0, sleep: () => Promise.resolve() });
+    stream.subscribe('task-1', { onEvent: (event) => events.push(event.type), onTerminal: () => events.push('terminal') });
+    await vi.waitFor(() => expect(events).toEqual(['status', 'result', 'terminal']));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('只有 terminal status 且响应 EOF 时也能结束订阅', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(responseFor('id: 2\nevent: status\ndata: {"event_id":2,"status":"cancelled"}\n\n'));
+    const events: string[] = [];
+    const stream = new TaskEventStream({ fetchImpl: fetchMock, retryDelayMs: 0, sleep: () => Promise.resolve() });
+    stream.subscribe('task-1', { onEvent: (event) => events.push(event.type), onTerminal: () => events.push('terminal') });
+    await vi.waitFor(() => expect(events).toEqual(['status', 'terminal']));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
