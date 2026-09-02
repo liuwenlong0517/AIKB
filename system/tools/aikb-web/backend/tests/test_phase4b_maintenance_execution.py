@@ -82,9 +82,11 @@ class _Adapter:
 class _Materials:
     """只返回与事务摘要绑定的安全 manifest，不保存任何真实正文。"""
 
-    def __init__(self, transaction: MaintenanceChange, fail: bool = False) -> None:
+    def __init__(self, transaction: MaintenanceChange, fail: bool = False, cleanup_fail: bool = False) -> None:
         self.transaction = transaction
         self.fail = fail
+        self.cleanup_fail = cleanup_fail
+        self.cleanup_calls: list[str] = []
 
     def load(self, change_id: str) -> MaintenanceMaterialManifest:
         if self.fail:
@@ -97,6 +99,13 @@ class _Materials:
         if self.transaction.target_id == "environment":
             environments = tuple(type("Environment", (), {"state": "value"})() for _ in self.transaction.leaf_states)
         return MaintenanceMaterialManifest(change_id, self.transaction.target_id, leaves, environments, "f" * 64)  # type: ignore[arg-type]
+
+    def cleanup(self, change_id: str) -> None:
+        """记录终态材料清理；可注入失败验证事务结果不被反转。"""
+
+        self.cleanup_calls.append(change_id)
+        if self.cleanup_fail:
+            raise OSError("injected cleanup failure")
 
 
 class _Audit:
@@ -152,9 +161,15 @@ class MaintenanceExecutionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def _executor(self, store: _Store, adapter: _Adapter, audit: _Audit | None = None) -> MaintenanceExecutor:
+    def _executor(
+        self,
+        store: _Store,
+        adapter: _Adapter,
+        audit: _Audit | None = None,
+        materials: _Materials | None = None,
+    ) -> MaintenanceExecutor:
         gate = MaintenanceRecoveryGate(); gate.complete_scan((), ())
-        return MaintenanceExecutor(store, adapter, str(self.workspace), _Materials(store.current), audit or _Audit(), gate)
+        return MaintenanceExecutor(store, adapter, str(self.workspace), materials or _Materials(store.current), audit or _Audit(), gate)
 
     def test_all_targets_follow_declared_order_and_succeed(self) -> None:
         """环境、Codex、Claude Code 均按静态步骤执行并最终 succeeded。"""
@@ -165,6 +180,25 @@ class MaintenanceExecutionTests(unittest.TestCase):
             self.assertEqual(result.status, "succeeded")
             self.assertEqual([name for kind, name in adapter.calls if kind == "apply"], list(store.current.step_summary[:-1]))
             self.assertEqual([kind for kind, _ in adapter.calls], ["apply"] * (len(store.current.step_summary) - 1) + ["verify"])
+
+    def test_terminal_transactions_cleanup_private_materials_without_reversing_outcome(self) -> None:
+        """成功和已补偿回滚均清材料；清理失败仍保留已确认事务终态。"""
+
+        succeeded_store = _Store(_change("environment"))
+        succeeded_materials = _Materials(succeeded_store.current)
+        succeeded = self._executor(
+            succeeded_store, _Adapter(), materials=succeeded_materials,
+        ).execute(succeeded_store.current.change_id, "task-exec")
+        self.assertEqual(succeeded.status, "succeeded")
+        self.assertEqual(succeeded_materials.cleanup_calls, [succeeded.change_id])
+
+        rolled_store = _Store(_change("agent.codex"))
+        rolled_materials = _Materials(rolled_store.current, cleanup_fail=True)
+        rolled = self._executor(
+            rolled_store, _Adapter(fail_step="write_mcp"), materials=rolled_materials,
+        ).execute(rolled_store.current.change_id, "task-exec")
+        self.assertEqual(rolled.status, "rolled_back")
+        self.assertEqual(rolled_materials.cleanup_calls, [rolled.change_id])
 
     def test_static_write_leaf_mapping_matches_each_target(self) -> None:
         """执行器使用目标注册表唯一提供的步骤—叶子映射。"""

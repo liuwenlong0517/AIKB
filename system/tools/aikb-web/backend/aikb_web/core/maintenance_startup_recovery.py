@@ -157,6 +157,7 @@ class MaintenanceStartupRecovery:
                         self._retry_expired_cleanup(transaction)
                         continue
                     if transaction.status in {"succeeded", "rolled_back"}:
+                        self._retry_terminal_cleanup(transaction)
                         continue
                     if transaction.status == "recovery_required":
                         continue
@@ -237,6 +238,21 @@ class MaintenanceStartupRecovery:
         if not callable(cleanup):
             raise MaintenanceStartupRecoveryError("过期事务材料清理接口不可用")
         cleanup(change_id)
+
+    def _retry_terminal_cleanup(self, transaction: MaintenanceChange) -> None:
+        """为已确认成功/回滚的事务幂等补清私有材料。
+
+        终态已经由事务事实和审计门禁共同确认，私有材料不再参与恢复。清理失败
+        只保留材料供下次启动重试，不阻断新的维护写入，也绝不回放已完成事务。
+        """
+
+        cleanup = getattr(self._materials, "cleanup", None)
+        if not callable(cleanup):
+            return
+        try:
+            cleanup(transaction.change_id)
+        except Exception:
+            return
 
     def _recover_one(self, transaction: MaintenanceChange) -> None:
         """绑定材料、审计证据和当前观察后执行最小安全恢复。"""
@@ -416,6 +432,9 @@ class MaintenanceStartupRecovery:
                 )
             terminal = transaction.transition(outcome, updated_at=transaction.updated_at, leaf_states=leaves)
             self._transactions.save(terminal)
+            # 本轮恢复刚形成的终态不会再次经过 recover_all 的初始扫描分支，
+            # 因此必须在终态成功落盘后立即补清，不能再滞留到下一次进程启动。
+            self._retry_terminal_cleanup(terminal)
         except Exception as error:
             raise _RecoveryFinalizeFailure("恢复终态无法持久化") from error
 

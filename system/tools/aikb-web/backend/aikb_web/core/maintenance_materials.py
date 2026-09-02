@@ -370,11 +370,15 @@ class MaintenanceMaterialStore:
             *_ENV_FILES.values(),
         }
         try:
-            for entry in private.iterdir():
+            # 先完整验证目录，再删除任何文件；否则未知项恰好排在已知项之后时，
+            # 会留下“部分材料已删、未知材料仍在”的不可审计中间状态。
+            entries = list(private.iterdir())
+            for entry in entries:
                 if entry.name not in known_files:
                     raise MaintenanceMaterialError("事务私有材料含未声明文件")
                 if self._has_reparse_component(entry) or not entry.is_file():
                     raise MaintenanceMaterialError("事务私有材料文件无效")
+            for entry in entries:
                 entry.unlink()
             private.rmdir()
         except MaintenanceMaterialError:

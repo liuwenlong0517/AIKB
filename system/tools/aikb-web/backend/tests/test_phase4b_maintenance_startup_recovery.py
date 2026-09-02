@@ -172,20 +172,24 @@ class MaintenanceStartupRecoveryTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _run(self, transaction, platform, audit, store=None):
+    def _run(self, transaction, platform, audit, store=None, materials=None):
         store = store or _Store([transaction])
         audit.transaction = transaction
         gate = MaintenanceRecoveryGate()
         coordinator = MaintenanceStartupRecovery(
-            store, _Materials(transaction), platform, audit, gate, MaintenanceWriteLock(str(self.workspace))
+            store, materials or _Materials(transaction), platform, audit, gate, MaintenanceWriteLock(str(self.workspace))
         )
         return coordinator, store, gate
 
     def test_verifying_unique_successful_audit_finalizes_only_when_expected(self):
         transaction = _verifying()
-        coordinator, store, gate = self._run(transaction, _Platform(transaction, current="expected"), _Audit("unique_succeeded"))
+        materials = _Materials(transaction)
+        coordinator, store, gate = self._run(
+            transaction, _Platform(transaction, current="expected"), _Audit("unique_succeeded"), materials=materials,
+        )
         self.assertEqual(coordinator.recover_all(), ())
         self.assertEqual(store.transactions[transaction.change_id].status, "succeeded")
+        self.assertEqual(materials.cleanup_calls, [transaction.change_id])
         self.assertFalse(gate.blocked)
 
         transaction = _verifying()
@@ -352,6 +356,29 @@ class MaintenanceStartupRecoveryTests(unittest.TestCase):
         self.assertEqual(platform.calls, [])
         self.assertFalse(gate.blocked)
 
+    def test_terminal_transaction_retries_private_cleanup_without_recovery(self):
+        """安全终态在每次启动幂等补清，失败不回放事务或阻断恢复门禁。"""
+
+        verifying = _verifying()
+        verified_leaves = tuple(replace(leaf, progress="verified") for leaf in verifying.leaf_states)
+        transaction = verifying.transition("succeeded", leaf_states=verified_leaves)
+        materials = _Materials(transaction)
+        materials.cleanup_failures = 1
+        platform = _Platform(transaction, current="expected")
+        coordinator, _store, gate = self._run(
+            transaction, platform, _Audit("unique_succeeded"), materials=materials,
+        )
+
+        coordinator.recover_all()
+        self.assertEqual(materials.cleanup_calls, [transaction.change_id])
+        self.assertEqual(platform.calls, [])
+        self.assertFalse(gate.blocked)
+
+        coordinator.recover_all()
+        self.assertEqual(materials.cleanup_calls, [transaction.change_id, transaction.change_id])
+        self.assertEqual(platform.calls, [])
+        self.assertFalse(gate.blocked)
+
     def test_invalid_dependency_is_rejected_at_construction(self):
         """恢复依赖缺少公开方法时构造即拒绝，gate 保持默认阻断。"""
         transaction = _verifying()
@@ -394,7 +421,7 @@ class MaintenanceStartupRecoveryTests(unittest.TestCase):
         self.assertFalse(gate.blocked)
 
     def test_real_transaction_and_material_stores_are_recovered_together(self):
-        """真实 transaction.json 与 private manifest 联动，事实源不被覆盖。"""
+        """真实恢复落盘安全终态后保留摘要并立即清理 private 材料。"""
         import hashlib
 
         transaction = _verifying()
@@ -429,7 +456,7 @@ class MaintenanceStartupRecoveryTests(unittest.TestCase):
         coordinator.recover_all()
         self.assertEqual(transaction_store.load(transaction.change_id).status, "succeeded")
         self.assertTrue((runtime / transaction.change_id / "transaction.json").is_file())
-        self.assertTrue((runtime / transaction.change_id / "private" / "manifest.json").is_file())
+        self.assertFalse((runtime / transaction.change_id / "private").exists())
         self.assertFalse(gate.blocked)
 
     def test_real_prepared_transaction_expires_and_cleans_materials_idempotently(self):

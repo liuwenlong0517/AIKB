@@ -224,6 +224,34 @@ class MaintenanceMaterialStoreTests(unittest.TestCase):
             self.assertFalse((transaction_dir / "private").exists())
             store.cleanup(change_id)
 
+    def test_cleanup_validates_all_private_entries_before_deleting_any_file(self) -> None:
+        """未知材料使清理整体拒绝，已经声明的恢复字节也必须原样保留。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            change_id = "change-cleanup-unknown"
+            store = _store_for(root, change_id)
+            leaves = {
+                "user_environment.aikb_home": _leaf("user_environment.aikb_home"),
+                "user_environment.aikb_knowledge_home": _leaf("user_environment.aikb_knowledge_home", missing=True),
+            }
+            environments = {
+                "AIKB_HOME": MaintenanceEnvironmentMaterial("AIKB_HOME", "value", "old-root"),
+                "AIKB_KNOWLEDGE_HOME": MaintenanceEnvironmentMaterial("AIKB_KNOWLEDGE_HOME", "missing"),
+            }
+            store.prepare(change_id, "environment", leaves, environments)
+            private = root / "runtime" / "web" / "maintenance-transactions" / change_id / "private"
+            expected = {path.name: path.read_bytes() for path in private.iterdir()}
+            (private / "unknown.bin").write_bytes(b"unknown")
+
+            with self.assertRaises(MaintenanceMaterialError):
+                store.cleanup(change_id)
+
+            self.assertEqual(
+                {name: (private / name).read_bytes() for name in expected},
+                expected,
+            )
+
     def test_reparse_root_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

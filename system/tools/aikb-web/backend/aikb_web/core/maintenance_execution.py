@@ -270,6 +270,7 @@ class MaintenanceExecutor:
                 self._store.save(succeeded)
             except Exception as error:
                 raise _AuditGateFailure("维护成功终态保存不确定") from error
+            self._cleanup_terminal_materials(succeeded.change_id)
             return succeeded
         except MaintenanceExecutionError:
             raise
@@ -285,6 +286,23 @@ class MaintenanceExecutor:
             raise
         except Exception as error:
             raise _AuditGateFailure("维护终态审计未成功") from error
+
+    def _cleanup_terminal_materials(self, change_id: str) -> None:
+        """尽力清理已确认安全终态的私有材料，失败留待启动恢复重试。
+
+        调用点必须位于终态审计成功且 ``succeeded``/``rolled_back`` 已经原子
+        落盘之后。材料清理不是用户配置事务的一部分：临时文件被占用或权限
+        短暂异常时，不能把已经验证的成功/回滚结果改写成失败，也不能再次执行
+        平台写入。私有目录仍在磁盘上即可作为下一次启动的幂等重试信号。
+        """
+
+        cleanup = getattr(self._material_store, "cleanup", None)
+        if not callable(cleanup):
+            return
+        try:
+            cleanup(change_id)
+        except Exception:
+            return
 
     def _compensate(
         self,
@@ -331,6 +349,7 @@ class MaintenanceExecutor:
                 self._store.save(rolled_back)
             except Exception as error:
                 raise _AuditGateFailure("维护回滚终态保存不确定") from error
+            self._cleanup_terminal_materials(rolled_back.change_id)
             return rolled_back
         except Exception as error:
             if isinstance(error, _AuditGateFailure):
