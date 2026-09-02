@@ -31,14 +31,15 @@ from ...core.maintenance_targets import MAINTENANCE_LEAVES_BY_TARGET, MAINTENANC
 from ...platform.maintenance import MaintenanceStep, MaintenanceStepResult, MaintenanceVerification
 from .maintenance_readonly import (
     _CODEX_MCP_END,
-    _CODEX_MCP_START,
     _EVENTS,
     _HOOK_SCRIPT,
     _ROOT_END,
     _ROOT_START,
     _canonical_hook_handler,
+    _codex_mcp_layout,
     _expected_claude_mcp,
     _expected_codex_mcp,
+    _expected_codex_mcp_value,
     _expected_hooks,
     _expected_root,
     _find_json_key,
@@ -277,26 +278,41 @@ def _merge_root(raw: bytes | None) -> bytes:
 
 
 def _merge_codex_mcp(raw: bytes | None) -> bytes:
-    """替换 Codex 受管 TOML 块，拒绝任意大小写同名的非受管服务。"""
+    """只替换准确的 ``mcp_servers.aikb`` 表，并保留误入旧标记的外部表。"""
 
     text = (raw or b"").decode("utf-8-sig")
     try:
-        tomllib.loads(text)
-    except tomllib.TOMLDecodeError as error:
-        raise WindowsAgentMaintenanceError("Codex TOML 无效") from error
-    marker_pattern = _managed_block_pattern(_CODEX_MCP_START, _CODEX_MCP_END)
-    matches = marker_pattern.findall(text)
-    sections = re.findall(r"(?im)^\s*\[mcp_servers\.aikb\]\s*$", text)
-    if len(matches) > 1:
-        raise WindowsAgentMaintenanceError("Codex 受管 MCP 区块重复")
-    # 未包裹标记的 exact/case-variant section 都是第三方冲突；受管块内部
-    # 的 section 在这里允许恰好一个，并由 marker 保护。
-    if sections and not matches:
+        layout = _codex_mcp_layout(text)
+    except (tomllib.TOMLDecodeError, ValueError) as error:
+        raise WindowsAgentMaintenanceError("Codex TOML 结构无效") from error
+    state = layout["state"]
+    if state == "conflict":
         raise WindowsAgentMaintenanceError("Codex MCP 同名服务冲突")
+    if state == "invalid":
+        raise WindowsAgentMaintenanceError("Codex 受管 MCP 结构无效")
     newline = "\r\n" if "\r\n" in text else "\n"
     block = _expected_codex_mcp().decode("utf-8").replace("\n", newline).rstrip("\r\n")
-    if matches:
-        return marker_pattern.sub(block + newline, text, count=1).encode("utf-8")
+    if state == "managed":
+        # 语义已经一致时保留整文件原始字节，Codex 仅调整排版或在结束标记前
+        # 插入其他 MCP 表都不应触发写入。
+        if layout["value"] == _expected_codex_mcp_value():
+            return raw if raw is not None else text.encode("utf-8")
+        marker_start = int(layout["marker_start"])
+        section_end = int(layout["section_end"])
+        suffix = text[section_end:]
+        # 若 Codex 已把外部表插进旧注释跨度，旧结束标记会落在 suffix 中；
+        # 只移除该标记行再把它随新 AIKB 表迁回，绝不删除 suffix 的外部表。
+        suffix = re.sub(
+            r"(?m)^" + re.escape(_CODEX_MCP_END) + r"[ \t]*(?:\r?\n|$)",
+            "",
+            suffix,
+            count=1,
+        )
+        separator = newline if suffix else ""
+        output = text[:marker_start] + block + newline + separator + suffix
+        # 结构化回读是写入前最后一道边界，防止表范围计算生成非法 TOML。
+        tomllib.loads(output)
+        return output.encode("utf-8")
     clean = text.rstrip("\r\n")
     return ((clean + newline + newline if clean else "") + block + newline).encode("utf-8")
 

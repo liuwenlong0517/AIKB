@@ -126,6 +126,38 @@ class WindowsMaintenanceReadOnlyTests(unittest.TestCase):
             reparse = self._adapter(root).inspect("agent.codex")
             self.assertEqual(reparse.status, "invalid")
 
+    def test_codex_external_mcp_inside_legacy_markers_is_not_drift(self) -> None:
+        """Codex 插入结束标记前的外部表不属于 AIKB 受管正文。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_ready_files(root)
+            path = root / "codex" / "config.toml"
+            raw = path.read_bytes().replace(
+                b"# <<< AIKB managed MCP <<<\n",
+                b"[mcp_servers.cua_repl]\ncommand = \"host.exe\"\n\n# <<< AIKB managed MCP <<<\n",
+            )
+            path.write_bytes(raw)
+            status = self._adapter(root).inspect("agent.codex")
+            self.assertEqual(status.status, "ready")
+            self.assertEqual([item.difference_code for item in status.differences], ["unchanged", "unchanged", "unchanged"])
+
+    def test_codex_managed_value_drift_still_detected_with_external_table_inside_markers(self) -> None:
+        """忽略外部表不能掩盖 AIKB 自身字段的真实漂移。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_ready_files(root)
+            path = root / "codex" / "config.toml"
+            raw = path.read_bytes().replace(b'command = "pwsh"', b'command = "other"').replace(
+                b"# <<< AIKB managed MCP <<<\n",
+                b"[mcp_servers.cua_repl]\ncommand = \"host.exe\"\n\n# <<< AIKB managed MCP <<<\n",
+            )
+            path.write_bytes(raw)
+            status = self._adapter(root).inspect("agent.codex")
+            self.assertEqual(status.status, "drifted")
+            self.assertEqual(status.differences[1].difference_code, "drifted")
+
     def test_orphaned_managed_markers_are_invalid_not_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

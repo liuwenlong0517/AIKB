@@ -355,13 +355,26 @@ try {
     }
 
     $before = (Get-FileHash -LiteralPath (Join-Path $codexHome 'hooks.json')).Hash
-    # 再次安装后文件哈希必须不变，卸载则只应删除 AIKB 受管内容。
+    # 模拟 Codex Desktop 在结束注释前登记新的 MCP 表。安装与卸载都必须按
+    # 准确 TOML 表边界处理 AIKB，不能把夹入旧标记跨度的 cua_repl 当作受管正文。
+    $codexConfigPath = Join-Path $codexHome 'config.toml'
+    $codexWithExternalMcp = (Get-Content -Raw -LiteralPath $codexConfigPath).Replace(
+        '# <<< AIKB managed MCP <<<',
+        "[mcp_servers.cua_repl]`ncommand = 'host.exe'`n`n# <<< AIKB managed MCP <<<"
+    )
+    Set-Content -LiteralPath $codexConfigPath -Value $codexWithExternalMcp -Encoding utf8NoBOM
+    # 再次安装后 hooks 哈希必须不变，外部 MCP 必须保留；卸载只删除 AIKB。
     & (Join-Path $repoRoot 'system\adapters\install-all.ps1') -CodexHome $codexHome -ClaudeHome $claudeHome -ClaudeUserConfig $claudeConfig | Out-Null
     $after = (Get-FileHash -LiteralPath (Join-Path $codexHome 'hooks.json')).Hash
     if ($before -ne $after) { throw '适配器重复安装不是幂等操作' }
+    $codexAfterReinstall = Get-Content -Raw -LiteralPath $codexConfigPath
+    if ($codexAfterReinstall -notmatch '\[mcp_servers\.cua_repl\]' -or $codexAfterReinstall -notmatch '\[mcp_servers\.aikb\]') {
+        throw 'Codex 重复安装未保留结束标记前插入的外部 MCP 表'
+    }
 
     & (Join-Path $repoRoot 'system\adapters\uninstall-all.ps1') -CodexHome $codexHome -ClaudeHome $claudeHome -ClaudeUserConfig $claudeConfig | Out-Null
     if ((Get-Content -Raw -LiteralPath (Join-Path $codexHome 'config.toml')) -match 'mcp_servers\.aikb') { throw 'Codex MCP 卸载不完整' }
+    if ((Get-Content -Raw -LiteralPath $codexConfigPath) -notmatch 'mcp_servers\.cua_repl') { throw 'Codex MCP 卸载误删外部服务' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $codexHome 'hooks.json')) -match 'aikb-hook\.ps1') { throw 'Codex hooks 卸载不完整' }
     if ((Get-Content -Raw -LiteralPath $claudeConfig) -match '"aikb"') { throw 'Claude MCP 卸载不完整' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $claudeHome 'settings.json')) -match 'aikb-hook\.ps1') { throw 'Claude hooks 卸载不完整' }

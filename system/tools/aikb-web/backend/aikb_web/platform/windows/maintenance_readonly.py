@@ -34,6 +34,18 @@ _ROOT_START = "<!-- >>> AIKB managed root instruction >>> -->"
 _ROOT_END = "<!-- <<< AIKB managed root instruction <<< -->"
 _CODEX_MCP_START = "# >>> AIKB managed MCP >>>"
 _CODEX_MCP_END = "# <<< AIKB managed MCP <<<"
+_CODEX_MCP_HEADER_PATTERN = re.compile(
+    r"(?im)^[ \t]*\[mcp_servers\.aikb\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
+)
+_TOML_TABLE_HEADER_PATTERN = re.compile(
+    r"(?m)^[ \t]*\[\[?(?P<path>[^\]\r\n]+)\]\]?[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
+)
+_CODEX_MCP_START_LINE_PATTERN = re.compile(
+    r"(?m)^" + re.escape(_CODEX_MCP_START) + r"[ \t]*(?:\r?\n|$)"
+)
+_CODEX_MCP_END_LINE_PATTERN = re.compile(
+    r"(?m)^" + re.escape(_CODEX_MCP_END) + r"[ \t]*(?:\r?\n|$)"
+)
 _HOOK_SCRIPT = "aikb-hook.ps1"
 _EXPECTED_INSTRUCTION = (
     "每个新会话开始时，请从 Windows 用户环境变量 `AIKB_HOME` 获取 AIKB 根目录，并读取和持续遵循其中的 `ENTRY_RULES.md`。"
@@ -148,6 +160,58 @@ def _expected_codex_mcp() -> bytes:
         "enabled = true\n"
         f"{_CODEX_MCP_END}\n"
     ).encode("utf-8")
+
+
+def _expected_codex_mcp_value() -> dict[str, object]:
+    """返回 ``mcp_servers.aikb`` 的结构化期望值，避免把 TOML 排版当成配置语义。"""
+
+    parsed = tomllib.loads(_expected_codex_mcp().decode("utf-8"))
+    return parsed["mcp_servers"]["aikb"]
+
+
+def _codex_mcp_layout(text: str) -> dict[str, object]:
+    """解析 AIKB TOML 表、所有权标记和准确表边界。
+
+    Codex 可能把新 ``mcp_servers`` 表插到 AIKB 结束注释之前，因此结束注释
+    只能作为所有权标记，不能作为删除或摘要比较的正文边界。真正的 AIKB 正文
+    从准确表头开始，到下一个 TOML 表头或文件末尾结束。
+    """
+
+    parsed = tomllib.loads(text)
+    headers = list(_CODEX_MCP_HEADER_PATTERN.finditer(text))
+    starts = list(_CODEX_MCP_START_LINE_PATTERN.finditer(text))
+    ends = list(_CODEX_MCP_END_LINE_PATTERN.finditer(text))
+    if not headers:
+        return {"state": "invalid" if starts or ends else "missing"}
+    if not starts and not ends:
+        return {"state": "conflict"}
+    if len(headers) != 1 or len(starts) != 1 or len(ends) != 1:
+        return {"state": "invalid"}
+    header, start, end = headers[0], starts[0], ends[0]
+    if start.end() != header.start() or end.start() < header.end():
+        return {"state": "invalid"}
+    next_header = None
+    for item in _TOML_TABLE_HEADER_PATTERN.finditer(text, header.end()):
+        table_path = item.group("path").strip().casefold()
+        # ``mcp_servers.aikb.env`` 等子表仍属于同一个服务；准确边界应在首个
+        # 非 AIKB 子树表头前结束，而不是机械地停在任意下一个表头。
+        if table_path == "mcp_servers.aikb" or table_path.startswith("mcp_servers.aikb."):
+            continue
+        next_header = item
+        break
+    section_end = next_header.start() if next_header is not None else len(text)
+    # TOML 键大小写敏感；大小写变体虽然仍由标记证明属于 AIKB，但 Codex 不会
+    # 把它识别成标准配置，因此保留 managed 状态并让上层报告 drifted/执行修复。
+    servers = parsed.get("mcp_servers")
+    value = servers.get("aikb") if isinstance(servers, dict) else None
+    return {
+        "state": "managed",
+        "value": value,
+        "marker_start": start.start(),
+        "section_end": section_end,
+        "end_marker_start": end.start(),
+        "end_marker_end": end.end(),
+    }
 
 
 def _expected_hooks(agent: str) -> list[dict[str, object]]:
@@ -508,28 +572,23 @@ class WindowsMaintenanceAdapter:
         return {"difference": difference, "fingerprint_part": f"{leaf_id}:{_sha256(actual)}"}
 
     def _observe_codex_mcp(self, leaf_id: str, raw: bytes) -> dict[str, object]:
-        """解析 Codex TOML 并区分受管标记与非受管同名冲突。"""
+        """按准确 TOML 表语义检查 AIKB MCP，忽略标记内后来插入的外部表。"""
 
         text = raw.decode("utf-8")
-        tomllib.loads(text)
-        marker_pattern = _managed_block_pattern(_CODEX_MCP_START, _CODEX_MCP_END)
-        matches = marker_pattern.findall(text)
-        # TOML section 名同样遵循结构键契约；大小写变体不能被当作两个
-        # 可安全合并的服务。受管块内部的标准 section 只计一次。
-        section_count = len(re.findall(r"(?im)^\s*\[mcp_servers\.aikb\]\s*$", text))
-        if section_count and not matches:
-            code = "conflict"
-            return {"difference": MaintenanceManagedDifference(leaf_id, code), "fingerprint_part": f"{leaf_id}:conflict"}
-        if len(matches) > 1:
+        layout = _codex_mcp_layout(text)
+        state = layout["state"]
+        if state == "conflict":
+            return {"difference": MaintenanceManagedDifference(leaf_id, "conflict"), "fingerprint_part": f"{leaf_id}:conflict"}
+        if state == "invalid":
             return {"difference": MaintenanceManagedDifference(leaf_id, "invalid"), "fingerprint_part": f"{leaf_id}:invalid"}
-        if not matches:
-            if _CODEX_MCP_START in text or _CODEX_MCP_END in text:
-                return {"difference": MaintenanceManagedDifference(leaf_id, "invalid"), "fingerprint_part": f"{leaf_id}:invalid"}
+        if state == "missing":
             return {"difference": MaintenanceManagedDifference(leaf_id, "missing", after_hash=_sha256(_expected_codex_mcp())), "fingerprint_part": f"{leaf_id}:missing"}
-        actual = matches[0].replace("\r\n", "\n").encode("utf-8")
-        expected = _expected_codex_mcp()
+        actual = layout["value"]
+        expected = _expected_codex_mcp_value()
+        actual_hash = _sha256(_canonical_json(actual))
+        expected_hash = _sha256(_canonical_json(expected))
         code = "unchanged" if actual == expected else "drifted"
-        return {"difference": MaintenanceManagedDifference(leaf_id, code, _sha256(actual), _sha256(expected)), "fingerprint_part": f"{leaf_id}:{_sha256(actual)}"}
+        return {"difference": MaintenanceManagedDifference(leaf_id, code, actual_hash, expected_hash), "fingerprint_part": f"{leaf_id}:{actual_hash}"}
 
     def _observe_claude_mcp(self, leaf_id: str, raw: bytes) -> dict[str, object]:
         """解析 Claude MCP 对象，非 AIKB_MANAGED 对象一律冲突。"""
@@ -685,7 +744,7 @@ class WindowsMaintenanceAdapter:
             "root_instructions": _expected_root(),
             # Claude 的受管摘要按语义键名折叠计算，期望侧必须使用同一规范化，
             # 否则 ``AIKB_MANAGED`` 与 ``aikb_managed`` 会造成无法材料化的伪漂移。
-            "mcp": _expected_codex_mcp() if agent == "codex" else _canonical_json(_semantic_json(_expected_claude_mcp())),
+            "mcp": _canonical_json(_expected_codex_mcp_value()) if agent == "codex" else _canonical_json(_semantic_json(_expected_claude_mcp())),
             "hooks": _canonical_json(_expected_hooks(agent)),
         }
         return _sha256("\n".join(f"{leaf}:{_sha256(expected['root_instructions' if leaf.endswith('root_instructions') else 'mcp' if leaf.endswith('mcp') else 'hooks'])}" for leaf in MAINTENANCE_LEAVES_BY_TARGET[target_id]).encode())

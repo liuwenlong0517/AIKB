@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import tomllib
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -24,6 +25,7 @@ from aikb_web.platform.windows.maintenance_agents import (
     WindowsAgentMaintenanceAdapter,
     WindowsAgentMaintenanceError,
     WindowsAgentProbeRunner,
+    _merge_codex_mcp,
     _merge_claude_mcp,
     _merge_hooks,
 )
@@ -168,6 +170,32 @@ class WindowsAgentAdapterTests(unittest.TestCase):
         self.assertEqual(merged["mcpServers"]["aikb"], _expected_claude_mcp())
         self.assertEqual(merged["mcpServers"]["other"], {"command": "third-party"})
         self.assertTrue(merged["private"])
+
+    def test_codex_ready_mcp_with_external_table_inside_legacy_markers_is_byte_noop(self) -> None:
+        """外部 MCP 被 Codex 插入旧标记内时，语义就绪的配置不应被重写。"""
+
+        raw = _expected_codex_mcp().replace(
+            b"# <<< AIKB managed MCP <<<\n",
+            b"[mcp_servers.cua_repl]\ncommand = \"host.exe\"\n\n# <<< AIKB managed MCP <<<\n",
+        )
+        self.assertEqual(_merge_codex_mcp(raw), raw)
+
+    def test_codex_mcp_drift_repair_preserves_external_table_inside_legacy_markers(self) -> None:
+        """修复 AIKB 表时只迁回结束标记，不得删除被夹入的外部 MCP 表。"""
+
+        raw = _expected_codex_mcp().replace(b'command = "pwsh"', b'command = "old"').replace(
+            b"# <<< AIKB managed MCP <<<\n",
+            b"[mcp_servers.aikb.env]\nSTALE = \"managed-child\"\n\n"
+            b"[mcp_servers.cua_repl]\ncommand = \"host.exe\"\n\n# <<< AIKB managed MCP <<<\n",
+        )
+        merged = _merge_codex_mcp(raw)
+        parsed = tomllib.loads(merged.decode("utf-8"))
+        self.assertEqual(parsed["mcp_servers"]["aikb"]["command"], "pwsh")
+        self.assertNotIn("env", parsed["mcp_servers"]["aikb"])
+        self.assertEqual(parsed["mcp_servers"]["cua_repl"]["command"], "host.exe")
+        self.assertEqual(merged.count(b"# >>> AIKB managed MCP >>>"), 1)
+        self.assertEqual(merged.count(b"# <<< AIKB managed MCP <<<"), 1)
+        self.assertLess(merged.index(b"# <<< AIKB managed MCP <<<"), merged.index(b"[mcp_servers.cua_repl]"))
 
     def test_claude_root_drift_keeps_ready_mcp_material_bytes(self) -> None:
         """仅 root 漂移时，Claude MCP 期望材料必须沿用原始字节。"""

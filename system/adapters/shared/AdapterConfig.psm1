@@ -259,16 +259,65 @@ function Remove-HooksJson {
     Write-JsonAtomic -Path $Path -Value $config
 }
 
+function Get-CodexMcpLayout {
+    # 解析 AIKB MCP 的所有权标记与准确 TOML 表边界。Codex 可能把新表插到
+    # 结束标记之前，因此结束标记只能证明所有权，不能充当删除范围的右边界。
+    param([string]$Text)
+    $headerPattern = '(?im)^[ \t]*\[mcp_servers\.aikb\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)'
+    $tablePattern = '(?m)^[ \t]*\[\[?([^\]\r\n]+)\]\]?[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)'
+    $startPattern = '(?m)^' + [regex]::Escape($script:CodexMarkerStart) + '[ \t]*(?:\r?\n|$)'
+    $endPattern = '(?m)^' + [regex]::Escape($script:CodexMarkerEnd) + '[ \t]*(?:\r?\n|$)'
+    $headers = [regex]::Matches($Text, $headerPattern)
+    $starts = [regex]::Matches($Text, $startPattern)
+    $ends = [regex]::Matches($Text, $endPattern)
+    if ($headers.Count -eq 0) {
+        if ($starts.Count -gt 0 -or $ends.Count -gt 0) {
+            throw 'Codex AIKB MCP 标记不完整或位置无效'
+        }
+        return $null
+    }
+    if ($starts.Count -eq 0 -and $ends.Count -eq 0) {
+        throw 'Codex 已存在非 AIKB 安装器管理的 mcp_servers.aikb'
+    }
+    if ($headers.Count -ne 1 -or $starts.Count -ne 1 -or $ends.Count -ne 1) {
+        throw 'Codex AIKB MCP 表或所有权标记重复'
+    }
+    $header = $headers[0]
+    $start = $starts[0]
+    $end = $ends[0]
+    if (($start.Index + $start.Length) -ne $header.Index -or $end.Index -lt ($header.Index + $header.Length)) {
+        throw 'Codex AIKB MCP 所有权标记未与目标表正确关联'
+    }
+    $sectionEnd = $Text.Length
+    foreach ($candidate in [regex]::Matches($Text, $tablePattern, [Text.RegularExpressions.RegexOptions]::None, [TimeSpan]::FromSeconds(2))) {
+        $tablePath = $candidate.Groups[1].Value.Trim()
+        $isManagedSubtable = $tablePath.Equals('mcp_servers.aikb', [StringComparison]::OrdinalIgnoreCase) -or
+            $tablePath.StartsWith('mcp_servers.aikb.', [StringComparison]::OrdinalIgnoreCase)
+        if ($candidate.Index -gt $header.Index -and -not $isManagedSubtable) {
+            $sectionEnd = $candidate.Index
+            break
+        }
+    }
+    return [pscustomobject]@{
+        MarkerStart = $start.Index
+        SectionEnd = $sectionEnd
+        EndMarkerStart = $end.Index
+        EndMarkerEnd = $end.Index + $end.Length
+        EndPattern = $endPattern
+    }
+}
+
 function Update-CodexMcp {
-    # 替换 Codex 受管 TOML 区块；发现同名非受管服务时拒绝覆盖。
+    # 只替换准确的 mcp_servers.aikb 表；误入旧标记跨度的其他 MCP 表必须保留。
     param([string]$Path)
     $existing = if (Test-Path -LiteralPath $Path) { Get-Content -Raw -LiteralPath $Path } else { '' }
-    if ($existing -match '(?m)^\s*\[mcp_servers\.aikb\]\s*$' -and $existing -notmatch [regex]::Escape($script:CodexMarkerStart)) {
-        throw "Codex 已存在非 AIKB 安装器管理的 mcp_servers.aikb：$Path"
+    try {
+        $layout = Get-CodexMcpLayout -Text $existing
     }
-    $pattern = '(?ms)^' + [regex]::Escape($script:CodexMarkerStart) + '.*?^' + [regex]::Escape($script:CodexMarkerEnd) + '\r?\n?'
+    catch {
+        throw "$($_.Exception.Message)：$Path"
+    }
     # 配置仅保存环境变量引用，避免把当前机器的控制仓绝对路径写入用户文件。
-    $clean = [regex]::Replace($existing, $pattern, '').TrimEnd()
     $launcherCommand = "& (Join-Path `$env:AIKB_HOME 'system/tools/aikb-mcp/scripts/aikb.ps1') serve --agent codex"
     $tomlCommand = $launcherCommand.Replace('\', '\\').Replace('"', '\"')
     $block = @"
@@ -282,17 +331,38 @@ tool_timeout_sec = 60
 enabled = true
 $script:CodexMarkerEnd
 "@
-    $output = if ($clean) { $clean + [Environment]::NewLine + [Environment]::NewLine + $block.Trim() + [Environment]::NewLine } else { $block.Trim() + [Environment]::NewLine }
+    if ($null -eq $layout) {
+        $clean = $existing.TrimEnd()
+        $output = if ($clean) { $clean + [Environment]::NewLine + [Environment]::NewLine + $block.Trim() + [Environment]::NewLine } else { $block.Trim() + [Environment]::NewLine }
+    }
+    else {
+        $prefix = $existing.Substring(0, $layout.MarkerStart)
+        $suffix = $existing.Substring($layout.SectionEnd)
+        # 结束标记若已被 Codex 推到外部表之后，只删除该唯一标记行，再随新的
+        # AIKB 表放回；suffix 中的其他表、注释和用户配置保持原样。
+        $suffix = [regex]::Replace($suffix, $layout.EndPattern, '', 1)
+        $separator = if ($suffix) { [Environment]::NewLine } else { '' }
+        $output = $prefix + $block.Trim() + [Environment]::NewLine + $separator + $suffix
+    }
     Write-TextAtomic -Path $Path -Content $output
 }
 
 function Remove-CodexMcp {
-    # 只删除带 AIKB 起止标记的 Codex MCP 区块。
+    # 只删除 AIKB 所有权标记和准确的 mcp_servers.aikb 表，保留全部外部表。
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $existing = Get-Content -Raw -LiteralPath $Path
-    $pattern = '(?ms)^' + [regex]::Escape($script:CodexMarkerStart) + '.*?^' + [regex]::Escape($script:CodexMarkerEnd) + '\r?\n?'
-    $clean = [regex]::Replace($existing, $pattern, '').TrimEnd()
+    try {
+        $layout = Get-CodexMcpLayout -Text $existing
+    }
+    catch {
+        throw "$($_.Exception.Message)：$Path"
+    }
+    if ($null -eq $layout) { return }
+    $prefix = $existing.Substring(0, $layout.MarkerStart)
+    $suffix = $existing.Substring($layout.SectionEnd)
+    $suffix = [regex]::Replace($suffix, $layout.EndPattern, '', 1)
+    $clean = ($prefix + $suffix).TrimEnd()
     Write-TextAtomic -Path $Path -Content ($(if ($clean) { $clean + [Environment]::NewLine } else { '' }))
 }
 
