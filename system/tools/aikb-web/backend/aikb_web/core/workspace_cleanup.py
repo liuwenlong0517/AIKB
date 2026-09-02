@@ -1,8 +1,9 @@
 """Workspace 数据维护的安全扫描、短期预览和受控删除核心。
 
-首版只处理三类能够从固定事实源可靠判定为过期的数据：审计文件、终态归档
-Working State 和终态 Web 任务。浏览器永远不能提供路径；规则/安装事务、活动
-任务、锁及无法确定状态的对象一律留在保护集合中。
+只处理五类能够从固定事实源可靠判定为过期的数据：审计文件、终态归档
+Working State、终态 Web 任务及无恢复材料的规则/维护终态摘要。浏览器永远
+不能提供路径；活动、恢复态、私有或未知材料、锁及无法确定状态的对象一律
+留在保护集合中。
 """
 
 from __future__ import annotations
@@ -23,15 +24,35 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ActionError, ConfirmationTokenService
 from .maintenance_lock import MaintenanceLockError, MaintenanceWriteLock
+from .maintenance_materials import MaintenanceMaterialStore
+from .maintenance_transaction_store import MaintenanceTransactionStore
+from .rule_transaction import RuleChangeStore
 
 
-CATEGORY_DEFAULTS = {"audit": 90, "archived_work": 180, "web_tasks": 30}
-CATEGORY_LABELS = {"audit": "审计数据", "archived_work": "归档运行任务", "web_tasks": "终态 Web 任务"}
+CATEGORY_DEFAULTS = {
+    "audit": 90,
+    "archived_work": 180,
+    "web_tasks": 30,
+    "rule_transactions": 90,
+    "maintenance_transactions": 90,
+}
+CATEGORY_LABELS = {
+    "audit": "审计数据",
+    "archived_work": "归档运行任务",
+    "web_tasks": "终态 Web 任务",
+    "rule_transactions": "终态规则事务",
+    "maintenance_transactions": "终态维护事务",
+}
 TERMINAL_WORK_STATES = frozenset({"completed", "abandoned", "superseded"})
 TERMINAL_TASK_STATES = frozenset({"succeeded", "failed", "cancelled", "timed_out", "interrupted"})
+AUTO_RULE_TRANSACTION_STATES = frozenset({"succeeded", "expired", "rejected", "rolled_back"})
+AUTO_MAINTENANCE_TRANSACTION_STATES = frozenset({"expired", "succeeded", "rolled_back"})
 PLAN_TTL_SECONDS = 300
 MAX_PLANS = 64
 MAX_CANDIDATES = 20_000
+AUTO_CLEANUP_INITIAL_DELAY_SECONDS = 300.0
+AUTO_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60.0
+AUTO_CLEANUP_STOP_TIMEOUT_SECONDS = 10.0
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 
 
@@ -266,8 +287,12 @@ class WorkspaceCleanupService:
                 found, protected = self._scan_audit(cutoff)
             elif category == "archived_work":
                 found, protected = self._scan_archived_work(cutoff)
-            else:
+            elif category == "web_tasks":
                 found, protected = self._scan_web_tasks(cutoff)
+            elif category == "rule_transactions":
+                found, protected = self._scan_rule_transactions(cutoff)
+            else:
+                found, protected = self._scan_maintenance_transactions(cutoff)
             if len(candidates) + len(found) > MAX_CANDIDATES:
                 raise WorkspaceCleanupError("候选数量超过单次安全上限，请缩小范围", code="DATA_MAINTENANCE_LIMIT", status_code=409)
             candidates.extend(found)
@@ -288,9 +313,12 @@ class WorkspaceCleanupService:
         }
 
     def _scan_audit(self, cutoff: datetime) -> tuple[list[CleanupCandidate], dict[str, int]]:
-        root = self.workspace_root / "audit"
         candidates: list[CleanupCandidate] = []
         protected: dict[str, int] = {}
+        try:
+            root = self._fixed_root("audit")
+        except WorkspaceCleanupError:
+            return candidates, {"unsafe_object": 1}
         for name in ("events", "diagnostic", "fallback", "reports"):
             boundary = root / name
             if not boundary.is_dir() or _is_reparse(boundary):
@@ -308,9 +336,12 @@ class WorkspaceCleanupService:
         return candidates, protected
 
     def _scan_archived_work(self, cutoff: datetime) -> tuple[list[CleanupCandidate], dict[str, int]]:
-        root = self.workspace_root / "archive"
         candidates: list[CleanupCandidate] = []
         protected: dict[str, int] = {}
+        try:
+            root = self._fixed_root("archive")
+        except WorkspaceCleanupError:
+            return candidates, {"unsafe_object": 1}
         if not root.is_dir() or _is_reparse(root):
             return candidates, protected
         for work_file in self._safe_files(root, wanted_name="work.md", protected=protected):
@@ -335,9 +366,12 @@ class WorkspaceCleanupService:
         return candidates, protected
 
     def _scan_web_tasks(self, cutoff: datetime) -> tuple[list[CleanupCandidate], dict[str, int]]:
-        root = self.workspace_root / "runtime" / "web" / "tasks"
         candidates: list[CleanupCandidate] = []
         protected: dict[str, int] = {}
+        try:
+            root = self._fixed_root("runtime", "web", "tasks")
+        except WorkspaceCleanupError:
+            return candidates, {"unsafe_object": 1}
         if not root.is_dir() or _is_reparse(root):
             return candidates, protected
         for task_dir in root.glob("*/*/*"):
@@ -365,6 +399,197 @@ class WorkspaceCleanupService:
             except WorkspaceCleanupError:
                 protected["unsafe_object"] = protected.get("unsafe_object", 0) + 1
         return candidates, protected
+
+    def _scan_rule_transactions(self, cutoff: datetime) -> tuple[list[CleanupCandidate], dict[str, int]]:
+        """只接纳严格事务存储确认的安全终态目录，恢复态和未知材料全部保护。"""
+
+        candidates: list[CleanupCandidate] = []
+        protected: dict[str, int] = {}
+        try:
+            root = self._fixed_root("runtime", "web", "rule-changes")
+        except WorkspaceCleanupError:
+            return candidates, {"unsafe_object": 1}
+        if not root.is_dir() or _is_reparse(root):
+            return candidates, protected
+        store = RuleChangeStore(self.workspace_root)
+        try:
+            transactions, issues = store.scan_transactions()
+        except Exception:
+            return candidates, {"unreadable": 1}
+        if issues:
+            protected["unsafe_object"] = len(issues)
+        allowed_names = {"transaction.json", "candidate.md", "backup.md"}
+        for transaction in transactions:
+            if transaction.status not in AUTO_RULE_TRANSACTION_STATES:
+                protected["uncertain_or_active"] = protected.get("uncertain_or_active", 0) + 1
+                continue
+            updated_at = self._parse_time(transaction.updated_at)
+            if updated_at is None:
+                protected["unreadable"] = protected.get("unreadable", 0) + 1
+                continue
+            if updated_at >= cutoff:
+                protected["within_retention"] = protected.get("within_retention", 0) + 1
+                continue
+            try:
+                directory = store._directory(transaction.change_id)
+                if not self._has_only_declared_files(directory, allowed_names, required={"transaction.json"}):
+                    raise WorkspaceCleanupError("规则事务目录含未知材料")
+                candidates.append(self._candidate("rule_transactions", directory, root, True, transaction.change_id))
+            except Exception:
+                protected["unsafe_object"] = protected.get("unsafe_object", 0) + 1
+        return candidates, protected
+
+    def _scan_maintenance_transactions(self, cutoff: datetime) -> tuple[list[CleanupCandidate], dict[str, int]]:
+        """只清理无私有恢复材料的安全终态摘要目录。"""
+
+        candidates: list[CleanupCandidate] = []
+        protected: dict[str, int] = {}
+        try:
+            root = self._fixed_root("runtime", "web", "maintenance-transactions")
+        except WorkspaceCleanupError:
+            return candidates, {"unsafe_object": 1}
+        if not root.is_dir() or _is_reparse(root):
+            return candidates, protected
+        store = MaintenanceTransactionStore(self.workspace_root)
+        try:
+            scanned = store.scan()
+        except Exception:
+            return candidates, {"unreadable": 1}
+        if scanned.issues:
+            protected["unsafe_object"] = len(scanned.issues)
+        for transaction in scanned.transactions:
+            if transaction.status not in AUTO_MAINTENANCE_TRANSACTION_STATES:
+                protected["uncertain_or_active"] = protected.get("uncertain_or_active", 0) + 1
+                continue
+            updated_at = self._parse_time(transaction.updated_at)
+            if updated_at is None:
+                protected["unreadable"] = protected.get("unreadable", 0) + 1
+                continue
+            if updated_at >= cutoff:
+                protected["within_retention"] = protected.get("within_retention", 0) + 1
+                continue
+            try:
+                directory = store._directory(transaction.change_id)
+                # succeeded/rolled_back 的 private 应由生命周期层先清理；若仍存在，
+                # 自动摘要清理不得顺带删除可能需要人工核验的未知材料。
+                if not self._has_only_declared_files(directory, {"transaction.json"}, required={"transaction.json"}):
+                    raise WorkspaceCleanupError("维护事务仍含私有或未知材料")
+                candidates.append(self._candidate("maintenance_transactions", directory, root, True, transaction.change_id))
+            except Exception:
+                protected["unsafe_object"] = protected.get("unsafe_object", 0) + 1
+        return candidates, protected
+
+    @staticmethod
+    def _has_only_declared_files(directory: Path, allowed: set[str], *, required: set[str]) -> bool:
+        """完整验证事务目录为普通文件集合，不跟随目录、链接或重解析点。"""
+
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            return False
+        names: set[str] = set()
+        for entry in entries:
+            if entry.name not in allowed or _is_reparse(entry) or not entry.is_file():
+                return False
+            names.add(entry.name)
+        return required.issubset(names)
+
+    def _fixed_root(self, *components: str) -> Path:
+        """逐级拒绝固定运行面中的链接或重解析点，边界不得随 junction 外移。"""
+
+        current = self.workspace_root
+        for component in components:
+            current = current / component
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise WorkspaceCleanupError(
+                    "数据维护运行面不可用", code="DATA_MAINTENANCE_UNSAFE_OBJECT", status_code=409,
+                ) from error
+            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or bool(getattr(info, "st_file_attributes", 0) & reparse)
+                or _is_reparse(current)
+                or not stat.S_ISDIR(info.st_mode)
+            ):
+                raise WorkspaceCleanupError("数据维护运行面不可用", code="DATA_MAINTENANCE_UNSAFE_OBJECT", status_code=409)
+        return current
+
+    def run_automatic(self) -> dict[str, Any]:
+        """按固定默认保留期低频清理；锁忙或对象变化时安全留待下一轮。
+
+        自动任务不创建预览或令牌，也不接受外部参数。它只复用公开数据维护已
+        声明的固定类别、保护扫描、全局维护锁和逐候选再次校验；单项删除失败
+        不扩大到其他候选，下一个周期会重新从磁盘事实生成候选。
+        """
+
+        run_id = f"cleanup-auto-{uuid.uuid4().hex}"
+        try:
+            with self.write_lock.held(timeout=0):
+                self._retry_terminal_material_cleanup()
+                candidates, _summaries, protected = self._scan(tuple(CATEGORY_DEFAULTS), dict(CATEGORY_DEFAULTS))
+                deleted: list[CleanupCandidate] = []
+                failed_count = 0
+                for candidate in candidates:
+                    try:
+                        self._delete_candidate(candidate)
+                    except (OSError, WorkspaceCleanupError):
+                        failed_count += 1
+                        continue
+                    deleted.append(candidate)
+                    self._notify_deleted((candidate,))
+        except MaintenanceLockError:
+            return {"status": "skipped", "reason": "maintenance_busy", "deleted_count": 0, "deleted_bytes": 0}
+        except WorkspaceCleanupError:
+            return {"status": "skipped", "reason": "scan_unavailable", "deleted_count": 0, "deleted_bytes": 0}
+        plan = CleanupPlan(
+            plan_id=run_id,
+            categories=tuple(CATEGORY_DEFAULTS),
+            retention_days=dict(CATEGORY_DEFAULTS),
+            candidates=tuple(candidates),
+            summaries=(),
+            preview_digest=self._plan_digest(tuple(CATEGORY_DEFAULTS), dict(CATEGORY_DEFAULTS), candidates),
+            confirmation_token="",
+            expires_at=self.clock(),
+        )
+        status = "failed" if failed_count else "succeeded"
+        deleted_bytes = sum(item.bytes for item in deleted)
+        self._audit(status, plan, len(deleted), deleted_bytes)
+        return {
+            "status": "partial" if failed_count else "succeeded",
+            "deleted_count": len(deleted),
+            "deleted_bytes": deleted_bytes,
+            "failed_count": failed_count,
+            "protected_count": int(protected.get("count") or 0),
+        }
+
+    def _retry_terminal_material_cleanup(self) -> None:
+        """重试安全终态的已声明私有材料；未知内容继续保留供人工核验。"""
+
+        store = MaintenanceTransactionStore(self.workspace_root)
+        try:
+            scanned = store.scan()
+        except Exception:
+            return
+        try:
+            root = self._fixed_root("runtime", "web", "maintenance-transactions")
+            if not root.is_dir():
+                return
+            materials = MaintenanceMaterialStore(root)
+        except Exception:
+            return
+        for transaction in scanned.transactions:
+            if transaction.status not in AUTO_MAINTENANCE_TRANSACTION_STATES:
+                continue
+            try:
+                materials.cleanup(transaction.change_id)
+            except Exception:
+                # cleanup 会先完整校验固定材料集合；失败时不改变事务事实，
+                # 未知或暂时不可删的材料由下一周期重新判断。
+                continue
 
     def _candidate(self, category: str, path: Path, boundary: Path, is_directory: bool, object_id: str) -> CleanupCandidate:
         resolved = path.resolve()
@@ -507,4 +732,72 @@ class WorkspaceCleanupService:
             return None
 
 
-__all__ = ["CATEGORY_DEFAULTS", "WorkspaceCleanupError", "WorkspaceCleanupService"]
+class WorkspaceCleanupScheduler:
+    """以停止事件驱动低频自动清理，不占用请求线程或阻止进程正常退出。"""
+
+    def __init__(
+        self,
+        service: WorkspaceCleanupService,
+        *,
+        initial_delay: float = AUTO_CLEANUP_INITIAL_DELAY_SECONDS,
+        interval: float = AUTO_CLEANUP_INTERVAL_SECONDS,
+        stop_timeout: float = AUTO_CLEANUP_STOP_TIMEOUT_SECONDS,
+    ) -> None:
+        if not isinstance(service, WorkspaceCleanupService) or initial_delay < 0 or interval <= 0 or stop_timeout <= 0:
+            raise ValueError("自动数据维护参数无效")
+        self._service = service
+        self._initial_delay = float(initial_delay)
+        self._interval = float(interval)
+        self._stop_timeout = float(stop_timeout)
+        self._stop = threading.Event()
+        self._guard = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        """启动唯一后台线程；首次扫描延迟执行，应用构造阶段绝不删除数据。"""
+
+        with self._guard:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._run,
+                name="aikb-workspace-cleanup",
+                # 停机先等待当前安全单元收敛；若底层文件系统永久无响应，守护
+                # 线程不能反过来无限阻止本地服务退出。
+                daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self) -> None:
+        """唤醒等待并回收线程；正在执行的单轮清理由维护锁内原子边界收敛。"""
+
+        with self._guard:
+            thread = self._thread
+            self._stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=self._stop_timeout)
+        with self._guard:
+            if self._thread is thread and (thread is None or not thread.is_alive()):
+                self._thread = None
+
+    def _run(self) -> None:
+        if self._stop.wait(self._initial_delay):
+            return
+        while not self._stop.is_set():
+            try:
+                self._service.run_automatic()
+            except Exception:
+                # 自动维护是旁路能力；任何未预期故障只留待下一周期重试，
+                # 不能终止 Web 服务或在后台线程输出物理路径/异常正文。
+                pass
+            if self._stop.wait(self._interval):
+                return
+
+
+__all__ = [
+    "CATEGORY_DEFAULTS",
+    "WorkspaceCleanupError",
+    "WorkspaceCleanupScheduler",
+    "WorkspaceCleanupService",
+]

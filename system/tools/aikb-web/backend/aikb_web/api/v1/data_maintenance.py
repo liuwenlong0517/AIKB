@@ -20,7 +20,7 @@ class CleanupPreviewRequest(BaseModel):
     """浏览器只能选择固定类别和有界保留天数，不能提交路径。"""
 
     model_config = ConfigDict(extra="forbid")
-    categories: list[str] = Field(..., min_length=1, max_length=3)
+    categories: list[str] = Field(..., min_length=1, max_length=5)
     retention_days: dict[str, int] = Field(default_factory=dict)
 
 

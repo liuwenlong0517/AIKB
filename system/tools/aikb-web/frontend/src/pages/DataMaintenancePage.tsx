@@ -5,7 +5,9 @@ import { PageHeader } from '../components/PageHeader';
 import { useApplyDataMaintenance, useDataMaintenanceOverview, usePreviewDataMaintenance } from '../hooks/useApi';
 import type { DataMaintenanceCategory, DataMaintenancePreview } from '../types/api';
 
-const CATEGORY_IDS: DataMaintenanceCategory['id'][] = ['audit', 'archived_work', 'web_tasks'];
+const CATEGORY_IDS: DataMaintenanceCategory['id'][] = [
+  'audit', 'archived_work', 'web_tasks', 'rule_transactions', 'maintenance_transactions',
+];
 const PROTECTION_LABELS: Record<string, string> = {
   within_retention: '仍在保留期内',
   uncertain_or_active: '活动中或状态无法安全确认',

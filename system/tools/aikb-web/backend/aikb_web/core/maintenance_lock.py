@@ -115,11 +115,16 @@ class MaintenanceWriteLock:
         current = self._lock_path.parents[2]
         for component in ("runtime", "web"):
             current = current / component
-            if current.exists():
-                attributes = getattr(current.stat(), "st_file_attributes", 0)
-                reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-                if current.is_symlink() or attributes & reparse or not current.is_dir():
-                    raise MaintenanceLockError("维护锁运行面不可用")
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise MaintenanceLockError("维护锁运行面不可用") from error
+            attributes = getattr(info, "st_file_attributes", 0)
+            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if stat.S_ISLNK(info.st_mode) or attributes & reparse or not stat.S_ISDIR(info.st_mode):
+                raise MaintenanceLockError("维护锁运行面不可用")
 
     def _try_os_lock(self) -> None:
         """打开固定锁文件并尝试独占；文件句柄存活期间锁随进程回收。"""

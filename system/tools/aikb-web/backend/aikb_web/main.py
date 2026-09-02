@@ -40,7 +40,7 @@ from aikb_web.core.maintenance_bootstrap import (
     build_default_maintenance_services,
 )
 from aikb_web.core.maintenance_task import MaintenanceTaskCoordinator
-from aikb_web.core.workspace_cleanup import WorkspaceCleanupService
+from aikb_web.core.workspace_cleanup import WorkspaceCleanupScheduler, WorkspaceCleanupService
 from aikb_web.core.manuals import ManualProvider
 from aikb_web.platform import platform_state
 from aikb_web.platform.windows.maintenance_readonly import build_windows_readonly_adapter
@@ -157,6 +157,7 @@ def create_app(
     maintenance_material_provider: Any | None = None,
     manual_provider: Any | None = None,
     data_maintenance_service: WorkspaceCleanupService | None = None,
+    data_maintenance_scheduler: Any | None = None,
 ) -> FastAPI:
     """创建可注入网关/任务/规则/维护适配器的 FastAPI 应用，便于契约测试和平台替换。"""
     gateway_was_default = gateway is None
@@ -225,9 +226,24 @@ def create_app(
                     app.state.task_orchestrator = None
             else:
                 app.state.platform_action_available = False
+        cleanup_scheduler = getattr(app.state, "data_maintenance_scheduler", None)
+        recovery_gate = getattr(app.state, "maintenance_recovery_gate", None)
+        recovery_configured = app.state.maintenance_startup_recovery is not None
+        recovery_blocked = recovery_configured and bool(getattr(recovery_gate, "blocked", True))
+        if cleanup_scheduler is not None and not app.state.maintenance_recovery_error and not recovery_blocked:
+            try:
+                cleanup_scheduler.start()
+            except Exception:
+                # 自动清理不可用不影响显式预览/清理和全部只读页面。
+                app.state.data_maintenance_scheduler_error = True
         try:
             yield
         finally:
+            if cleanup_scheduler is not None:
+                try:
+                    cleanup_scheduler.stop()
+                except Exception:
+                    pass
             service = app.state.task_orchestrator
             if service is not None:
                 service.shutdown()
@@ -411,6 +427,16 @@ def create_app(
             )
         except Exception:
             app.state.data_maintenance_service = None
+    # 自动清理与显式数据维护共用同一服务和维护锁；构造阶段只创建调度对象，
+    # lifespan 完成规则/维护恢复后才延迟启动，避免扫描恢复尚未收敛的事务。
+    app.state.data_maintenance_scheduler = data_maintenance_scheduler
+    app.state.data_maintenance_scheduler_error = False
+    if app.state.data_maintenance_scheduler is None and app.state.data_maintenance_service is not None:
+        try:
+            app.state.data_maintenance_scheduler = WorkspaceCleanupScheduler(app.state.data_maintenance_service)
+        except Exception:
+            app.state.data_maintenance_scheduler = None
+            app.state.data_maintenance_scheduler_error = True
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: Callable[[Request], Any]) -> JSONResponse:

@@ -580,7 +580,7 @@ export interface MaintenanceApplyData {
 
 /** 数据维护类别只包含服务端固定统计，不包含任何物理或相对路径。 */
 export interface DataMaintenanceCategory {
-  id: 'audit' | 'archived_work' | 'web_tasks';
+  id: 'audit' | 'archived_work' | 'web_tasks' | 'rule_transactions' | 'maintenance_transactions';
   label: string;
   retention_days: number;
   candidate_count: number;

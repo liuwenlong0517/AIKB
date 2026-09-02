@@ -7,6 +7,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from aikb_web.core.maintenance_changes import MaintenanceChange, MaintenanceLeafState
 from aikb_web.core.maintenance_materials import (
@@ -264,6 +266,38 @@ class MaintenanceMaterialStoreTests(unittest.TestCase):
                 raise
             with self.assertRaises(MaintenanceMaterialError):
                 MaintenanceMaterialStore(link)
+
+    def test_cleanup_rejects_private_directory_with_reparse_attribute(self) -> None:
+        """Windows junction 属性必须在删除任何已声明材料前被拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            change_id = "change-cleanup-junction"
+            store = _store_for(root, change_id)
+            leaves = {
+                "user_environment.aikb_home": _leaf("user_environment.aikb_home"),
+                "user_environment.aikb_knowledge_home": _leaf("user_environment.aikb_knowledge_home", missing=True),
+            }
+            environments = {
+                "AIKB_HOME": MaintenanceEnvironmentMaterial("AIKB_HOME", "value", "old-root"),
+                "AIKB_KNOWLEDGE_HOME": MaintenanceEnvironmentMaterial("AIKB_KNOWLEDGE_HOME", "missing"),
+            }
+            store.prepare(change_id, "environment", leaves, environments)
+            private = root / "runtime" / "web" / "maintenance-transactions" / change_id / "private"
+            expected = {path.name: path.read_bytes() for path in private.iterdir()}
+            original_lstat = Path.lstat
+
+            def fake_lstat(path: Path) -> object:
+                info = original_lstat(path)
+                if path == private:
+                    return SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400)
+                return info
+
+            with patch.object(Path, "lstat", autospec=True, side_effect=fake_lstat):
+                with self.assertRaises(MaintenanceMaterialError):
+                    store.cleanup(change_id)
+
+            self.assertEqual({name: (private / name).read_bytes() for name in expected}, expected)
 
 
 if __name__ == "__main__":

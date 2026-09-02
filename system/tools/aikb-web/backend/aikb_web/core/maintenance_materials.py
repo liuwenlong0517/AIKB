@@ -560,10 +560,11 @@ class MaintenanceMaterialStore:
         current = path
         while current != current.parent:
             try:
-                if current.is_symlink():
-                    return True
-                attributes = getattr(current.stat(), "st_file_attributes", 0)
-                if attributes & 0x400:
+                # stat() 会跟随 Windows junction，导致重解析属性从结果中消失；
+                # lstat() 必须在每一级原位检查，删除边界才不会被重定向。
+                info = current.lstat()
+                attributes = getattr(info, "st_file_attributes", 0)
+                if stat.S_ISLNK(info.st_mode) or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
                     return True
             except (FileNotFoundError, NotADirectoryError):
                 current = current.parent

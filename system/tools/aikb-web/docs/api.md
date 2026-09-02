@@ -308,7 +308,7 @@ Windows Agent 验证使用服务端固定的 MCP initialize、tools/list、四�
 
 ### GET /data-maintenance
 
-按默认保留策略扫描 `audit`、`archived_work`、`web_tasks` 三个固定逻辑类别，返回每类保留天数、候选数量/字节数和保护数量，以及按原因汇总的保护计数。该接口只读但属于低频维护盘点；响应不返回文件名、目录或物理路径。
+按默认保留策略扫描 `audit`、`archived_work`、`web_tasks`、`rule_transactions`、`maintenance_transactions` 五个固定逻辑类别，返回每类保留天数、候选数量/字节数和保护数量，以及按原因汇总的保护计数。该接口只读但属于低频维护盘点；响应不返回文件名、目录或物理路径。规则与维护事务只在严格安全终态、超过保留期且目录不含私有或未知材料时成为候选。
 
 ### POST /data-maintenance/preview
 
@@ -317,6 +317,8 @@ Windows Agent 验证使用服务端固定的 MCP initialize、tools/list、四�
 ### POST /data-maintenance/plans/{plan_id}/apply
 
 请求体只允许 `confirmation_token`。服务在共享维护写锁内按原策略重新扫描并比较候选摘要；预览过期、候选变化、令牌无效/已消费或维护写入冲突均拒绝执行。成功只返回计划 ID、状态、逻辑类别、删除数量和释放字节数。活动/不确定状态、链接/重解析点和不可读对象不会被删除；归档及任务清理完成后同步对应派生列表投影。
+
+除上述显式流程外，服务在启动恢复完成后按固定默认保留期低频自动执行同一保护扫描。自动任务没有公共请求入口，不接受类别、路径或保留期参数；维护锁繁忙、候选超限或单项校验失败时不扩大删除范围，留待后续周期重试。
 
 ## 10. 分页、空集和降级统一规则
 
