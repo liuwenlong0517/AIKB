@@ -6,6 +6,8 @@ import { PageHeader } from '../components/PageHeader';
 import { useKnowledgeTree } from '../hooks/useApi';
 import type { TreeNode } from '../types/api';
 
+const TREE_VIEWPORT_HEIGHT = 480;
+
 /** 知识目录只读取逻辑路径；点击文档通过后端的稳定 id 打开阅读页。 */
 export function KnowledgePage() {
   const navigate = useNavigate();
@@ -20,7 +22,17 @@ export function KnowledgePage() {
       <AsyncState loading={query.isLoading} error={query.error} onRetry={() => void query.refetch()} empty={!root?.children?.length} emptyDescription="知识目录为空">
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={9} xl={8}>
-            <Card title="知识目录" className="tree-card"><Tree blockNode showLine defaultExpandAll treeData={root ? [toDataNode(root)] : []} onSelect={onSelect} /></Card>
+            <Card title="知识目录" className="tree-card">
+              <Tree
+                blockNode
+                showLine
+                defaultExpandAll
+                virtual
+                height={TREE_VIEWPORT_HEIGHT}
+                treeData={root ? [toDataNode(root)] : []}
+                onSelect={onSelect}
+              />
+            </Card>
           </Col>
           <Col xs={24} lg={15} xl={16}>
             <Card className="knowledge-intro">

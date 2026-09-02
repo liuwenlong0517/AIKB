@@ -40,7 +40,7 @@ body { margin: 0; min-width: 960px; overflow: hidden; background: #f4f7fb; }
 .dashboard-recent-card > .ant-card-body { flex: 1; min-height: 0; overflow-y: auto; }
 .alert-stack { display: grid; gap: 10px; margin-top: 16px; }
 .tree-card { min-height: 560px; }
-.tree-card .ant-card-body { max-height: 670px; overflow: auto; }
+.tree-card .ant-card-body { overflow: hidden; }
 .knowledge-intro { min-height: 560px; }
 .knowledge-intro .ant-empty { margin-top: 120px; }
 .search-controls { margin-bottom: 16px; }
