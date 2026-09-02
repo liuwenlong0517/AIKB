@@ -17,7 +17,7 @@ SERVER_INSTRUCTIONS = (
     "AIKB 是本机工程知识与任务状态服务。未知知识位置时调用 search_knowledge；已知稳定 ID 后调用 read_knowledge。"
     "search_knowledge 默认只返回 verified；查重必须显式覆盖 verified 和 candidate，或调用 review_knowledge 查看审查队列。"
     "继续历史任务时调用 get_work_state。只有形成有意义的工程状态时才写 checkpoint，禁止保存聊天全文、隐藏推理、密钥、原始日志和完整 diff。"
-    "正式知识 Markdown 只读；MCP 不可用时按 INDEX.md 和局部 README 降级。"
+    "正式知识 Markdown 只读；MCP 不可用时按根 INDEX.md 和各级 INDEX.md 降级。"
 )
 
 

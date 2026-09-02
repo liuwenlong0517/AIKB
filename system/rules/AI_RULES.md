@@ -10,7 +10,7 @@
 
 ## 2. 知识检索
 
-按以下顺序选择：当前上下文；已知准确文件或稳定 ID；`search_knowledge` 定位少量候选；`read_knowledge` 核对选中文档。MCP 不可用、索引陈旧或调用失败时，从控制仓 `INDEX.md` 转入知识仓 `INDEX.md → 分类 README → 主题 README → 具体文件`。仅全库治理或正式写入前查重才读知识仓 `CATALOG.md`。
+按以下顺序选择：当前上下文；已知准确文件或稳定 ID；`search_knowledge` 定位少量候选；`read_knowledge` 核对选中文档。MCP 不可用、索引陈旧或调用失败时，从控制仓 `INDEX.md` 转入知识仓 `INDEX.md → 分类 INDEX → 主题 INDEX → 具体文件`。仅全库治理或正式写入前查重才读知识仓 `CATALOG.md`。
 
 检索算法由服务选择，Agent 不指定 FTS、短词回退或未来向量实现。搜索结果只定位候选；正式采用前核对 Markdown、版本和 `content_hash`。关系默认不展开，必要时只扩展一层少量关联。没有相关知识时明确说明，不把模型知识说成 AIKB 结论。
 

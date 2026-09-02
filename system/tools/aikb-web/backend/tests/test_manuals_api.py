@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -14,6 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from aikb_web.main import create_app
+from aikb_web.core.manuals import ManualProvider
 
 
 class _Gateway:
@@ -62,6 +65,20 @@ class ManualsApiTests(unittest.TestCase):
             self.assertIn(response.status_code, (400, 404, 422))
             self.assertNotIn("README.md", response.text)
         self.assertEqual(provider.calls, [])
+
+    def test_commands_manual_reads_control_root_file(self) -> None:
+        """确认命令手册迁移后只读取控制仓根文件，不回退到旧 system 路径。"""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "COMMANDS.md").write_text("# 根命令手册\n", encoding="utf-8")
+            (root / "system").mkdir()
+            (root / "system" / "COMMANDS.md").write_text("# 旧路径\n", encoding="utf-8")
+            completed = type("Completed", (), {"stdout": "a" * 40 + "\n"})()
+            with patch("aikb_web.core.manuals.subprocess.run", return_value=completed):
+                result = ManualProvider(root).read("commands")
+        # Windows 的 Path.write_text 会按平台换行写入，断言只校验正文来源而不绑定换行风格。
+        self.assertEqual(result["content"].splitlines(), ["# 根命令手册"])
+        self.assertNotIn("旧路径", result["content"])
 
 
 if __name__ == "__main__":

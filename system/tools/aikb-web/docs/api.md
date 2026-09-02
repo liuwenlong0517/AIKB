@@ -53,7 +53,7 @@ error.code 的公共枚举为：
 浏览器只接触逻辑标识：
 
 - 稳定知识 ID：aikb: 加小写字母或数字开头、随后仅含小写字母、数字、:、- 的字符串，例如 aikb:projects:aikb-web:phase-1-read-only-mvp。
-- 知识逻辑路径：以 content/ 开头的相对 POSIX 路径，例如 content/projects/aikb-web/README.md。路径段不能为空、. 或 ..。
+- 知识逻辑路径：以 content/ 开头的相对 POSIX 路径，例如 content/projects/aikb-web/INDEX.md。路径段不能为空、. 或 ..。
 - Working State 标识：work_id，匹配 [a-z0-9][a-z0-9-]*，最长 120 字符。
 - 检查点标识：不透明的 checkpoint_id，最长 120 字符，只能作为查询值传回，客户端不得从中推导物理位置。
 - 审计调用标识：不透明的 invocation_id，最长 120 字符；事件详情使用它聚合 invocation_started 与 invocation_finished。
@@ -119,7 +119,7 @@ results 每项只能包含公开知识元数据、命中章节和限长 excerpt�
 
 ### GET /manuals/{manual_id}
 
-读取控制仓人类维护手册。`manual_id` 仅允许 `project`（根 README.md）或 `commands`（system/COMMANDS.md），不接受文件路径或任意控制仓相对路径；`max_chars` 范围为 300..500000。返回 `manual_id`、`title`、`content`、`content_hash`、`revision` 和可选 `truncated`。正文是 UTF-8 Markdown，服务端在固定白名单文件之外不提供通用文件浏览能力，也不返回物理路径。
+读取控制仓人类维护手册。`manual_id` 仅允许 `project`（根 README.md）或 `commands`（根 COMMANDS.md），不接受文件路径或任意控制仓相对路径；`max_chars` 范围为 300..500000。返回 `manual_id`、`title`、`content`、`content_hash`、`revision` 和可选 `truncated`。正文是 UTF-8 Markdown，服务端在固定白名单文件之外不提供通用文件浏览能力，也不返回物理路径。
 
 ## 4. 阶段 2 运行状态接口
 

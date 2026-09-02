@@ -216,7 +216,7 @@ class WebAuditModelTests(unittest.TestCase):
             value = _redact_web_text(f"before /{root}/private/file.txt after")
             self.assertNotIn(f"/{root}/", value)
             self.assertIn("[PATH]", value)
-        self.assertEqual(_redact_web_text("content/projects/aikb-web/README.md"), "content/projects/aikb-web/README.md")
+        self.assertEqual(_redact_web_text("content/projects/aikb-web/INDEX.md"), "content/projects/aikb-web/INDEX.md")
         self.assertEqual(_redact_web_text("https://example.com/a/b"), "https://example.com/a/b")
 
     def test_same_timestamp_uses_stable_identifiers(self) -> None:

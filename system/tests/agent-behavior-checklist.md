@@ -64,7 +64,7 @@
 操作：在同一会话中提出一个此前未涉及、且不知道知识位置的技术领域问题，例如从 Java 任务切换到 Git 问题。
 
 - [ ] Agent 优先调用 `search_knowledge` 定位候选；MCP 不可用时才从 `INDEX.md` 进入相关分类和主题索引。
-- [ ] Agent 只读取选中的知识；降级时只加载新领域直接相关的目录 `README.md` 和具体条目。
+- [ ] Agent 只读取选中的知识；降级时只加载新领域直接相关的目录 `INDEX.md` 和具体条目。
 - [ ] Agent 没有重新执行完整初始化，也没有扫描其他领域。
 
 通过标准：新增知识按需加载，基础规则不重复加载。
@@ -77,7 +77,7 @@
 - [ ] Agent 在写入前读取或复用 `system/rules/CONTRIBUTING.md`，并通过 `CATALOG.md`、局部索引和关键词检查重复内容。
 - [ ] Agent 使用正确模板和统一元数据，一条知识只写入一个文件。
 - [ ] Agent 记录实际验证证据、适用范围、限制和关联信息。
-- [ ] Agent 更新最近一级目录 `README.md` 和 `CATALOG.md`，没有因具体条目变化修改根 `INDEX.md`。
+- [ ] Agent 更新最近一级目录 `INDEX.md` 和 `CATALOG.md`，没有因具体条目变化修改根 `INDEX.md`。
 - [ ] Agent 运行 `system/tests/validate-structure.ps1` 并修正全部失败项。
 - [ ] Agent 在任务反馈中说明写入位置和验证依据。
 
@@ -88,9 +88,9 @@
 操作：提供一条可能有价值但证据不足、范围不明或尚未复现的技术判断。
 
 - [ ] Agent 没有把该判断包装成正式知识。
-- [ ] Agent 使用 `system/templates/inbox-entry.md` 写入 `content/experience/inbox/`。
+- [ ] Agent 使用 `system/templates/inbox-entry.md` 写入全局 `content/inbox/`。
 - [ ] 条目包含来源、当前假设、待验证项、预期适用范围和下一步动作。
-- [ ] Agent 更新 `content/experience/inbox/README.md` 和 `CATALOG.md`。
+- [ ] Agent 更新 `content/inbox/INDEX.md` 和 `CATALOG.md`。
 
 通过标准：候选状态明确，缺失证据清楚，后续动作可以执行。
 
@@ -150,9 +150,9 @@
 
 - [ ] Agent 先按内容性质判断归档位置，没有仅因技术领域而忽略知识仓 `experience/` 或 `projects/`（对应 MCP 逻辑路径 `content/experience/`、`content/projects/`）。
 - [ ] 确认属于通用知识且分类边界清晰后，Agent 能主动在知识仓创建类似 `knowledge/databases/` 的新分类。
-- [ ] 新分类使用稳定的英文小写目录名，并创建说明收录范围、不收录范围和条目索引的 `README.md`。
-- [ ] 具体知识使用独立文件，没有直接堆放在分类 `README.md` 中。
-- [ ] Agent 更新知识仓上一级目录 `README.md` 和知识仓 `CATALOG.md`，没有因 `knowledge/` 内部分类变化修改控制仓 `INDEX.md`。
+- [ ] 新分类使用稳定的英文小写目录名，并创建说明收录范围、不收录范围和条目索引的 `INDEX.md`。
+- [ ] 具体知识使用独立文件，没有直接堆放在分类 `INDEX.md` 中。
+- [ ] Agent 更新知识仓上一级目录 `INDEX.md` 和知识仓 `CATALOG.md`，没有因 `knowledge/` 内部分类变化修改控制仓 `INDEX.md`。
 - [ ] Agent 没有创建无真实知识条目的空分类。
 - [ ] 分类边界存在明显争议时，Agent 改用 Inbox 模板记录建议位置并请求用户决定。
 
@@ -165,7 +165,7 @@
 - [ ] 常规知识沉淀只修改知识仓条目、局部索引和知识仓 `CATALOG.md`；没有修改控制仓 `system/` 或根转发页。
 - [ ] 规则维护只在任务需要时修改控制仓 `system/`、稳定入口或根说明文件；没有把规则文件写入知识仓。
 - [ ] 知识仓 `CATALOG.md` 只登记知识仓中的知识，不登记控制仓规则、模板或测试文件。
-- [ ] 控制仓 `system/README.md` 能够导航到规则、模板和测试，知识仓 `README.md` 能够导航到四类知识入口。
+- [ ] 控制仓根 `COMMANDS.md` 可由 `system/README.md` 导航，知识仓根 `README.md` 只说明职责，分类入口由根 `INDEX.md` 提供。
 - [ ] 根目录没有出现稳定入口、双索引、项目说明和仓库配置之外的新文件。
 
 通过标准：控制面和内容面由两个独立 Git 管理，索引与写入范围分离，普通知识任务不会意外修改规则体系。
@@ -185,7 +185,7 @@
 
 操作：禁用 AIKB MCP 后重复一个已有知识的查询。
 
-- [ ] Agent 按 `INDEX.md → 局部 README → 具体文件` 查找。
+- [ ] Agent 按 `INDEX.md → 局部 INDEX.md → 具体文件` 查找。
 - [ ] Agent 没有因为 MCP 不可用就读取 `CATALOG.md` 或扫描全库。
 - [ ] 找到的结论与当前 Markdown 一致，并说明采用了文件降级路径。
 

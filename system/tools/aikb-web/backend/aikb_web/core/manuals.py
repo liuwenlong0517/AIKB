@@ -21,11 +21,11 @@ class ManualNotFound(KeyError):
 
 
 class ManualProvider:
-    """按固定逻辑 ID 读取根 README 和 system/COMMANDS 手册。"""
+    """按固定逻辑 ID 读取控制仓根目录中的项目与命令手册。"""
 
     _SPECS: dict[str, tuple[str, str]] = {
         "project": ("项目手册", "README.md"),
-        "commands": ("命令手册", "system/COMMANDS.md"),
+        "commands": ("命令手册", "COMMANDS.md"),
     }
     _REVISION = re.compile(r"^[0-9a-f]{7,40}$")
 

@@ -33,7 +33,7 @@ function Add-ValidationError {
 $requiredRootFiles = @(
     '.gitattributes',
     '.gitignore',
-    'CATALOG.md',
+    'COMMANDS.md',
     'ENTRY_RULES.md',
     'INDEX.md',
     'README.md'
@@ -41,8 +41,8 @@ $requiredRootFiles = @(
 
 $requiredRootDirectories = @('system', 'workspace')
 # 这些白名单体现控制面与知识面、运行面之间的职责边界。
-$allowedSystemEntries = @('README.md', 'COMMANDS.md', 'adapters', 'rules', 'schemas', 'templates', 'tests', 'tools')
-$allowedContentEntries = @('.aikb-knowledge.json', '.gitattributes', '.git', '.gitignore', 'CATALOG.md', 'INDEX.md', 'README.md', 'experience', 'knowledge', 'projects', 'workflows')
+$allowedSystemEntries = @('README.md', 'adapters', 'rules', 'schemas', 'templates', 'tests', 'tools')
+$allowedContentEntries = @('.aikb-knowledge.json', '.gitattributes', '.git', '.gitignore', 'CATALOG.md', 'INDEX.md', 'README.md', 'experience', 'inbox', 'knowledge', 'projects', 'workflows')
 $allowedWorkspaceEntries = @('.gitignore', 'README.md', 'active', 'archive', 'audit', 'db', 'runtime')
 
 foreach ($name in $requiredRootFiles) {
@@ -148,21 +148,28 @@ foreach ($file in $contentFiles) {
     }
 }
 
-foreach ($file in $contentFiles | Where-Object { $_.Name -ne 'README.md' }) {
-    $localReadmePath = Join-Path $file.DirectoryName 'README.md'
-    if (-not (Test-Path -LiteralPath $localReadmePath -PathType Leaf)) {
+foreach ($file in $contentFiles | Where-Object { $_.Name -notin @('README.md', 'INDEX.md') }) {
+    $localIndexPath = Join-Path $file.DirectoryName 'INDEX.md'
+    if (-not (Test-Path -LiteralPath $localIndexPath -PathType Leaf)) {
         $relativePath = [IO.Path]::GetRelativePath($knowledgeRoot, $file.FullName).Replace('\', '/')
-        Add-ValidationError "知识文件所在目录缺少局部 README.md：$relativePath"
+        Add-ValidationError "知识文件所在目录缺少局部 INDEX.md：$relativePath"
         continue
     }
-    $localReadmeText = Get-Content -Raw -LiteralPath $localReadmePath
+    $localIndexText = Get-Content -Raw -LiteralPath $localIndexPath
     $fileNamePattern = [regex]::Escape($file.Name)
-    # 只接受指向该文件名的 Markdown 链接，避免 README 仅在普通文字中提到文件而不能导航。
-    if ($localReadmeText -notmatch "\]\((?:[^)]*/)?$fileNamePattern(?:#[^)]*)?\)") {
+    # 只接受指向该文件名的 Markdown 链接，避免 INDEX 仅在普通文字中提到文件而不能导航。
+    if ($localIndexText -notmatch "\]\((?:[^)]*/)?$fileNamePattern(?:#[^)]*)?\)") {
         $relativePath = [IO.Path]::GetRelativePath($knowledgeRoot, $file.FullName).Replace('\', '/')
-        $relativeReadme = [IO.Path]::GetRelativePath($knowledgeRoot, $localReadmePath).Replace('\', '/')
-        Add-ValidationError "局部 README.md 未登记知识文件：$relativeReadme -> $relativePath"
+        $relativeIndex = [IO.Path]::GetRelativePath($knowledgeRoot, $localIndexPath).Replace('\', '/')
+        Add-ValidationError "局部 INDEX.md 未登记知识文件：$relativeIndex -> $relativePath"
     }
+}
+
+$nestedReadmes = Get-ChildItem -LiteralPath $knowledgeRoot -Recurse -File -Filter 'README.md' |
+    Where-Object { $_.FullName -ne (Join-Path $knowledgeRoot 'README.md') -and $_.FullName -notmatch '[\\/]\.git[\\/]' }
+foreach ($file in $nestedReadmes) {
+    $relativePath = [IO.Path]::GetRelativePath($knowledgeRoot, $file.FullName).Replace('\', '/')
+    Add-ValidationError "知识仓仅允许根 README.md 作为说明文档，各级索引必须命名为 INDEX.md：$relativePath"
 }
 
 if ($catalogText -match '\[[^\]]+\]\(system/') {
@@ -174,7 +181,7 @@ if ($catalogText -match '\[[^\]]+\]\(workspace/') {
 }
 
 $knowledgeIndexText = Get-Content -Raw -LiteralPath (Join-Path $knowledgeRoot 'INDEX.md')
-foreach ($requiredText in @('knowledge/README.md', 'experience/README.md', 'workflows/README.md', 'projects/README.md', 'CATALOG.md')) {
+foreach ($requiredText in @('knowledge/INDEX.md', 'experience/INDEX.md', 'workflows/INDEX.md', 'projects/INDEX.md', 'inbox/INDEX.md', 'CATALOG.md')) {
     if (-not $knowledgeIndexText.Contains($requiredText)) {
         Add-ValidationError "知识仓 INDEX.md 缺少稳定入口：$requiredText"
     }

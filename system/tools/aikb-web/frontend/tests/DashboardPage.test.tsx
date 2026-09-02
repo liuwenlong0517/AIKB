@@ -19,7 +19,7 @@ describe('DashboardPage', () => {
 
     expect(screen.getByRole('link', { name: '阅读项目手册' })).toHaveAttribute('href', '/manuals/project');
     expect(screen.getByRole('link', { name: '阅读命令手册' })).toHaveAttribute('href', '/manuals/commands');
-    expect(screen.queryByText(/README\.md|system\/COMMANDS\.md/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/README\.md|COMMANDS\.md/)).not.toBeInTheDocument();
     expect(screen.getByText('暂时无法读取数据')).toBeInTheDocument();
   });
 });

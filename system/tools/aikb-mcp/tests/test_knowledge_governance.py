@@ -54,7 +54,8 @@ class KnowledgeGovernanceTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.content = root / "content"
         (self.content / "knowledge" / "engineering").mkdir(parents=True)
-        (self.content / "experience" / "inbox").mkdir(parents=True)
+        (self.content / "inbox").mkdir(parents=True)
+        (self.content / "workflows").mkdir(parents=True)
         (self.content / ".aikb-knowledge.json").write_text(
             '{"kind":"aikb-knowledge","contract_version":1,"knowledge_schema_version":1}',
             encoding="utf-8",
@@ -92,6 +93,20 @@ class KnowledgeGovernanceTests(unittest.TestCase):
         self.assertEqual(documents["total"], 2)
         self.assertTrue(all(item["status"] == "verified" for item in documents["documents"]))
 
+    def test_classified_candidate_placeholder_stays_in_target_directory(self) -> None:
+        """确认已归类占位可留在目标目录，不与 Inbox 未分类来源卡片混同。"""
+        placeholder = {
+            "id": "aikb:workflows:placeholder",
+            "type": "workflow",
+            "status": "candidate",
+            "tags": ["workflow"],
+            "relations": [],
+        }
+        self.write(placeholder, self.content / "workflows" / "placeholder.md")
+        self.assertEqual(self.errors(), [])
+        result = rebuild_knowledge_index(self.settings)
+        self.assertEqual(result["documents"], 2)
+
     def test_free_text_evidence_is_rejected(self) -> None:
         """确认 evidence 不能以一条自由文本冒充结构化依据。"""
         metadata = _metadata()
@@ -103,10 +118,10 @@ class KnowledgeGovernanceTests(unittest.TestCase):
         decision = _metadata("aikb:experience:decisions:bad")
         decision["type"] = "decision"
         decision["change_class"] = "factual-update"
-        self.write(decision, self.content / "experience" / "inbox" / "bad-decision.md")
+        self.write(decision, self.content / "inbox" / "bad-decision.md")
         errors = self.errors()
         self.assertTrue(any("type=decision" in error for error in errors))
-        (self.content / "experience" / "inbox" / "bad-decision.md").unlink()
+        (self.content / "inbox" / "bad-decision.md").unlink()
 
         supersession = _metadata("aikb:knowledge:engineering:bad-supersession")
         supersession["supersedes"] = ["aikb:knowledge:engineering:old"]
@@ -152,7 +167,7 @@ class KnowledgeGovernanceTests(unittest.TestCase):
         })
         metadata.pop("reviewer")
         metadata.pop("reviewed_at")
-        self.write(metadata, self.content / "experience" / "inbox" / "proposal.md")
+        self.write(metadata, self.content / "inbox" / "proposal.md")
         self.assertEqual(self.errors(), [])
 
     def test_commit_and_file_evidence_refs_are_bounded(self) -> None:
@@ -173,7 +188,7 @@ class KnowledgeGovernanceTests(unittest.TestCase):
             "captured_at": "2026-09-02", "next_action_due": "2026-09-01",
             "review_state": "open", "owner": "agent-a",
         })
-        self.write(metadata, self.content / "experience" / "inbox" / "missing.md")
+        self.write(metadata, self.content / "inbox" / "missing.md")
         errors = self.errors()
         self.assertTrue(any("next_action_due 不得早于 captured_at" in error for error in errors))
         self.assertTrue(any("blocking_reason 或 possible_duplicates" in error for error in errors))

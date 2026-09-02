@@ -87,11 +87,12 @@ class RepoFixture:
             ),
             encoding="utf-8",
         )
-        (topic / "index.md").write_text(
+        # INDEX.md 现为保留导航文件名，知识正文改用表达主题的独立文件名。
+        (topic / "relation-index.md").write_text(
             entry("aikb:knowledge:engineering:index", "关系索引", "通过稳定 ID 连接知识。"),
             encoding="utf-8",
         )
-        inbox = self.root / "content" / "experience" / "inbox"
+        inbox = self.root / "content" / "inbox"
         inbox.mkdir(parents=True)
         candidate_metadata = {
             "id": "aikb:experience:inbox:candidate",
@@ -234,7 +235,7 @@ class KnowledgeTests(unittest.TestCase):
 
     def test_review_report_summarizes_v2_inbox_without_leaking_free_text(self) -> None:
         """确认 v2 Inbox 的逾期、归属、重复和结案计数可注入日期且字段有界。"""
-        inbox = self.fixture.settings.content_root / "experience" / "inbox"
+        inbox = self.fixture.settings.content_root / "inbox"
         base = {
             "type": "candidate", "status": "candidate", "governance_version": 2,
             "change_class": "candidate", "authority": "test fixture", "preparer": "agent-a",
@@ -371,6 +372,7 @@ class KnowledgeTests(unittest.TestCase):
         """确认导航文件、知识仓 Git 元数据和控制面变化不影响知识指纹。"""
         before = content_fingerprint(self.fixture.settings.content_root)
         (self.fixture.settings.content_root / "CATALOG.md").write_text("# catalog\n", encoding="utf-8")
+        (self.fixture.settings.content_root / "knowledge" / "INDEX.md").write_text("# index\n", encoding="utf-8")
         git_dir = self.fixture.settings.content_root / ".git"
         git_dir.mkdir()
         (git_dir / "metadata.md").write_text("# ignored\n", encoding="utf-8")
@@ -880,7 +882,7 @@ class WorkStateTests(unittest.TestCase):
 
     def test_session_start_keeps_candidate_count_when_metadata_is_invalid(self) -> None:
         """确认元数据失败时仍报告候选总数，但不把底层错误文本注入上下文。"""
-        invalid = self.fixture.settings.content_root / "experience" / "inbox" / "invalid-v2.md"
+        invalid = self.fixture.settings.content_root / "inbox" / "invalid-v2.md"
         invalid.write_text(
             render_frontmatter({
                 "id": "aikb:experience:inbox:invalid-v2", "type": "candidate", "status": "candidate",
@@ -891,7 +893,7 @@ class WorkStateTests(unittest.TestCase):
         context = output["hookSpecificOutput"]["additionalContext"]
         self.assertIn("candidate 总数 2", context)
         self.assertIn("元数据校验未通过", context)
-        self.assertNotIn("experience/inbox/invalid-v2.md", context)
+        self.assertNotIn("inbox/invalid-v2.md", context)
 
     def test_session_start_does_not_inject_when_multiple_items_exist(self) -> None:
         """确认多个活动任务时不注入任一恢复胶囊，并留下可审计结果。"""

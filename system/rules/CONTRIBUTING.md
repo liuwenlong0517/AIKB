@@ -19,7 +19,9 @@
 
 ## 2. 候选与确认边界
 
-有潜在价值但证据、范围或归类不足的内容进入知识仓 `experience/inbox/`（逻辑路径 `content/experience/inbox/`），使用控制仓 `system/templates/inbox-entry.md`，记录来源、当前假设、待验证项、预期范围和下一步动作。候选使用 `status: candidate`，不得伪造验证日期；验证完成后晋升，确认重复、错误或无价值后删除。
+有潜在价值但证据、范围或归类不足的来源材料进入知识仓根 `inbox/`（逻辑路径 `content/inbox/`），使用控制仓 `system/templates/inbox-entry.md`，记录来源、当前假设、待验证项、预期范围和下一步动作。Inbox 是全局统一的未验证数据来源，不预先假定正式分类；其中的条目使用 `type: candidate` 和 `status: candidate`，不得伪造验证日期。经 LLM 整理并由人工完成查重、证据、适用范围和分类验证后分发到正式目录；确认重复、错误或无价值后删除。
+
+已经明确目标分类、仅用于保留稳定入口和待完善内容的占位文档不是 Inbox 来源卡片，可以保留在目标目录，使用该目录对应的 `type` 与 `status: candidate`。这类占位仍属于审查队列，但不得伪装成已经验证的正式知识；补全并验证后再改为 `verified`。不得把“已归类占位”例外用于绕过 Inbox 的来源、查重和分类流程。
 
 低风险且证据完整的 `factual-update` 或 `operational-solution` 符合条件时无需逐次确认，可按项目授权自动处理；涉及敏感信息、decision、supersession、分类或迁移、或需要替用户作出新的长期决策时，先使用 Inbox 保存非敏感候选并请求用户决定。分类边界不能由 Agent 以“常规”或“无争议”自行放宽，具体枚举和审批状态见第 7 节。
 
@@ -31,11 +33,11 @@
 - 知识仓 `experience/decisions/`：包含背景、备选方案和权衡的决策。
 - 知识仓 `workflows/`：可重复执行的开发、调试、评审和发布流程。
 - 知识仓 `projects/<project>/`：只对特定项目成立的长期事实和约定。
-- 知识仓 `experience/inbox/`：尚未满足正式准入条件的候选。
+- 知识仓根 `inbox/`：尚未满足正式准入条件、等待整理验证和分类分发的候选。
 
 所有候选和正式知识都位于 `AIKB_KNOWLEDGE_HOME`；对外仍使用 `content/...` 逻辑路径。不得写入控制仓根目录、`system/` 或 `workspace/`。除非任务正在维护 AIKB 控制面，否则不得修改控制仓。
 
-现有目录无法准确容纳已满足准入标准的知识时，可以创建职责清晰、名称稳定且不会引起大范围迁移的新分类。目录名使用英文小写短横线形式并包含说明范围和条目索引的 `README.md`；新分类不得引入新 `type`，只能沿用 schema 允许的 7 种类型及其现有目录语义，例如 `knowledge/databases/` 仍使用 `type: knowledge`。不得预建没有真实条目的空分类，边界有争议时先进入 Inbox。
+现有目录无法准确容纳已满足准入标准的知识时，可以创建职责清晰、名称稳定且不会引起大范围迁移的新分类。目录名使用英文小写短横线形式并包含说明范围和条目索引的 `INDEX.md`；新分类不得引入新 `type`，只能沿用 schema 允许的 7 种类型及其现有目录语义，例如 `knowledge/databases/` 仍使用 `type: knowledge`。不得预建没有真实条目的空分类，边界有争议时先进入 Inbox。
 
 ## 4. 条目与元数据
 
@@ -52,10 +54,10 @@ Front Matter 必须符合 `system/schemas/knowledge-entry.schema.json`：
 
 ## 5. 索引维护
 
-知识仓 `INDEX.md` 只保存稳定分类入口；知识仓 `CATALOG.md` 登记全部知识文件；各级 `README.md` 负责局部导航。控制仓根 `INDEX.md` 和 `CATALOG.md` 只是稳定转发页，普通知识变化不得修改。
+知识仓根及各级 `INDEX.md` 分别保存稳定分类入口和局部导航；知识仓 `CATALOG.md` 登记全部知识文件。知识仓根 `README.md` 只说明仓库职责，不登记分类入口。控制仓根 `INDEX.md` 是稳定转发页，普通知识变化不得修改；控制仓不再保留 `CATALOG.md`。
 
-- 新增、移动、重命名或删除条目：更新最近一级 `README.md` 和 `CATALOG.md`。
-- 新增或删除主题：同时更新上一级分类 `README.md`。
+- 新增、移动、重命名或删除条目：更新最近一级 `INDEX.md` 和 `CATALOG.md`。
+- 新增或删除主题：同时更新上一级分类 `INDEX.md`。
 - 标题、状态、适用范围或目录摘要变化：同步相关索引；仅正文细节变化时不机械更新。
 - 只有 `INDEX.md` 已列出的稳定入口变化时才更新 `INDEX.md`。
 
@@ -65,10 +67,10 @@ Front Matter 必须符合 `system/schemas/knowledge-entry.schema.json`：
 
 每次正式写入依次完成：
 
-1. 用 MCP、局部 README、关键词和 `CATALOG.md` 查重；`search_knowledge` 默认只查 `verified`，因此至少分别以 `status: verified` 和 `status: candidate` 搜索（必要时再查 `deprecated`），不能只依赖默认结果。
+1. 用 MCP、局部 `INDEX.md`、关键词和 `CATALOG.md` 查重；`search_knowledge` 默认只查 `verified`，因此至少分别以 `status: verified` 和 `status: candidate` 搜索（必要时再查 `deprecated`），不能只依赖默认结果。
 2. 用当前权威证据验证结论，确定适用范围；不满足条件则转入 Inbox。
 3. 选择归档位置和模板，填写稳定元数据、正文、来源及关系。
-4. 更新必要的局部 README 和 `CATALOG.md`，仅在稳定入口变化时更新 `INDEX.md`。
+4. 更新必要的局部 `INDEX.md` 和 `CATALOG.md`，仅在稳定根入口变化时更新知识仓根 `INDEX.md`。
 5. 在控制仓运行 `pwsh -NoProfile -File system/tests/validate-structure.ps1 -KnowledgePath $env:AIKB_KNOWLEDGE_HOME`；失败时修正，不发布未通过校验的正式知识。
 6. 在知识仓审查并提交本次知识变更；维护 AIKB 控制面时，控制仓与知识仓分别提交。
 7. 向用户报告写入位置、验证依据、适用边界、提交和校验结果。

@@ -119,7 +119,7 @@ _ROLE_REQUIREMENTS: Mapping[str, tuple[str, ...]] = {
         "必须先确认",
     ),
     "contributing": (
-        "content/experience/inbox/",
+        "content/inbox/",
         "system/templates/",
         "system/schemas/knowledge-entry.schema.json",
         "CATALOG.md",

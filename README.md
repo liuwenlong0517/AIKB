@@ -28,7 +28,7 @@ AIKB 当前提供：
 - MCP/hook 文本审计、故障兜底和按需 Markdown 报告；
 - 可插拔 Agent 适配器，以及幂等安装、诊断和精确卸载；
 - 结构、元数据、适配器和 MCP 行为自动测试；
-- MCP 失效时沿 `INDEX.md` 和局部知识 README 逐级读取的降级路径。
+- MCP 失效时沿根 `INDEX.md` 和各级知识 `INDEX.md` 逐级读取的降级路径。
 
 ## 2. 明确的设计边界
 
@@ -64,7 +64,7 @@ Agent 根指令
           -> MCP 搜索或准确读取
           -> 控制仓 INDEX.md（仅 MCP 失败时）
               -> 知识仓 INDEX.md
-                  -> 最少的局部 README/具体知识
+                  -> 最少的局部 INDEX/具体知识
 ```
 
 只有用户明确要求、安装排障或维护 AIKB 自身时，Agent 才按需读取本 README。知识仓 `CATALOG.md` 同样不在常规初始化中加载，只用于人类浏览、全库治理或正式写入前查重。
@@ -74,14 +74,17 @@ Agent 根指令
 ```text
 %AIKB_HOME%\                      控制仓 Git
 ├─ ENTRY_RULES.md                 Agent 唯一稳定入口
-├─ INDEX.md / CATALOG.md          指向知识仓的稳定转发页
+├─ INDEX.md                       指向知识仓的稳定转发页
+├─ COMMANDS.md                    完整命令手册
 ├─ README.md                      本文件，人类维护者手册
 ├─ system/                        规则、Schema、工具、适配器、模板、测试
 └─ workspace/                     本机检查点、审计、归档和派生数据库，不进 Git
 
 %AIKB_KNOWLEDGE_HOME%\            独立知识仓 Git；默认 %AIKB_HOME%\content
 ├─ .aikb-knowledge.json           知识仓类型与兼容契约
+├─ README.md                      知识仓职责与边界说明
 ├─ INDEX.md / CATALOG.md          知识导航与完整目录
+├─ inbox/                         全局未验证知识来源
 ├─ knowledge/ / experience/
 └─ workflows/ / projects/
 ```
@@ -114,11 +117,11 @@ Codex / Claude Code
 
 ### `INDEX.md`
 
-控制仓根文件只保存到知识仓的稳定路由，不列出知识分类。MCP 不可用时，Agent 从该文件进入 `AIKB_KNOWLEDGE_HOME/INDEX.md`，再沿分类 README、主题 README 和具体知识文件逐级读取最少内容。
+控制仓根文件只保存到知识仓的稳定路由，不列出知识分类。MCP 不可用时，Agent 从该文件进入 `AIKB_KNOWLEDGE_HOME/INDEX.md`，再沿分类 `INDEX.md`、主题 `INDEX.md` 和具体知识文件逐级读取最少内容。
 
-### `CATALOG.md`
+### `COMMANDS.md`
 
-控制仓根文件是兼容转发页；真正的完整知识目录位于 `AIKB_KNOWLEDGE_HOME/CATALOG.md`。新增、移动、重命名或删除知识时只维护知识仓目录，不修改控制仓转发页。
+控制仓根文件是完整命令手册，记录控制层可执行入口、参数、输出和异常边界。WebUI 通过固定逻辑标识只读投影该文件，不开放任意路径浏览。完整知识目录只存在于 `AIKB_KNOWLEDGE_HOME/CATALOG.md`。
 
 ### `.gitignore`
 
@@ -334,14 +337,14 @@ Schema 使用 JSON Schema Draft 2020-12，既约束当前实现，也为未来�
 `AIKB_KNOWLEDGE_HOME` 是唯一允许保存长期知识的仓库；默认装配在 `%AIKB_HOME%\content`，也可放在其他目录或磁盘：
 
 - `knowledge/`：跨项目通用的工程知识；
-- `experience/inbox/`：未完成验证或归类的候选知识；
+- `inbox/`：全局统一的未验证知识来源，等待 LLM 整理和人工验证后分发；
 - `experience/solutions/`：经过验证的问题解决方案；
 - `experience/pitfalls/`：容易重复触发的陷阱；
 - `experience/decisions/`：需要保留背景和取舍的重要决策；
 - `workflows/`：可重复执行的开发、调试、评审和发布流程；
 - `projects/<project>/`：只对特定项目成立的长期事实。
 
-主题目录中的 README 是局部导航，不集中堆放知识正文。正式知识遵循“一条知识一个文件”，必须包含证据、验证结果、适用范围和复核条件。MCP 对外保留 `content/...` 逻辑路径，因此知识仓物理移动不会改变稳定引用。
+主题目录中的 `INDEX.md` 是局部导航，不集中堆放知识正文。知识仓根 `README.md` 只承担说明文档角色，不重复分类入口。正式知识遵循“一条知识一个文件”，必须包含证据、验证结果、适用范围和复核条件。MCP 对外保留 `content/...` 逻辑路径，因此知识仓物理移动不会改变稳定引用。
 
 ## 7. `workspace/`：本机运行面
 
@@ -579,7 +582,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 search "检索缓�
 2. 已知稳定 ID 或准确文件：直接读取。
 3. 不知道位置：调用 `search_knowledge`。
 4. 从候选中选择目标：调用 `read_knowledge`，尽量限制章节和字符数。
-5. MCP 不可用：从控制仓 `INDEX.md` 转到知识仓 `INDEX.md`，再沿知识仓局部 README 降级。
+5. MCP 不可用：从控制仓 `INDEX.md` 转到知识仓 `INDEX.md`，再沿知识仓各级 `INDEX.md` 降级。
 6. 只有全库治理或正式写入前查重才读取知识仓 `CATALOG.md`。
 
 根 README 不参与以上流程。
@@ -607,11 +610,11 @@ SessionStart 只会为当前 Agent/精确 Hook `session_id` 已授权的唯一�
 3. 用代码、测试、运行结果、权威文档或用户确认验证结论。
 4. 选择 `system/templates/` 中最接近的模板。
 5. 为条目分配稳定 ID、类型、标签、适用范围和关系。
-6. 更新知识仓中最近一级局部 README 和 `CATALOG.md`。
+6. 更新知识仓中最近一级局部 `INDEX.md` 和 `CATALOG.md`。
 7. 运行结构测试和核心测试。
 8. 只在知识仓中审查并提交本次知识变更；控制面修改另在控制仓提交。
 
-证据不足的内容进入知识仓 `experience/inbox/`（MCP 逻辑路径为 `content/experience/inbox/`），不要包装成 `verified`。
+证据不足的内容进入知识仓根 `inbox/`（MCP 逻辑路径为 `content/inbox/`），经 LLM 整理和人工验证后再分发，不要包装成 `verified`。
 
 ## 10. 常用维护命令
 
@@ -725,7 +728,7 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 validate
 pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 ```
 
-随后确认目标 Markdown 位于 `AIKB_KNOWLEDGE_HOME` 的四个知识分类目录之一、带有合法 Front Matter，并且状态和过滤条件匹配。MCP 返回的 `content/...` 是稳定逻辑路径，不要求物理知识仓位于控制仓内。主题导航 README 不作为正式知识条目进入 FTS。
+随后确认目标 Markdown 位于 `AIKB_KNOWLEDGE_HOME` 的正式知识目录或根 `inbox/`、带有合法 Front Matter，并且状态和过滤条件匹配。MCP 返回的 `content/...` 是稳定逻辑路径，不要求物理知识仓位于控制仓内。各级导航 `INDEX.md` 不作为知识条目进入 FTS。
 
 ### 安装器拒绝覆盖同名 MCP
 
@@ -762,15 +765,15 @@ pwsh -NoProfile -File system/tools/aikb-mcp/scripts/aikb.ps1 rebuild
 
 控制仓提交：
 
-- `ENTRY_RULES.md`、转发用的 `INDEX.md` / `CATALOG.md` 和本 README；
+- `ENTRY_RULES.md`、转发用的 `INDEX.md`、根 `COMMANDS.md` 和本 README；
 - `system/` 中的规则、Schema、工具、适配器、模板和测试；
 - `workspace/README.md` 和 `workspace/.gitignore`。
 
 知识仓提交：
 
 - `.aikb-knowledge.json` 契约标记；
-- 知识仓自己的 `README.md`、`INDEX.md` 和 `CATALOG.md`；
-- `knowledge/`、`experience/`、`workflows/` 和 `projects/` 中经过治理的知识与局部导航。
+- 知识仓自己的说明 `README.md`、根 `INDEX.md` 和 `CATALOG.md`；
+- 根 `inbox/` 中的候选，以及 `knowledge/`、`experience/`、`workflows/` 和 `projects/` 中经过治理的知识与局部 `INDEX.md`。
 
 控制仓通过 `.gitignore` 排除默认装配目录 `/content/`，不记录知识仓 gitlink 或 commit 指针。两个仓库分别审查、提交和推送；一次工作同时修改两边时，检查点会记录两个 Git 快照，但提交仍保持独立。
 

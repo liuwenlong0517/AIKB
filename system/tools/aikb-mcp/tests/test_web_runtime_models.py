@@ -225,7 +225,7 @@ class WebRuntimeModelTests(unittest.TestCase):
         for value in ("/opt/service/private", "/srv/app/log", "/root/secret", "/usr/local/bin", "/mnt/data/file", "/unknown/two-level"):
             self.assertNotIn(value.split("/")[1], WorkStateStore._web_text(value, max_length=4000))
             self.assertIn("[LOCAL_PATH]", WorkStateStore._web_text(value, max_length=4000))
-        logical = "content/projects/aikb-web/README.md"
+        logical = "content/projects/aikb-web/INDEX.md"
         self.assertEqual(WorkStateStore._web_text(logical, max_length=4000), logical)
         scalar = "x" * 5000
         values = [f"item-{index}" for index in range(55)]

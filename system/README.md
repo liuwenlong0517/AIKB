@@ -1,10 +1,9 @@
 # AIKB 系统控制面
 
-本目录定义 AIKB 如何接入、检索、恢复、写入和验收，不存放具体工程知识。只有维护 AIKB 控制仓时才应修改本目录；常规知识沉淀不得写入这里，也不得把本目录文件登记到知识仓 `CATALOG.md`。
+本目录定义 AIKB 如何接入、检索、恢复、写入和验收，不存放具体工程知识。只有维护 AIKB 控制仓时才应修改本目录；常规知识沉淀不得写入这里，也不得把本目录文件登记到知识仓 `CATALOG.md`。完整命令手册位于控制仓根 `COMMANDS.md`。
 
 ## 目录索引
 
-- [COMMANDS.md](COMMANDS.md)：控制层全部可执行入口、参数、输出、异常和 MCP 服务接口的完整命令手册。
 - [rules/AI_RULES.md](rules/AI_RULES.md)：Agent 接入后的检索、工作状态、重载和知识贡献触发规则。
 - [rules/USER_RULES.md](rules/USER_RULES.md)：用户跨 Agent、跨项目共用的个人偏好与协作规则。
 - [rules/CONTRIBUTING.md](rules/CONTRIBUTING.md)：知识准入、验证、归档、维护和淘汰标准。

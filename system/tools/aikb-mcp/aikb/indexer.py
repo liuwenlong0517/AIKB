@@ -31,7 +31,7 @@ REQUIRED_FIELDS = {
     "relations",
 }
 FORMAL_REQUIRED_FIELDS = {"applicable_versions", "last_verified", "review_when"}
-CONTENT_DIRECTORIES = ("knowledge", "experience", "workflows", "projects")
+CONTENT_DIRECTORIES = ("inbox", "knowledge", "experience", "workflows", "projects")
 # 类型与目录共同表达条目的语义边界；仅靠 Front Matter 的 type 无法防止误归类。
 TYPE_DIRECTORY_PREFIXES = {
     "knowledge": ("knowledge/",),
@@ -40,7 +40,7 @@ TYPE_DIRECTORY_PREFIXES = {
     "decision": ("experience/decisions/",),
     "workflow": ("workflows/",),
     "project-memory": ("projects/",),
-    "candidate": ("experience/inbox/",),
+    "candidate": ("inbox/",),
 }
 GOVERNANCE_VERSION = 2
 ALLOWED_CHANGE_CLASSES = {
@@ -69,13 +69,13 @@ class IndexedDocument:
 
 
 def iter_content_files(content_root: Path) -> Iterable[Path]:
-    """只遍历知识分类正文，避免进入嵌套仓库的 ``.git`` 和导航文件。"""
+    """只遍历候选与知识正文，避免进入嵌套仓库的 ``.git`` 和各级索引。"""
     for directory_name in CONTENT_DIRECTORIES:
         directory = content_root / directory_name
         if not directory.is_dir():
             continue
         for path in sorted(directory.rglob("*.md")):
-            if ".git" not in path.parts and path.name.lower() != "readme.md":
+            if ".git" not in path.parts and path.name.lower() != "index.md":
                 yield path
 
 
@@ -334,7 +334,7 @@ def load_documents(settings: Settings) -> tuple[list[IndexedDocument], list[str]
             errors.append(str(exc))
             continue
         if parsed is None:
-            # 扫描器已经排除了 README；分类目录中的其余 Markdown 必须是可索引条目。
+            # 扫描器已经排除了 INDEX；候选与知识目录中的其余 Markdown 必须是可索引条目。
             relative = "content/" + path.relative_to(settings.content_root).as_posix()
             errors.append(f"知识文件缺少 Front Matter：{relative}")
             continue

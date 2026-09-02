@@ -26,4 +26,4 @@ pwsh -NoProfile -File system/adapters/doctor.ps1
 
 Claude Code 在 Windows 上可能默认用 Git Bash 解释 command hook，因此其 AIKB handlers 显式设置 `shell: powershell`，让 `$env:AIKB_HOME` 只由 PowerShell 展开；Codex 继续使用自身支持的完整 `pwsh` 命令格式。共享包装器和 Python CLI 将 hook 的 stdin/stdout 固定为 UTF-8，不依赖 Windows 活动代码页或用户级 Python 编码配置。新增或修改 hooks 时必须通过 `validate-adapters.ps1` 执行生成后的 handler，并以中文路径和中文反馈验证真实往返，而不是只测试手工构造的等价命令。
 
-新增 Agent 时只新增一个自描述目录。Agent 不支持 hooks 时仍可通过 MCP 使用知识与工作状态；不支持 MCP 时继续通过 `INDEX.md` 和局部 README 降级。
+新增 Agent 时只新增一个自描述目录。Agent 不支持 hooks 时仍可通过 MCP 使用知识与工作状态；不支持 MCP 时继续通过根 `INDEX.md` 和各级 `INDEX.md` 降级。
