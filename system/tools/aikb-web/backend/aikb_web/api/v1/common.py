@@ -74,6 +74,17 @@ _TASK_RESULT_DENY_KEYS = {
     "traceback", "payload", "raw", "stdout", "stderr",
 }
 
+_PUBLIC_DENY_KEYS = {
+    "absolute_path", "filesystem_path", "database", "database_path", "traceback",
+    "diagnostic", "action", "result_summary", "client", "connection_id", "payload",
+    "result", "project_path", "repo_path", "repository_path", "workspace_path",
+    "workspace_root", "repo_root", "knowledge_root", "content_root", "work_db", "knowledge_db",
+    "source_file", "file_path", "absolute_file_path",
+}
+_PUBLIC_PATH_KEY_SUFFIXES = ("_path", "_root", "_directory", "_dir", "_file")
+_PUBLIC_TEXT_KEYS = frozenset({"content"})
+_LOCAL_PATH_PLACEHOLDER = "[LOCAL_PATH]"
+
 
 def _sanitize_safe_result(value: Any) -> Any:
     """递归投影 TaskStore 已脱敏结果；任务专用白名单不得扩散到其他 API。"""
@@ -90,28 +101,53 @@ def _sanitize_safe_result(value: Any) -> Any:
     return result
 
 
-def _sanitize_public(value: Any, *, allow_safe_result: bool = False) -> Any:
-    """移除核心扩展对象中的物理路径字段，保留 Markdown 正文等事实内容。"""
-    if isinstance(value, list):
-        return [_sanitize_public(item, allow_safe_result=allow_safe_result) for item in value]
+def _is_absolute_local_path(value: Any) -> bool:
+    """识别完整本地绝对路径值；逻辑路径与 HTTP(S) URL 不属于本地文件位置。"""
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    if not candidate or public_logical_path(candidate) is not None:
+        return False
+    parsed = urlsplit(candidate)
+    if parsed.scheme.lower() in {"http", "https"}:
+        return False
+    if parsed.scheme.lower() == "file":
+        return True
+    return (
+        PureWindowsPath(candidate).is_absolute()
+        or candidate.startswith(("\\\\", "\\"))
+        or PurePosixPath(candidate).is_absolute()
+    )
+
+
+def _sanitize_public(value: Any, *, allow_safe_result: bool = False, _field_name: str | None = None) -> Any:
+    """递归移除物理路径字段和值，同时保留明确允许的 Markdown 正文与逻辑路径。"""
+    if isinstance(value, (list, tuple)):
+        return [
+            _sanitize_public(item, allow_safe_result=allow_safe_result, _field_name=_field_name)
+            for item in value
+        ]
     if not isinstance(value, dict):
+        if _field_name not in _PUBLIC_TEXT_KEYS and _is_absolute_local_path(value):
+            return _LOCAL_PATH_PLACEHOLDER
         return value
     sanitized: dict[str, Any] = {}
     for key, item in value.items():
-        if key == "result" and allow_safe_result:
-            sanitized[key] = _sanitize_safe_result(item)
+        public_key = str(key)
+        normalized = re.sub(r"[^a-z0-9]+", "_", public_key.strip().lower()).strip("_")
+        if normalized == "result" and allow_safe_result:
+            sanitized[public_key] = _sanitize_safe_result(item)
             continue
-        if key in {
-            "absolute_path", "filesystem_path", "database", "database_path", "traceback",
-            "diagnostic", "action", "result_summary", "client", "connection_id", "payload",
-            "result", "project_path", "repo_path", "repository_path", "workspace_path",
-            "workspace_root", "repo_root", "knowledge_root", "content_root", "work_db", "knowledge_db",
-            "source_file", "file_path", "absolute_file_path",
-        }:
+        if normalized in {"path", "source_path"}:
+            if public_logical_path(item) is None:
+                continue
+        elif normalized in _PUBLIC_DENY_KEYS or normalized.endswith(_PUBLIC_PATH_KEY_SUFFIXES):
             continue
-        if key in {"path", "source_path"} and public_logical_path(item) is None:
-            continue
-        sanitized[key] = _sanitize_public(item, allow_safe_result=allow_safe_result)
+        sanitized[public_key] = _sanitize_public(
+            item,
+            allow_safe_result=allow_safe_result,
+            _field_name=normalized,
+        )
     return sanitized
 
 
